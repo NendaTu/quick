@@ -15,7 +15,6 @@ class Engine:
         self.starting_equity = INITIAL_EQUITY
         self.peak_equity = INITIAL_EQUITY
 
-        # open_positions key will be 'SYMBOL_buy' or 'SYMBOL_sell' to support Hedge mode
         self.open_positions: Dict[str, dict] = {}
         self.enabled_assets = set(ASSETS)
 
@@ -61,6 +60,9 @@ class Engine:
 
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
+            # Update local equity from exchange
+            self.equity = self.exchange.equity
+
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
                 log.critical(f"DRAWDOWN LIMIT HIT: equity={self.equity:.2f}, peak={self.peak_equity:.2f}")
                 self.stop_event.set()
@@ -69,6 +71,9 @@ class Engine:
             if roi >= TOTAL_ROI_LIMIT:
                 log.critical(f"ROI TARGET REACHED: equity={self.equity:.2f}, ROI={roi*100:.1f}%")
                 self.stop_event.set()
+
+            if self.equity > self.peak_equity:
+                self.peak_equity = self.equity
 
             await asyncio.sleep(0.5)
 
@@ -110,7 +115,6 @@ class Engine:
         if bid_vol < 1 or ask_vol < 1:
             return False
 
-        # Check if specific side is already open (Hedge mode)
         if f"{symbol}_{side}" in self.open_positions:
             return False
 
@@ -122,6 +126,13 @@ class Engine:
 
         while not self.stop_event.is_set():
             try:
+                # 1. Periodic Summary (Moved to top)
+                now = time.time()
+                if now - last_summary_time >= 30.0:
+                    self._log_periodic_summary()
+                    last_summary_time = now
+
+                # 2. Update Features
                 for sym in ASSETS + [BTC_SYMBOL]:
                     book = self.books[sym]
                     if book.best_bid <= 0 or book.best_ask <= 0:
@@ -137,18 +148,18 @@ class Engine:
                     self._last_mid[sym] = current_mid
                     self._last_features[sym] = self.exchange.get_features(sym)
 
-                if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
-                    await asyncio.sleep(0.5)
-                    continue
-
+                # 3. Check Signal and Trade
                 for sym in ASSETS:
+                    # Position limit check inside the loop
+                    if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
+                        break
+
                     book = self.books[sym]
                     signal = self.model.predict(sym, book, self.equity)
                     if signal is None:
                         continue
 
-                    side = signal["side"] # 'buy' or 'sell'
-
+                    side = signal["side"]
                     if not self._asset_is_tradable(sym, side):
                         continue
 
@@ -166,15 +177,7 @@ class Engine:
 
                     self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
 
-                if self.equity > self.peak_equity:
-                    self.peak_equity = self.equity
-
-                now = time.time()
-                if now - last_summary_time >= 30.0:
-                    self._log_periodic_summary()
-                    last_summary_time = now
-
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
             except Exception as e:
                 log.exception(f"Trading loop error: {e}")
                 await asyncio.sleep(1)

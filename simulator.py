@@ -16,7 +16,6 @@ class Simulator:
         self.leverage_limits = LEVERAGE_LIMITS.copy()
         self.equity = INITIAL_EQUITY
 
-        # Hedge Mode: positions tracked by (symbol, side)
         self.positions: Dict[Tuple[str, str], dict] = {}
         self.pending_orders: List[dict] = []
         self.order_id_counter = 1000
@@ -28,8 +27,6 @@ class Simulator:
         self.ohlcv_1m: Dict[str, List[dict]] = {}
         self.confluence_history: Dict[str, Dict[str, List[float]]] = {}
         self.last_candle_ts: Dict[str, Dict[str, float]] = {}
-
-        # Tracking last known price for fast order execution
         self.last_price: Dict[str, float] = {}
 
         all_assets = ASSETS + [BTC_SYMBOL]
@@ -192,6 +189,7 @@ class Simulator:
         ws_client = BitGetWSClient(symbols, self._ws_callback)
         asyncio.create_task(ws_client.run())
 
+        last_heartbeat = time.time()
         while True:
             for sym in symbols:
                 book = self.books[sym]
@@ -202,35 +200,36 @@ class Simulator:
             await self._process_orders()
             engine.equity = self.equity
 
-            # Update engine's open positions for summary (Hedge-aware)
             engine.open_positions = {
                 f"{sym}_{side}": {"side": p["side"], "qty": p["qty"], "entry": p["entry_price"]}
                 for (sym, side), p in self.positions.items()
             }
+
+            # Heartbeat log
+            now = time.time()
+            if now - last_heartbeat > 60:
+                log.debug("Simulator data_feed heartbeat")
+                last_heartbeat = now
+
             await asyncio.sleep(0.1)
 
     async def _process_orders(self):
         fills = []
         for o in list(self.pending_orders):
             sym = o["symbol"]
-            side = o["pos_side"] # 'buy' or 'sell' (the position side)
+            side = o["pos_side"]
             price = self.last_price.get(sym)
             if not price: continue
 
             if o["type"] == "stop":
-                # For a 'buy' position, exit side is 'sell', trigger when price falls below stop
                 if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
-                # For a 'sell' position, exit side is 'buy', trigger when price rises above stop
                 elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
             elif o["type"] == "tp":
                 if side == "buy" and price >= o["price"]: fills.append((o, "tp"))
                 elif side == "sell" and price <= o["price"]: fills.append((o, "tp"))
 
         for o, et in fills:
-            # Latency simulation
             await asyncio.sleep(random.uniform(0.02, 0.05))
-
-            # The order 'side' is the exit action
             exit_action = "sell" if o["pos_side"] == "buy" else "buy"
             fill_price = self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
             self._execute_exit(o, fill_price, et)
@@ -258,7 +257,6 @@ class Simulator:
         return total_cost / qty if qty > 0 else 0
 
     def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf=""):
-        # side: 'buy' or 'sell'
         required_margin = (qty * entry_price) / self.leverage_limits.get(symbol, 20)
         if self.equity < required_margin: return {"code": "1", "msg": "insufficient balance"}
 
@@ -268,7 +266,6 @@ class Simulator:
         sid = self.order_id_counter; self.order_id_counter += 1
         tid = self.order_id_counter; self.order_id_counter += 1
 
-        # TP/SL orders for this specific side
         self.pending_orders.extend([
             {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty},
             {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty},
@@ -278,11 +275,10 @@ class Simulator:
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf):
         fee = qty * fill_price * TAKER_FEE
         self.equity -= fee
-        # Hedge: Key is (symbol, side)
         self.positions[(symbol, side)] = {
             "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf
         }
-        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.4f} [{btc_conf}] | equity={self.equity:.2f}")
+        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} [{btc_conf}] | equity={self.equity:.2f}")
 
     def _execute_exit(self, order, fill_price, exit_type):
         sym = order["symbol"]
@@ -300,11 +296,9 @@ class Simulator:
         round_trip_pnl = pnl - fee - pos["entry_fee"]
         self.equity += (pnl - fee)
 
-        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.4f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f}")
+        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f}")
 
-        # Cleanup
         del self.positions[(sym, side)]
-        # Cancel other pending order for same position
         self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
         if self.engine: self.engine._update_stats(round_trip_pnl)
