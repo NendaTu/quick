@@ -139,6 +139,7 @@ class Simulator:
             self.books[instId].mid_price = (self.books[instId].best_bid + self.books[instId].best_ask) / 2
 
         elif channel == "trade":
+            # log.debug(f"Received trade data for {instId}: {len(data)} trades")
             for t in data:
                 price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
                 side = t[3] if isinstance(t, list) else t.get("side", "buy")

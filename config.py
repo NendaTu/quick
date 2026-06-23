@@ -70,7 +70,7 @@ TF_TICKS = {
 
 # --- Model thresholds ---
 MIN_CONFIDENCE = 0.66            # minimum probability to trade
-MIN_IMBALANCE = 0.33             # only trade if |imbalance| > this
+MIN_IMBALANCE = 0.05             # only trade if |imbalance| > this
 TREND_STRENGTH_MIN = 0.3         # DRT minimum
 # Win/Loss barriers (symmetric 1:1)
 TP_MOVE = 0.015                 # 0.15% take‑profit

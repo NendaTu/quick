@@ -50,6 +50,7 @@ class Engine:
 
         asyncio.create_task(self.exchange.data_feed_task(self))
         asyncio.create_task(self._equity_monitor())
+        asyncio.create_task(self._maintenance_loop())
         asyncio.create_task(self._trading_loop())
 
         await self.stop_event.wait()
@@ -70,6 +71,17 @@ class Engine:
                 self.stop_event.set()
 
             await asyncio.sleep(0.5)
+
+    async def _maintenance_loop(self):
+        while not self.stop_event.is_set():
+            try:
+                # Purge old data every hour
+                if hasattr(self.exchange, "db"):
+                    self.exchange.db.purge_old_data()
+                await asyncio.sleep(3600)
+            except Exception as e:
+                log.error(f"Maintenance error: {e}")
+                await asyncio.sleep(60)
 
     def _update_stats(self, round_trip_pnl: float):
         self.total_trades += 1

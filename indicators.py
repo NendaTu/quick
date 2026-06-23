@@ -42,7 +42,7 @@ def compute_ema(prices: List[float], period: int) -> float:
         return sum(prices) / len(prices)
 
     k = 2.0 / (period + 1)
-    # Use a simple moving average as the initial EMA value
+    # Use a simple moving average as the initial EMA value for better seeding
     ema = sum(prices[:period]) / period
     for p in prices[period:]:
         ema = (p - ema) * k + ema
@@ -83,24 +83,32 @@ def compute_macd(prices: List[float], fast: int = 12, slow: int = 26, signal: in
     if len(prices) < slow:
         return 0.0, 0.0, 0.0
 
-    # To keep it simple and stateless for now but more efficient than O(N^2)
-    # We can compute it in one pass
     k_fast = 2.0 / (fast + 1)
     k_slow = 2.0 / (slow + 1)
     k_signal = 2.0 / (signal + 1)
 
-    ema_fast = prices[0]
-    ema_slow = prices[0]
+    # Use SMA for initial seeding of EMAs
+    ema_fast = sum(prices[:fast]) / fast
+    ema_slow = sum(prices[:slow]) / slow
+
+    # Adjust starting point for iteration
+    start_idx = slow
 
     macd_series = []
-    for p in prices:
+    # Seed the series with initial EMAs
+    macd_series.append(ema_fast - ema_slow)
+
+    for p in prices[start_idx:]:
         ema_fast = (p - ema_fast) * k_fast + ema_fast
         ema_slow = (p - ema_slow) * k_slow + ema_slow
         macd_series.append(ema_fast - ema_slow)
 
-    ema_signal = macd_series[0]
-    for m in macd_series:
-        ema_signal = (m - ema_signal) * k_signal + ema_signal
+    if len(macd_series) < signal:
+        ema_signal = sum(macd_series) / len(macd_series)
+    else:
+        ema_signal = sum(macd_series[:signal]) / signal
+        for m in macd_series[signal:]:
+            ema_signal = (m - ema_signal) * k_signal + ema_signal
 
     return macd_series[-1], ema_signal, macd_series[-1] - ema_signal
 

@@ -20,55 +20,58 @@ class LearningModel:
         if not features:
             return None
 
-        imb = features["imbalance"]
-        if abs(imb) < MIN_IMBALANCE:
-            return None
-
-        # Directional trend strength (DRT)
-        drt = features["drt"]
-
-        # Confluence: BTC and asset alignment
-        btc_1h = features.get("btc_1H", 0)
-        asset_1h = features.get("asset_1H", 0)
+        imb = features.get("imbalance", 0)
 
         # Scoring
         score = 0
-        if imb > 0.3:
+
+        # Imbalance contribution
+        if imb > 0.15:
             score += 2
-        elif imb > 0.15:
+        elif imb > 0.05:
             score += 1
-        elif imb < -0.3:
-            score -= 2
         elif imb < -0.15:
+            score -= 2
+        elif imb < -0.05:
             score -= 1
 
-        rsi = features["rsi"]
-        if imb > 0 and rsi < 30:
+        # RSI contribution
+        rsi = features.get("rsi", 50)
+        if rsi < 40:
             score += 1
-        elif imb < 0 and rsi > 70:
+        elif rsi > 60:
             score -= 1
 
-        macd_hist = features["macd_hist"]
-        if macd_hist > 0 and imb > 0:
+        # MACD contribution
+        macd_hist = features.get("macd_hist", 0)
+        if macd_hist > 0:
             score += 1
-        elif macd_hist < 0 and imb < 0:
+        elif macd_hist < 0:
             score -= 1
 
-        ema_short = features["ema_short"]
-        ema_long = features["ema_long"]
-        if ema_short > ema_long and imb > 0:
+        # EMA contribution
+        ema_short = features.get("ema_short", 0)
+        ema_long = features.get("ema_long", 0)
+        if ema_short > ema_long:
             score += 1
-        elif ema_short < ema_long and imb < 0:
+        elif ema_short < ema_long:
             score -= 1
 
+        # Trend/Confluence contribution
         asset_15m = features.get("asset_15m", 0)
-        if asset_15m > 0.001 and imb > 0:
+        if asset_15m > 0.0005:
             score += 1
-        elif asset_15m < -0.001 and imb < 0:
+        elif asset_15m < -0.0005:
             score -= 1
 
         # Check for trade signal (absolute score >= 2)
         if abs(score) < 2:
+            return None
+
+        # Final check on imbalance alignment for security
+        if score > 0 and imb < -0.1: # Don't buy if heavy sell imbalance
+            return None
+        if score < 0 and imb > 0.1: # Don't sell if heavy buy imbalance
             return None
 
         direction = "buy" if score > 0 else "sell"
@@ -85,7 +88,6 @@ class LearningModel:
             stop_price = entry * (1 + sl_move)
 
         risk_amount = equity * RISK_PER_TRADE
-        # Risk per unit
         risk_per_unit = abs(entry - stop_price)
         if risk_per_unit == 0:
             return None
@@ -100,7 +102,6 @@ class LearningModel:
         if equity < required_margin:
             return None
 
-        # BTC Confluence metrics for logging
         btc_conf = f"1D:{features.get('btc_1D', 0):.4f} 4H:{features.get('btc_4H', 0):.4f} 1H:{features.get('btc_1H', 0):.4f} 15m:{features.get('btc_15m', 0):.4f}"
 
         signal = {
@@ -121,7 +122,7 @@ class LearningModel:
             "ema_short": ema_short,
             "ema_long": ema_long,
             "supertrend": features.get("supertrend", 0),
-            "drt": drt,
+            "drt": features.get("drt", 0.5),
         })
         return signal
 

@@ -6,6 +6,7 @@ import json
 import asyncio
 import aiohttp
 import logging
+import urllib.parse
 from typing import Dict, List, Optional, Callable
 from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
 
@@ -43,22 +44,30 @@ class BitGetClient:
 
     async def request(self, method: str, path: str, params: Dict = None, data: Dict = None) -> Dict:
         session = await self.get_session()
-        url = self.base_url + path
-        body = json.dumps(data) if data else ""
-        headers = self._get_headers(method, path, body)
 
-        async with session.request(method, url, params=params, data=body, headers=headers) as response:
+        # Proper signing for GET with params
+        signed_path = path
+        if method.upper() == "GET" and params:
+            query = urllib.parse.urlencode(params)
+            signed_path += "?" + query
+
+        url = self.base_url + signed_path
+        body = json.dumps(data) if data else ""
+        headers = self._get_headers(method, signed_path, body)
+
+        async with session.request(method, url, data=body, headers=headers) as response:
             result = await response.json()
             if result.get("code") != "00000":
-                log.error(f"BitGet Error: {result}")
+                log.error(f"BitGet Error: {result} on {url}")
             return result
 
     async def get_candles(self, symbol: str, granularity: str, limit: int = 100) -> List:
+        # BitGet V2 uses lowercase granularity: 1m, 1h, 1d etc.
         path = "/api/v2/mix/market/candles"
         params = {
             "symbol": symbol,
             "productType": "usdt-futures",
-            "granularity": granularity,
+            "granularity": granularity.lower(),
             "limit": str(limit)
         }
         res = await self.request("GET", path, params=params)
@@ -85,6 +94,7 @@ class BitGetWSClient:
 
                     subscribe_msg = {"op": "subscribe", "args": []}
                     for sym in self.symbols:
+                        # V2 USDT-M Futures instType is 'umc'
                         subscribe_msg["args"].append({"instType": "umc", "channel": "books5", "instId": sym})
                         subscribe_msg["args"].append({"instType": "umc", "channel": "trade", "instId": sym})
 
