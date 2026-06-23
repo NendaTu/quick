@@ -14,6 +14,8 @@ class Engine:
         self.equity = INITIAL_EQUITY
         self.starting_equity = INITIAL_EQUITY
         self.peak_equity = INITIAL_EQUITY
+
+        # open_positions key will be 'SYMBOL_buy' or 'SYMBOL_sell' to support Hedge mode
         self.open_positions: Dict[str, dict] = {}
         self.enabled_assets = set(ASSETS)
 
@@ -59,12 +61,10 @@ class Engine:
 
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
-            # Drawdown limit
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
                 log.critical(f"DRAWDOWN LIMIT HIT: equity={self.equity:.2f}, peak={self.peak_equity:.2f}")
                 self.stop_event.set()
 
-            # ROI Target
             roi = (self.equity / self.starting_equity) - 1
             if roi >= TOTAL_ROI_LIMIT:
                 log.critical(f"ROI TARGET REACHED: equity={self.equity:.2f}, ROI={roi*100:.1f}%")
@@ -75,7 +75,6 @@ class Engine:
     async def _maintenance_loop(self):
         while not self.stop_event.is_set():
             try:
-                # Purge old data every hour
                 if hasattr(self.exchange, "db"):
                     self.exchange.db.purge_old_data()
                 await asyncio.sleep(3600)
@@ -105,17 +104,20 @@ class Engine:
         log.info(f"Final equity: {self.equity:.2f} USDT")
         log.info(f"Peak equity: {self.peak_equity:.2f} USDT")
 
-    def _asset_is_tradable(self, symbol: str) -> bool:
+    def _asset_is_tradable(self, symbol: str, side: str) -> bool:
         book = self.books[symbol]
         bid_vol, ask_vol = book.top_bid_ask_qty()
-        if bid_vol < 1 or ask_vol < 1: # RELAXED for baseline
+        if bid_vol < 1 or ask_vol < 1:
             return False
-        if symbol in self.open_positions:
+
+        # Check if specific side is already open (Hedge mode)
+        if f"{symbol}_{side}" in self.open_positions:
             return False
+
         return True
 
     async def _trading_loop(self):
-        await asyncio.sleep(5) # Wait for WS data
+        await asyncio.sleep(5)
         last_summary_time = time.time()
 
         while not self.stop_event.is_set():
@@ -135,21 +137,21 @@ class Engine:
                     self._last_mid[sym] = current_mid
                     self._last_features[sym] = self.exchange.get_features(sym)
 
-                for sym in ASSETS:
-                    if sym not in self.open_positions:
-                        self.enabled_assets.add(sym)
-
-                active = [s for s in ASSETS if s in self.enabled_assets and self._asset_is_tradable(s)]
                 if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
-                    active = []
+                    await asyncio.sleep(0.5)
+                    continue
 
-                for sym in active:
+                for sym in ASSETS:
                     book = self.books[sym]
                     signal = self.model.predict(sym, book, self.equity)
                     if signal is None:
                         continue
 
-                    side = signal["side"]
+                    side = signal["side"] # 'buy' or 'sell'
+
+                    if not self._asset_is_tradable(sym, side):
+                        continue
+
                     qty = signal["qty"]
                     entry = signal["entry_price"]
                     stop = signal["stop_price"]
@@ -157,13 +159,12 @@ class Engine:
                     btc_conf = signal["btc_confluence"]
 
                     log.info(f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
-                             f"entry={entry:.4f} exit={tp:.4f} stop={stop:.4f} "
+                             f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
                              f"[{btc_conf}] drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
                              f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
                              f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
 
                     self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
-                    self.enabled_assets.discard(sym)
 
                 if self.equity > self.peak_equity:
                     self.peak_equity = self.equity

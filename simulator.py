@@ -15,7 +15,9 @@ class Simulator:
         self.books: Dict[str, SimulatedOrderBook] = {}
         self.leverage_limits = LEVERAGE_LIMITS.copy()
         self.equity = INITIAL_EQUITY
-        self.positions: Dict[str, dict] = {}
+
+        # Hedge Mode: positions tracked by (symbol, side)
+        self.positions: Dict[Tuple[str, str], dict] = {}
         self.pending_orders: List[dict] = []
         self.order_id_counter = 1000
         self.total_realized_pnl = 0.0
@@ -23,14 +25,12 @@ class Simulator:
         self.db = Database()
         self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
-        # Consistent time-series data for indicators (1m candles)
         self.ohlcv_1m: Dict[str, List[dict]] = {}
-
-        # Multi-timeframe confluence (storing candle closes)
         self.confluence_history: Dict[str, Dict[str, List[float]]] = {}
-
-        # Last candle timestamps to handle aggregation
         self.last_candle_ts: Dict[str, Dict[str, float]] = {}
+
+        # Tracking last known price for fast order execution
+        self.last_price: Dict[str, float] = {}
 
         all_assets = ASSETS + [BTC_SYMBOL]
         for sym in all_assets:
@@ -38,12 +38,16 @@ class Simulator:
             self.ohlcv_1m[sym] = []
             self.confluence_history[sym] = {"15m": [], "1H": [], "4H": [], "1D": []}
             self.last_candle_ts[sym] = {"1m": 0, "15m": 0, "1H": 0, "4H": 0, "1D": 0}
+            self.last_price[sym] = BASE_PRICES.get(sym, 1.0)
 
     async def warm_up(self):
         log.info("Starting data warm-up...")
         for sym in ASSETS + [BTC_SYMBOL]:
-            # Warm up 1m candles for technical indicators
             m1_data = await self.client.get_candles(sym, "1m", limit=500)
+            if not isinstance(m1_data, list):
+                log.warning(f"Failed to fetch 1m candles for {sym}")
+                continue
+
             for c in reversed(m1_data):
                 ts = float(c[0]) / 1000
                 o, h, l, cl, v = map(float, c[1:6])
@@ -52,10 +56,11 @@ class Simulator:
                 self.last_candle_ts[sym]["1m"] = ts
 
             if m1_data:
-                self.books[sym].mid_price = float(m1_data[0][4])
+                price = float(m1_data[0][4])
+                self.books[sym].mid_price = price
+                self.last_price[sym] = price
                 self.books[sym]._regenerate()
 
-            # Warm up confluence timeframes
             for tf in ["15m", "1H", "4H", "1D"]:
                 c_data = await self.client.get_candles(sym, tf, limit=100)
                 if not isinstance(c_data, list):
@@ -70,16 +75,16 @@ class Simulator:
         log.info("Warm-up complete.")
 
     def get_features(self, symbol: str) -> Dict[str, float]:
-        book = self.books[symbol]
+        book = self.books.get(symbol)
+        if not book: return {}
+
         bid_vol, ask_vol = book.top_bid_ask_qty()
         total_vol = bid_vol + ask_vol
         imbalance = (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0.0
         mid = (book.best_bid + book.best_ask) / 2
         spread = book.best_ask - book.best_bid
-
         vol_pct = min(1.0, total_vol / 4000.0)
 
-        # Indicator calculation using 1m OHLCV history
         history = self.ohlcv_1m.get(symbol, [])
         if len(history) < 50: return {}
 
@@ -142,55 +147,45 @@ class Simulator:
             self.books[instId].mid_price = (self.books[instId].best_bid + self.books[instId].best_ask) / 2
 
         elif channel == "trade":
-            # log.debug(f"Received trade data for {instId}: {len(data)} trades")
             for t in data:
                 price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
-                side = t[3] if isinstance(t, list) else t.get("side", "buy")
                 size = float(t[2]) if isinstance(t, list) else float(t.get("size", 0))
                 ts_ms = float(t[0]) if isinstance(t, list) else float(t.get("ts", 0))
                 ts = ts_ms / 1000
+                side = t[3] if isinstance(t, list) else t.get("side", "buy")
 
+                self.last_price[instId] = price
                 self.db.save_tick(instId, ts, price, side, size)
                 self._update_candles(instId, price, size, ts)
 
     def _update_candles(self, symbol, price, size, ts):
-        # Timeframes in seconds
-        tf_map = {
-            "1m": 60,
-            "15m": 900,
-            "1H": 3600,
-            "4H": 14400,
-            "1D": 86400
-        }
-
+        tf_map = {"1m": 60, "15m": 900, "1H": 3600, "4H": 14400, "1D": 86400}
         for tf_name, seconds in tf_map.items():
             candle_start = (ts // seconds) * seconds
             last_ts = self.last_candle_ts[symbol].get(tf_name, 0)
 
             if candle_start > last_ts:
-                # New candle
                 if tf_name == "1m":
                     self.ohlcv_1m[symbol].append({"ts": candle_start, "o": price, "h": price, "l": price, "c": price, "v": size})
                     if len(self.ohlcv_1m[symbol]) > 1000: self.ohlcv_1m[symbol].pop(0)
-                    # Persist closed candle
                     prev = self.ohlcv_1m[symbol][-2] if len(self.ohlcv_1m[symbol]) > 1 else None
                     if prev:
                         self.db.save_candle(symbol, "1m", prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
                 else:
                     self.confluence_history[symbol][tf_name].append(price)
                     if len(self.confluence_history[symbol][tf_name]) > 200: self.confluence_history[symbol][tf_name].pop(0)
-
                 self.last_candle_ts[symbol][tf_name] = candle_start
             else:
-                # Update current candle
                 if tf_name == "1m":
-                    curr = self.ohlcv_1m[symbol][-1]
-                    curr["h"] = max(curr["h"], price)
-                    curr["l"] = min(curr["l"], price)
-                    curr["c"] = price
-                    curr["v"] += size
+                    if self.ohlcv_1m[symbol]:
+                        curr = self.ohlcv_1m[symbol][-1]
+                        curr["h"] = max(curr["h"], price)
+                        curr["l"] = min(curr["l"], price)
+                        curr["c"] = price
+                        curr["v"] += size
                 else:
-                    self.confluence_history[symbol][tf_name][-1] = price
+                    if self.confluence_history[symbol][tf_name]:
+                        self.confluence_history[symbol][tf_name][-1] = price
 
     async def data_feed_task(self, engine):
         symbols = ASSETS + [BTC_SYMBOL]
@@ -206,9 +201,11 @@ class Simulator:
 
             await self._process_orders()
             engine.equity = self.equity
+
+            # Update engine's open positions for summary (Hedge-aware)
             engine.open_positions = {
-                sym: {"side": p["side"], "qty": p["qty"], "entry": p["entry_price"]}
-                for sym, p in self.positions.items()
+                f"{sym}_{side}": {"side": p["side"], "qty": p["qty"], "entry": p["entry_price"]}
+                for (sym, side), p in self.positions.items()
             }
             await asyncio.sleep(0.1)
 
@@ -216,22 +213,29 @@ class Simulator:
         fills = []
         for o in list(self.pending_orders):
             sym = o["symbol"]
-            book = self.books[sym]
-            if not book.best_bid or not book.best_ask: continue
-            mid = (book.best_bid + book.best_ask) / 2
+            side = o["pos_side"] # 'buy' or 'sell' (the position side)
+            price = self.last_price.get(sym)
+            if not price: continue
 
             if o["type"] == "stop":
-                if o["side"] == "buy" and mid >= o["triggerPrice"]: fills.append((o, "stop"))
-                elif o["side"] == "sell" and mid <= o["triggerPrice"]: fills.append((o, "stop"))
+                # For a 'buy' position, exit side is 'sell', trigger when price falls below stop
+                if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
+                # For a 'sell' position, exit side is 'buy', trigger when price rises above stop
+                elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
             elif o["type"] == "tp":
-                if o["side"] == "sell" and mid >= o["price"]: fills.append((o, "tp"))
-                elif o["side"] == "buy" and mid <= o["price"]: fills.append((o, "tp"))
+                if side == "buy" and price >= o["price"]: fills.append((o, "tp"))
+                elif side == "sell" and price <= o["price"]: fills.append((o, "tp"))
 
         for o, et in fills:
+            # Latency simulation
             await asyncio.sleep(random.uniform(0.02, 0.05))
-            fill_price = self._calculate_fill_price(o["symbol"], o["side"], o["qty"])
+
+            # The order 'side' is the exit action
+            exit_action = "sell" if o["pos_side"] == "buy" else "buy"
+            fill_price = self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
             self._execute_exit(o, fill_price, et)
-            self.pending_orders.remove(o)
+            if o in self.pending_orders:
+                self.pending_orders.remove(o)
 
     def get_leverage_limits(self):
         return self.leverage_limits
@@ -241,6 +245,8 @@ class Simulator:
         levels = book.asks if side == "buy" else book.bids
         filled_qty = 0
         total_cost = 0
+        if not levels: return self.last_price.get(symbol, 0)
+
         for price, size in levels:
             take = min(qty - filled_qty, size)
             total_cost += take * price
@@ -248,38 +254,57 @@ class Simulator:
             if filled_qty >= qty: break
 
         if filled_qty < qty:
-            total_cost += (qty - filled_qty) * (levels[-1][0] if levels else book.mid_price) * 1.01
+            total_cost += (qty - filled_qty) * (levels[-1][0] if levels else self.last_price.get(symbol, 0)) * 1.01
         return total_cost / qty if qty > 0 else 0
 
     def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf=""):
+        # side: 'buy' or 'sell'
         required_margin = (qty * entry_price) / self.leverage_limits.get(symbol, 20)
         if self.equity < required_margin: return {"code": "1", "msg": "insufficient balance"}
+
         fill_price = self._calculate_fill_price(symbol, side, qty)
         self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf)
+
         sid = self.order_id_counter; self.order_id_counter += 1
         tid = self.order_id_counter; self.order_id_counter += 1
+
+        # TP/SL orders for this specific side
         self.pending_orders.extend([
-            {"id": sid, "symbol": symbol, "type": "stop", "side": "sell" if side == "buy" else "buy", "triggerPrice": stop_price, "qty": qty},
-            {"id": tid, "symbol": symbol, "type": "tp", "side": "sell" if side == "buy" else "buy", "price": tp_price, "qty": qty},
+            {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty},
+            {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty},
         ])
         return {"code": "00000", "data": {"orderId": str(sid)}}
 
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf):
         fee = qty * fill_price * TAKER_FEE
         self.equity -= fee
-        self.positions[symbol] = {
+        # Hedge: Key is (symbol, side)
+        self.positions[(symbol, side)] = {
             "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf
         }
-        log.info(f"FILLED ENTRY {symbol} {side} {qty:.3f} @ {fill_price:.4f} [{btc_conf}] | equity={self.equity:.2f}")
+        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.4f} [{btc_conf}] | equity={self.equity:.2f}")
 
     def _execute_exit(self, order, fill_price, exit_type):
-        sym = order["symbol"]; pos = self.positions.get(sym)
+        sym = order["symbol"]
+        side = order["pos_side"]
+        pos = self.positions.get((sym, side))
         if not pos: return
+
         qty = min(order["qty"], pos["qty"])
-        pnl = (fill_price - pos["entry_price"]) * qty if pos["side"] == "buy" else (pos["entry_price"] - fill_price) * qty
+        if side == "buy":
+            pnl = (fill_price - pos["entry_price"]) * qty
+        else:
+            pnl = (pos["entry_price"] - fill_price) * qty
+
         fee = qty * fill_price * TAKER_FEE
         round_trip_pnl = pnl - fee - pos["entry_fee"]
         self.equity += (pnl - fee)
-        log.info(f"EXIT {sym} {exit_type} @ {fill_price:.4f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f}")
-        del self.positions[sym]
+
+        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.4f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f}")
+
+        # Cleanup
+        del self.positions[(sym, side)]
+        # Cancel other pending order for same position
+        self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
+
         if self.engine: self.engine._update_stats(round_trip_pnl)
