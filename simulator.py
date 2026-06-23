@@ -58,6 +58,9 @@ class Simulator:
             # Warm up confluence timeframes
             for tf in ["15m", "1H", "4H", "1D"]:
                 c_data = await self.client.get_candles(sym, tf, limit=100)
+                if not isinstance(c_data, list):
+                    log.warning(f"Failed to fetch {tf} candles for {sym}")
+                    continue
                 for c in reversed(c_data):
                     ts = float(c[0]) / 1000
                     cl = float(c[4])

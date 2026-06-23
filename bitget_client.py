@@ -45,7 +45,6 @@ class BitGetClient:
     async def request(self, method: str, path: str, params: Dict = None, data: Dict = None) -> Dict:
         session = await self.get_session()
 
-        # Proper signing for GET with params
         signed_path = path
         if method.upper() == "GET" and params:
             query = urllib.parse.urlencode(params)
@@ -55,23 +54,27 @@ class BitGetClient:
         body = json.dumps(data) if data else ""
         headers = self._get_headers(method, signed_path, body)
 
-        async with session.request(method, url, data=body, headers=headers) as response:
-            result = await response.json()
-            if result.get("code") != "00000":
-                log.error(f"BitGet Error: {result} on {url}")
-            return result
+        try:
+            async with session.request(method, url, data=body, headers=headers) as response:
+                result = await response.json()
+                if result.get("code") != "00000":
+                    log.error(f"BitGet Error: {result} on {url}")
+                return result
+        except Exception as e:
+            log.error(f"Request Exception: {e} on {url}")
+            return {"code": "error", "msg": str(e), "data": None}
 
     async def get_candles(self, symbol: str, granularity: str, limit: int = 100) -> List:
-        # BitGet V2 uses lowercase granularity: 1m, 1h, 1d etc.
+        # BitGet V2 granularity is case-sensitive for some timeframes (e.g. 1H, 4H, 1D)
         path = "/api/v2/mix/market/candles"
         params = {
             "symbol": symbol,
             "productType": "usdt-futures",
-            "granularity": granularity.lower(),
+            "granularity": granularity, # Do not lowercase
             "limit": str(limit)
         }
         res = await self.request("GET", path, params=params)
-        return res.get("data", [])
+        return res.get("data") or []
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -94,7 +97,6 @@ class BitGetWSClient:
 
                     subscribe_msg = {"op": "subscribe", "args": []}
                     for sym in self.symbols:
-                        # V2 USDT-M Futures instType is 'umc'
                         subscribe_msg["args"].append({"instType": "umc", "channel": "books5", "instId": sym})
                         subscribe_msg["args"].append({"instType": "umc", "channel": "trade", "instId": sym})
 
