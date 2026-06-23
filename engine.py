@@ -108,7 +108,7 @@ class Engine:
     def _asset_is_tradable(self, symbol: str) -> bool:
         book = self.books[symbol]
         bid_vol, ask_vol = book.top_bid_ask_qty()
-        if bid_vol < 10 or ask_vol < 10: # Adjusted for real depth if needed
+        if bid_vol < 1 or ask_vol < 1: # RELAXED for baseline
             return False
         if symbol in self.open_positions:
             return False

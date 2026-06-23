@@ -22,24 +22,24 @@ class LearningModel:
 
         imb = features.get("imbalance", 0)
 
-        # Scoring
+        # --- RELAXED SCORING ---
         score = 0
 
-        # Imbalance contribution
-        if imb > 0.15:
+        # Imbalance contribution (RELAXED)
+        if imb > 0.10:
             score += 2
-        elif imb > 0.05:
+        elif imb > 0.01:
             score += 1
-        elif imb < -0.15:
+        elif imb < -0.10:
             score -= 2
-        elif imb < -0.05:
+        elif imb < -0.01:
             score -= 1
 
-        # RSI contribution
+        # RSI contribution (RELAXED)
         rsi = features.get("rsi", 50)
-        if rsi < 40:
+        if rsi < 45: # Higher threshold for long
             score += 1
-        elif rsi > 60:
+        elif rsi > 55: # Lower threshold for short
             score -= 1
 
         # MACD contribution
@@ -57,22 +57,18 @@ class LearningModel:
         elif ema_short < ema_long:
             score -= 1
 
-        # Trend/Confluence contribution
+        # Trend/Confluence contribution (RELAXED)
         asset_15m = features.get("asset_15m", 0)
-        if asset_15m > 0.0005:
+        if asset_15m > 0.0001:
             score += 1
-        elif asset_15m < -0.0005:
+        elif asset_15m < -0.0001:
             score -= 1
 
-        # Check for trade signal (absolute score >= 2)
-        if abs(score) < 2:
+        # Check for trade signal (RELAXED: score >= 1)
+        if abs(score) < 1:
             return None
 
-        # Final check on imbalance alignment for security
-        if score > 0 and imb < -0.1: # Don't buy if heavy sell imbalance
-            return None
-        if score < 0 and imb > 0.1: # Don't sell if heavy buy imbalance
-            return None
+        # REMOVED safety alignment check to maximize activity
 
         direction = "buy" if score > 0 else "sell"
 
@@ -110,7 +106,7 @@ class LearningModel:
             "exit_price": exit_price,
             "stop_price": stop_price,
             "qty": qty,
-            "confidence": min(1.0, (abs(score) + 2) / 10),
+            "confidence": min(1.0, (abs(score) + 1) / 10),
             "btc_confluence": btc_conf
         }
 
