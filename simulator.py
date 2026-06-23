@@ -1,10 +1,12 @@
 import asyncio, time, logging, math, random
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from config import *
 from orderbook import SimulatedOrderBook
 from indicators import (
     compute_rsi, compute_atr, compute_ema, compute_macd, compute_supertrend, compute_drt
 )
+from database import Database
+from bitget_client import BitGetClient, BitGetWSClient
 
 log = logging.getLogger("scalper.simulator")
 
@@ -17,23 +19,52 @@ class Simulator:
         self.pending_orders: List[dict] = []
         self.order_id_counter = 1000
         self.total_realized_pnl = 0.0
-        self._imbalance_state = {}
         self.engine = None
+        self.db = Database()
+        self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
-        self.price_history: Dict[str, List[float]] = {}
-        self.high_history: Dict[str, List[float]] = {}
-        self.low_history: Dict[str, List[float]] = {}
-        self.close_history: Dict[str, List[float]] = {}
+        # Consistent time-series data for indicators (1m candles)
+        self.ohlcv_1m: Dict[str, List[dict]] = {}
+
+        # Multi-timeframe confluence (storing candle closes)
+        self.confluence_history: Dict[str, Dict[str, List[float]]] = {}
+
+        # Last candle timestamps to handle aggregation
+        self.last_candle_ts: Dict[str, Dict[str, float]] = {}
 
         all_assets = ASSETS + [BTC_SYMBOL]
         for sym in all_assets:
-            price = BASE_PRICES.get(sym, 1.0)
-            self.books[sym] = SimulatedOrderBook(sym, price)
-            self._imbalance_state[sym] = random.uniform(-0.3, 0.3)
-            self.price_history[sym] = [price] * (INDICATOR_PRICE_HISTORY + 1)
-            self.high_history[sym] = [price * 1.0001] * (INDICATOR_PRICE_HISTORY + 1)
-            self.low_history[sym] = [price * 0.9999] * (INDICATOR_PRICE_HISTORY + 1)
-            self.close_history[sym] = [price] * (INDICATOR_PRICE_HISTORY + 1)
+            self.books[sym] = SimulatedOrderBook(sym, BASE_PRICES.get(sym, 1.0))
+            self.ohlcv_1m[sym] = []
+            self.confluence_history[sym] = {"15m": [], "1H": [], "4H": [], "1D": []}
+            self.last_candle_ts[sym] = {"1m": 0, "15m": 0, "1H": 0, "4H": 0, "1D": 0}
+
+    async def warm_up(self):
+        log.info("Starting data warm-up...")
+        for sym in ASSETS + [BTC_SYMBOL]:
+            # Warm up 1m candles for technical indicators
+            m1_data = await self.client.get_candles(sym, "1m", limit=500)
+            for c in reversed(m1_data):
+                ts = float(c[0]) / 1000
+                o, h, l, cl, v = map(float, c[1:6])
+                self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+                self.ohlcv_1m[sym].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                self.last_candle_ts[sym]["1m"] = ts
+
+            if m1_data:
+                self.books[sym].mid_price = float(m1_data[0][4])
+                self.books[sym]._regenerate()
+
+            # Warm up confluence timeframes
+            for tf in ["15m", "1H", "4H", "1D"]:
+                c_data = await self.client.get_candles(sym, tf, limit=100)
+                for c in reversed(c_data):
+                    ts = float(c[0]) / 1000
+                    cl = float(c[4])
+                    self.confluence_history[sym][tf].append(cl)
+                    self.last_candle_ts[sym][tf] = ts
+
+        log.info("Warm-up complete.")
 
     def get_features(self, symbol: str) -> Dict[str, float]:
         book = self.books[symbol]
@@ -45,31 +76,35 @@ class Simulator:
 
         vol_pct = min(1.0, total_vol / 4000.0)
 
-        prices = self.price_history[symbol]
-        highs = self.high_history[symbol]
-        lows = self.low_history[symbol]
-        closes = self.close_history[symbol]
+        # Indicator calculation using 1m OHLCV history
+        history = self.ohlcv_1m.get(symbol, [])
+        if len(history) < 50: return {}
 
-        rsi = compute_rsi(prices, RSI_PERIOD)
+        closes = [x["c"] for x in history]
+        highs = [x["h"] for x in history]
+        lows = [x["l"] for x in history]
+
+        rsi = compute_rsi(closes, RSI_PERIOD)
         atr = compute_atr(highs, lows, closes, ATR_PERIOD)
-        macd, macd_signal, macd_hist = compute_macd(prices, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
-        ema_short = compute_ema(prices, EMA_SHORT)
-        ema_long = compute_ema(prices, EMA_LONG)
-        supertrend = compute_supertrend(highs, lows, closes, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER)
-        drt = compute_drt(prices, 20)
+        macd, macd_signal, macd_hist = compute_macd(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
+        ema_short = compute_ema(closes, EMA_SHORT)
+        ema_long = compute_ema(closes, EMA_LONG)
+        supertrend_val, supertrend_dir = compute_supertrend(highs, lows, closes, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER)
+        drt = compute_drt(closes, 20)
 
-        btc_prices = self.price_history[BTC_SYMBOL]
         btc_changes = {}
-        for tf, ticks in TF_TICKS.items():
-            if len(btc_prices) >= ticks:
-                btc_changes[f"btc_{tf}"] = (btc_prices[-1] / btc_prices[-ticks] - 1) if btc_prices[-ticks] != 0 else 0.0
+        for tf in ["15m", "1H", "4H", "1D"]:
+            h = self.confluence_history[BTC_SYMBOL][tf]
+            if len(h) >= 2:
+                btc_changes[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
             else:
                 btc_changes[f"btc_{tf}"] = 0.0
 
         asset_changes = {}
-        for tf, ticks in TF_TICKS.items():
-            if len(prices) >= ticks:
-                asset_changes[f"asset_{tf}"] = (prices[-1] / prices[-ticks] - 1) if prices[-ticks] != 0 else 0.0
+        for tf in ["15m", "1H", "4H", "1D"]:
+            h = self.confluence_history[symbol][tf]
+            if len(h) >= 2:
+                asset_changes[f"asset_{tf}"] = (h[-1] / h[-2] - 1)
             else:
                 asset_changes[f"asset_{tf}"] = 0.0
 
@@ -84,153 +119,163 @@ class Simulator:
             "macd_hist": macd_hist,
             "ema_short": ema_short,
             "ema_long": ema_long,
-            "supertrend": supertrend,
+            "supertrend": supertrend_val,
+            "supertrend_dir": supertrend_dir,
             "drt": drt,
             **btc_changes,
             **asset_changes,
         }
 
-    def get_leverage_limits(self):
-        return self.leverage_limits
+    async def _ws_callback(self, msg):
+        channel = msg.get("arg", {}).get("channel")
+        instId = msg.get("arg", {}).get("instId")
+        data = msg.get("data", [])
+        if not data: return
+
+        if channel == "books5":
+            d = data[0]
+            self.books[instId].bids = [(float(p), float(q)) for p, q in d.get("bids", [])]
+            self.books[instId].asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
+            self.books[instId].mid_price = (self.books[instId].best_bid + self.books[instId].best_ask) / 2
+
+        elif channel == "trade":
+            for t in data:
+                price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
+                side = t[3] if isinstance(t, list) else t.get("side", "buy")
+                size = float(t[2]) if isinstance(t, list) else float(t.get("size", 0))
+                ts_ms = float(t[0]) if isinstance(t, list) else float(t.get("ts", 0))
+                ts = ts_ms / 1000
+
+                self.db.save_tick(instId, ts, price, side, size)
+                self._update_candles(instId, price, size, ts)
+
+    def _update_candles(self, symbol, price, size, ts):
+        # Timeframes in seconds
+        tf_map = {
+            "1m": 60,
+            "15m": 900,
+            "1H": 3600,
+            "4H": 14400,
+            "1D": 86400
+        }
+
+        for tf_name, seconds in tf_map.items():
+            candle_start = (ts // seconds) * seconds
+            last_ts = self.last_candle_ts[symbol].get(tf_name, 0)
+
+            if candle_start > last_ts:
+                # New candle
+                if tf_name == "1m":
+                    self.ohlcv_1m[symbol].append({"ts": candle_start, "o": price, "h": price, "l": price, "c": price, "v": size})
+                    if len(self.ohlcv_1m[symbol]) > 1000: self.ohlcv_1m[symbol].pop(0)
+                    # Persist closed candle
+                    prev = self.ohlcv_1m[symbol][-2] if len(self.ohlcv_1m[symbol]) > 1 else None
+                    if prev:
+                        self.db.save_candle(symbol, "1m", prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
+                else:
+                    self.confluence_history[symbol][tf_name].append(price)
+                    if len(self.confluence_history[symbol][tf_name]) > 200: self.confluence_history[symbol][tf_name].pop(0)
+
+                self.last_candle_ts[symbol][tf_name] = candle_start
+            else:
+                # Update current candle
+                if tf_name == "1m":
+                    curr = self.ohlcv_1m[symbol][-1]
+                    curr["h"] = max(curr["h"], price)
+                    curr["l"] = min(curr["l"], price)
+                    curr["c"] = price
+                    curr["v"] += size
+                else:
+                    self.confluence_history[symbol][tf_name][-1] = price
 
     async def data_feed_task(self, engine):
-        sigma = SIM_SIGMA
+        symbols = ASSETS + [BTC_SYMBOL]
+        ws_client = BitGetWSClient(symbols, self._ws_callback)
+        asyncio.create_task(ws_client.run())
+
         while True:
-            for sym in self.books:
+            for sym in symbols:
                 book = self.books[sym]
-                imb = self._imbalance_state[sym]
-                signal_strength = SIM_SIGNAL_STRENGTH
-                noise = random.gauss(0, sigma)
-                log_return = signal_strength * imb + noise
-
-                self._imbalance_state[sym] += random.gauss(0, SIM_IMBALANCE_NOISE)
-                self._imbalance_state[sym] = max(-0.5, min(0.5, self._imbalance_state[sym]))
-
-                book.random_step(math.exp(log_return))
-
-                mid = (book.best_bid + book.best_ask) / 2
-                high = book.best_ask * 1.0001
-                low = book.best_bid * 0.9999
-                self.price_history[sym].append(mid)
-                self.high_history[sym].append(high)
-                self.low_history[sym].append(low)
-                self.close_history[sym].append(mid)
-
-                if len(self.price_history[sym]) > INDICATOR_PRICE_HISTORY + 100:
-                    self.price_history[sym] = self.price_history[sym][-INDICATOR_PRICE_HISTORY - 100:]
-                    self.high_history[sym] = self.high_history[sym][-INDICATOR_PRICE_HISTORY - 100:]
-                    self.low_history[sym] = self.low_history[sym][-INDICATOR_PRICE_HISTORY - 100:]
-                    self.close_history[sym] = self.close_history[sym][-INDICATOR_PRICE_HISTORY - 100:]
-
-                engine.books[sym].bids = [(p, s) for p, s in book.bids]
-                engine.books[sym].asks = [(p, s) for p, s in book.asks]
+                engine.books[sym].bids = list(book.bids)
+                engine.books[sym].asks = list(book.asks)
                 engine.books[sym].timestamp = time.time()
 
-            orders_snapshot = list(self.pending_orders)
-            fills_exit = []
-
-            for o in orders_snapshot:
-                sym = o["symbol"]
-                book = self.books[sym]
-                mid = book.mid_price
-
-                if o["type"] == "stop":
-                    if o["side"] == "buy" and mid >= o["triggerPrice"]:
-                        fills_exit.append((o, mid, "stop"))
-                    elif o["side"] == "sell" and mid <= o["triggerPrice"]:
-                        fills_exit.append((o, mid, "stop"))
-                elif o["type"] == "tp":
-                    if o["side"] == "sell" and mid >= o["price"]:
-                        fills_exit.append((o, mid, "tp"))
-                    elif o["side"] == "buy" and mid <= o["price"]:
-                        fills_exit.append((o, mid, "tp"))
-
-            for o, fp, et in fills_exit:
-                self._execute_exit(o, fp, et)
-
-            self.pending_orders = [o for o in self.pending_orders
-                                   if not any(o["id"] == fo[0]["id"] for fo in fills_exit)]
-
+            await self._process_orders()
             engine.equity = self.equity
             engine.open_positions = {
                 sym: {"side": p["side"], "qty": p["qty"], "entry": p["entry_price"]}
                 for sym, p in self.positions.items()
             }
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
 
-    def place_trade_oco(self, symbol: str, side: str, qty: float,
-                        entry_price: float, stop_price: float, tp_price: float):
+    async def _process_orders(self):
+        fills = []
+        for o in list(self.pending_orders):
+            sym = o["symbol"]
+            book = self.books[sym]
+            if not book.best_bid or not book.best_ask: continue
+            mid = (book.best_bid + book.best_ask) / 2
+
+            if o["type"] == "stop":
+                if o["side"] == "buy" and mid >= o["triggerPrice"]: fills.append((o, "stop"))
+                elif o["side"] == "sell" and mid <= o["triggerPrice"]: fills.append((o, "stop"))
+            elif o["type"] == "tp":
+                if o["side"] == "sell" and mid >= o["price"]: fills.append((o, "tp"))
+                elif o["side"] == "buy" and mid <= o["price"]: fills.append((o, "tp"))
+
+        for o, et in fills:
+            await asyncio.sleep(random.uniform(0.02, 0.05))
+            fill_price = self._calculate_fill_price(o["symbol"], o["side"], o["qty"])
+            self._execute_exit(o, fill_price, et)
+            self.pending_orders.remove(o)
+
+    def get_leverage_limits(self):
+        return self.leverage_limits
+
+    def _calculate_fill_price(self, symbol, side, qty):
         book = self.books[symbol]
-        position_value = qty * entry_price
-        required_margin = position_value / self.leverage_limits[symbol]
-        if self.equity < required_margin:
-            return {"code": "1", "msg": "insufficient balance"}
+        levels = book.asks if side == "buy" else book.bids
+        filled_qty = 0
+        total_cost = 0
+        for price, size in levels:
+            take = min(qty - filled_qty, size)
+            total_cost += take * price
+            filled_qty += take
+            if filled_qty >= qty: break
 
-        if side == "buy":
-            fill_price = book.best_ask
-        else:
-            fill_price = book.best_bid
+        if filled_qty < qty:
+            total_cost += (qty - filled_qty) * (levels[-1][0] if levels else book.mid_price) * 1.01
+        return total_cost / qty if qty > 0 else 0
 
-        self._execute_entry_direct(symbol, side, qty, fill_price)
-
+    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf=""):
+        required_margin = (qty * entry_price) / self.leverage_limits.get(symbol, 20)
+        if self.equity < required_margin: return {"code": "1", "msg": "insufficient balance"}
+        fill_price = self._calculate_fill_price(symbol, side, qty)
+        self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf)
         sid = self.order_id_counter; self.order_id_counter += 1
         tid = self.order_id_counter; self.order_id_counter += 1
-
         self.pending_orders.extend([
-            {"id": sid, "symbol": symbol, "type": "stop",
-             "side": "sell" if side == "buy" else "buy",
-             "triggerPrice": stop_price, "qty": qty},
-            {"id": tid, "symbol": symbol, "type": "tp",
-             "side": "sell" if side == "buy" else "buy",
-             "price": tp_price, "qty": qty},
+            {"id": sid, "symbol": symbol, "type": "stop", "side": "sell" if side == "buy" else "buy", "triggerPrice": stop_price, "qty": qty},
+            {"id": tid, "symbol": symbol, "type": "tp", "side": "sell" if side == "buy" else "buy", "price": tp_price, "qty": qty},
         ])
-        log.info(f"PAPER OCO: {symbol} {side} qty={qty:.3f} entry={fill_price:.4f} "
-                 f"stop={stop_price:.4f} tp={tp_price:.4f}")
         return {"code": "00000", "data": {"orderId": str(sid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price):
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf):
         fee = qty * fill_price * TAKER_FEE
         self.equity -= fee
-        self.total_realized_pnl -= fee
-
-        feats = self.get_features(symbol) if hasattr(self, 'get_features') else {}
-        current_drt = feats.get("drt", 0.5)
         self.positions[symbol] = {
-            "side": side, "qty": qty,
-            "entry_price": fill_price,
-            "entry_fee": fee,
-            "open_time": time.time(),
-            "entry_drt": current_drt
+            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf
         }
-        log.info(f"FILLED ENTRY {symbol} {side} {qty:.3f} @ {fill_price:.4f} "
-                 f"drt={current_drt:.3f} rsi={feats.get('rsi',50):.1f} "
-                 f"macd={feats.get('macd',0):.4f} ema={feats.get('ema_short',0):.4f} "
-                 f"vol={feats.get('vol_pct',0):.2f} | equity={self.equity:.2f}")
+        log.info(f"FILLED ENTRY {symbol} {side} {qty:.3f} @ {fill_price:.4f} [{btc_conf}] | equity={self.equity:.2f}")
 
     def _execute_exit(self, order, fill_price, exit_type):
-        sym = order["symbol"]
-        pos = self.positions.get(sym)
-        if not pos:
-            return
+        sym = order["symbol"]; pos = self.positions.get(sym)
+        if not pos: return
         qty = min(order["qty"], pos["qty"])
-        if pos["side"] == "buy":
-            pnl = (fill_price - pos["entry_price"]) * qty
-        else:
-            pnl = (pos["entry_price"] - fill_price) * qty
-        fee_rate = TAKER_FEE
-        fee = qty * fill_price * fee_rate
+        pnl = (fill_price - pos["entry_price"]) * qty if pos["side"] == "buy" else (pos["entry_price"] - fill_price) * qty
+        fee = qty * fill_price * TAKER_FEE
         round_trip_pnl = pnl - fee - pos["entry_fee"]
-        # Equity: add gross profit, deduct exit fee (entry fee already deducted)
-        self.equity += pnl - fee
-        self.total_realized_pnl += round_trip_pnl
-
-        feats = self.get_features(sym) if hasattr(self, 'get_features') else {}
-        exit_drt = feats.get("drt", 0.5)
+        self.equity += (pnl - fee)
+        log.info(f"EXIT {sym} {exit_type} @ {fill_price:.4f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f}")
         del self.positions[sym]
-        log.info(f"EXIT {sym} {exit_type} @ {fill_price:.4f} PnL={pnl:.4f} fee={fee:.4f} "
-                 f"entry_fee={pos['entry_fee']:.4f} net={round_trip_pnl:.4f} "
-                 f"drt={exit_drt:.3f} rsi={feats.get('rsi',50):.1f} "
-                 f"macd={feats.get('macd',0):.4f} ema={feats.get('ema_short',0):.4f} "
-                 f"vol={feats.get('vol_pct',0):.2f} | equity={self.equity:.2f}")
-        if self.engine is not None:
-            self.engine._update_stats(round_trip_pnl)
+        if self.engine: self.engine._update_stats(round_trip_pnl)

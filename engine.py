@@ -39,10 +39,12 @@ class Engine:
 
     async def start(self):
         self.start_time = time.time()
-        self.leverage_limits = self.exchange.get_leverage_limits()
-        log.info(f"Leverage limits: {self.leverage_limits}")
 
-        if MODE != "paper":
+        if MODE == "paper":
+            await self.exchange.warm_up()
+            self.leverage_limits = self.exchange.get_leverage_limits()
+            log.info(f"Leverage limits: {self.leverage_limits}")
+        else:
             log.error("Only paper mode is implemented.")
             return
 
@@ -56,9 +58,17 @@ class Engine:
 
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
+            # Drawdown limit
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
                 log.critical(f"DRAWDOWN LIMIT HIT: equity={self.equity:.2f}, peak={self.peak_equity:.2f}")
                 self.stop_event.set()
+
+            # ROI Target
+            roi = (self.equity / self.starting_equity) - 1
+            if roi >= TOTAL_ROI_LIMIT:
+                log.critical(f"ROI TARGET REACHED: equity={self.equity:.2f}, ROI={roi*100:.1f}%")
+                self.stop_event.set()
+
             await asyncio.sleep(0.5)
 
     def _update_stats(self, round_trip_pnl: float):
@@ -86,14 +96,14 @@ class Engine:
     def _asset_is_tradable(self, symbol: str) -> bool:
         book = self.books[symbol]
         bid_vol, ask_vol = book.top_bid_ask_qty()
-        if bid_vol < 500 or ask_vol < 500:
+        if bid_vol < 10 or ask_vol < 10: # Adjusted for real depth if needed
             return False
         if symbol in self.open_positions:
             return False
         return True
 
     async def _trading_loop(self):
-        await asyncio.sleep(3)
+        await asyncio.sleep(5) # Wait for WS data
         last_summary_time = time.time()
 
         while not self.stop_event.is_set():
@@ -132,20 +142,22 @@ class Engine:
                     entry = signal["entry_price"]
                     stop = signal["stop_price"]
                     tp = signal["exit_price"]
+                    btc_conf = signal["btc_confluence"]
 
                     log.info(f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
                              f"entry={entry:.4f} exit={tp:.4f} stop={stop:.4f} "
-                             f"drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
+                             f"[{btc_conf}] drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
                              f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
                              f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
-                    self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp)
+
+                    self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
                     self.enabled_assets.discard(sym)
 
                 if self.equity > self.peak_equity:
                     self.peak_equity = self.equity
 
                 now = time.time()
-                if now - last_summary_time >= 10.0:
+                if now - last_summary_time >= 30.0:
                     self._log_periodic_summary()
                     last_summary_time = now
 
@@ -157,6 +169,7 @@ class Engine:
     def _log_periodic_summary(self):
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
         drawdown = (1 - self.equity / self.peak_equity) * 100 if self.peak_equity > 0 else 0
-        log.info(f"SUMMARY | Equity: {self.equity:.2f} | Peak: {self.peak_equity:.2f} | "
+        roi = (self.equity / self.starting_equity - 1) * 100
+        log.info(f"SUMMARY | Equity: {self.equity:.2f} | ROI: {roi:.1f}% | Peak: {self.peak_equity:.2f} | "
                  f"Drawdown: {drawdown:.1f}% | Trades: {self.total_trades} | "
                  f"Win%: {win_rate:.1f} | Open: {len(self.open_positions)}")

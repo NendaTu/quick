@@ -4,12 +4,16 @@ load_dotenv()
 
 # --- Mode & environment ---
 MODE = os.getenv("MODE", "paper").lower()
+BITGET_API_KEY = os.getenv("BITGET_API_KEY")
+BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
+BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
 # --- Account ---
 INITIAL_EQUITY = 100.0
 RISK_PER_TRADE = 0.01            # fraction of equity risked per trade
 MAX_CONCURRENT_POSITIONS = 10
 DRAWDOWN_LIMIT = 0.5             # stop if equity <= 50% of peak
+TOTAL_ROI_LIMIT = 1.0            # stop if ROI >= +100%
 
 # --- Fees ---
 MAKER_FEE = 0.0002               # 0.02%
