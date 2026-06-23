@@ -76,6 +76,12 @@ class BitGetClient:
         res = await self.request("GET", path, params=params)
         return res.get("data") or []
 
+    async def get_symbols(self) -> List:
+        path = "/api/v2/mix/market/contracts"
+        params = {"productType": "usdt-futures"}
+        res = await self.request("GET", path, params=params)
+        return res.get("data", [])
+
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()
