@@ -9,8 +9,8 @@ BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
 BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
 # --- Account ---
-INITIAL_EQUITY = 100.0
-RISK_PER_TRADE = 0.01            # fraction of equity risked per trade
+INITIAL_EQUITY = 1000.0
+RISK_PER_TRADE = 0.002           # fraction of equity risked per trade
 LOG_REJECTIONS = False            # Toggle rejection logs in console
 LOG_SIGNALS = False               # Toggle signal logs in console
 MAX_CONCURRENT_POSITIONS = 50
@@ -89,8 +89,8 @@ SL_MOVE = 0.001                 # 0.3% stop‑loss
 MAX_ENTRY_SLIPPAGE = 0.001     # 0.05% max slippage for entry
 
 # --- Scoring Thresholds ---
-RSI_LONG = 45.0
-RSI_SHORT = 55.0
+RSI_LONG = 40.0
+RSI_SHORT = 60.0
 TREND_15M_MIN = 0.0001
 
 # --- Restriction Toggles (Naked Baseline) ---

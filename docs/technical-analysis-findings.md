@@ -17,10 +17,15 @@ The following filters have been hardened based on the empirical evidence above:
 
 1. **RSI Long Restriction**: **[ENGAGED]**
    - **Target**: Longs (BUYS) only.
-   - **Threshold**: RSI must be < 45.0.
-   - **Reasoning**: Winners showed significantly lower RSI (37.6) than losers (52.3). Restricting to < 45 eliminates "noise" entries during neutral RSI conditions.
+   - **Threshold**: RSI must be <= 40.0.
+   - **Reasoning**: Previous run showed winners at 32.4 vs losers at 34.1. Tightening to 40.0 further improves the quality of oversold entries.
 
-2. **MACD Momentum (Shorts)**: [PENDING]
+2. **RSI Short Restriction**: **[ENGAGED]**
+   - **Target**: Shorts (SELLS) only.
+   - **Threshold**: RSI must be >= 60.0.
+   - **Reasoning**: Post-run analysis showed losing shorts entering at RSI 42.6 (oversold), while winners were at 52.7. Enforcing >= 60 ensures we only short into overbought/neutral-high conditions.
+
+3. **MACD Momentum (Shorts)**: [PENDING]
    - Potential engagement: Require MACD Histogram > 1.0 for Shorts.
 
 3. **BTC Confluence**: [PENDING]
