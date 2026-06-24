@@ -137,7 +137,7 @@ class Simulator:
         data = msg.get("data", [])
         if not data: return
 
-        if channel == "books5":
+        if channel == "books25":
             d = data[0]
             self.books[instId].bids = [(float(p), float(q)) for p, q in d.get("bids", [])]
             self.books[instId].asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
@@ -263,7 +263,8 @@ class Simulator:
         # SLIPPAGE CONTROL
         slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
         if slippage > MAX_ENTRY_SLIPPAGE:
-            log.warning(f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
+            if LOG_REJECTIONS:
+                log.warning(f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
             return {"code": "2", "msg": "high slippage"}
 
         self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf)

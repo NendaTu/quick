@@ -103,7 +103,8 @@ class BitGetWSClient:
 
                     subscribe_msg = {"op": "subscribe", "args": []}
                     for sym in self.symbols:
-                        subscribe_msg["args"].append({"instType": "umc", "channel": "books5", "instId": sym})
+                        # Use books25 for deeper liquidity visibility and better slippage calculation
+                        subscribe_msg["args"].append({"instType": "umc", "channel": "books25", "instId": sym})
                         subscribe_msg["args"].append({"instType": "umc", "channel": "trade", "instId": sym})
 
                     await ws.send_json(subscribe_msg)

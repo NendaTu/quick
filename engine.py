@@ -144,7 +144,8 @@ class Engine:
 
                 # 2. Update Features and Train (Selective)
                 all_features = {}
-                for sym in ASSETS + [BTC_SYMBOL]:
+                # Ensure each unique symbol is processed only once
+                for sym in set(ASSETS + [BTC_SYMBOL]):
                     try:
                         book = self.books[sym]
                         if book.best_bid <= 0 or book.best_ask <= 0:

@@ -26,6 +26,12 @@ This document journals the variables that have been relaxed to establish a maxim
 | :--- | :--- | :--- | :--- |
 | **Tradability Volume** | Minimum volume required at the best bid/ask to consider an asset liquid enough. | Lowered from **10** to **1**. | Ensures that even during low-liquidity moments or for smaller assets, the bot will still attempt to place trades. |
 
+## Miscellaneous
+
+| Variable | Description |
+| :--- | :--- |
+| `LOG_REJECTIONS` | Boolean to enable/disable rejection notices (like High Slippage) in the console output. |
+
 ---
 
 *Note: These settings are intended for establishing a baseline and will result in high-frequency trading with potentially higher slippage and lower win rates. Use for data collection and initial simulation only.*
