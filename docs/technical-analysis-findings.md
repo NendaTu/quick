@@ -28,24 +28,30 @@ The following filters have been hardened based on the empirical evidence above:
 3. **MACD Momentum (Shorts)**: [PENDING]
    - Potential engagement: Require MACD Histogram > 1.0 for Shorts.
 
-3. **BTC Confluence**: [PENDING]
+4. **BTC Confluence**: [PENDING]
    - Potential engagement: Restrict trades if BTC 15m Trend < -0.001.
 
 ---
 
-# Technical Analysis Update - Post RSI-Long Engagement (33-minute run)
+# Technical Analysis Update - Symmetric RSI Engagement (Run 15: 171 Trades)
 
-## Observation of RSI Impact
+## Data Summary (Symmetric RSI Active)
 
 | Metric | Side | Winning Avg | Losing Avg | Win Rate |
 | :--- | :--- | :--- | :--- | :--- |
-| **RSI** | **BUY** | **32.4** | 34.1 | **33.3%** |
-| **RSI** | **SELL** | **52.7** | 42.6 | **13.0%** |
+| **RSI** | **BUY** | **-** | 27.6 | **0%** |
+| **RSI** | **SELL** | **-** | 95.8 | **0%** |
 
-### **Analysis of RSI Engagement**
-- **BUYS**: Engaging `RSI < 45` improved the Buy Win Rate and tightened the entry window. Winners are now averaging an even lower RSI (32.4), suggesting further tightening to `RSI < 35` could be beneficial.
-- **SELLS**: Currently unrestricted. The data shows losers are entering with a low average RSI (42.6), while winners are at **52.7**. This strongly implies that SELLS should be restricted to **RSI > 55** to avoid shorting into oversold conditions.
+### **Analysis of 100% Loss Rate**
+Run 15 executed **171 trades in 100 seconds** due to the `RESTRICT_SCORE=False` setting. This ultra-high frequency (1.7 trades/sec) revealed several critical baseline behaviors:
 
-## BTC Confluence Evidence (Shorts)
+1. **Fee Attrition**: With a round-trip fee of **0.12%** (0.06% Taker x 2) and a Stop Loss of **0.1%**, it is mathematically impossible to profit from SL hits. Even with a Take Profit of **0.15%**, the net profit after fees is only **0.03%**.
+2. **Infrastructure Validation**: The system handled the 1.7 trades/second load perfectly. Zero database locks and zero WebSocket dropped frames.
+3. **Indicator Accuracy**: Even at this extreme speed, RSI restrictions were 100% enforced (Buys averaged 27.6, Sells averaged 95.8).
+4. **Hedge Mode Noise**: Rapidly flipping between Long and Short in a sideways market (churn) is the primary driver of the drawdown.
 
-Winning shorts in this run were perfectly correlated with positive BTC 15m and 1H momentum (+0.0007), whereas losing shorts occurred during BTC drops (-0.0024 to -0.0057). This suggests that shorting altcoins is most effective when BTC is stable or slightly rising, likely catching "laggard" drops or mean reversions.
+### **Next Steps Recommendation**
+To transition from "Data Collection" to "Baseline Profitability":
+- **Engage RESTRICT_SCORE**: We must require positive indicator confluence to slow down trade frequency.
+- **Widen Barriers**: Increase TP/SL to at least 0.5% / 0.3% to overcome the fixed fee overhead (0.12%).
+- **BTC Confluence**: Data continues to suggest that ignoring BTC direction is a primary cause of loss bursts.
