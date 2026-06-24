@@ -25,6 +25,9 @@ class Engine:
         self.losing_trades = 0
         self.cumulative_pnl = 0.0
 
+        # Performance tracking
+        self.asset_stats: Dict[str, Dict[str, any]] = {}
+
         self._last_mid = {}
         self._last_features = {}
 
@@ -107,16 +110,28 @@ class Engine:
 
         self.total_trades += 1
         self.cumulative_pnl += round_trip_pnl
+
+        # Asset-specific stats
+        if symbol not in self.asset_stats:
+            self.asset_stats[symbol] = {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0}
+
+        self.asset_stats[symbol]["pnl"] += round_trip_pnl
+
         if round_trip_pnl > 0:
             self.winning_trades += 1
+            if side == "buy": self.asset_stats[symbol]["buy_wins"] += 1
+            else: self.asset_stats[symbol]["sell_wins"] += 1
         else:
             self.losing_trades += 1
+            if side == "buy": self.asset_stats[symbol]["buy_losses"] += 1
+            else: self.asset_stats[symbol]["sell_losses"] += 1
 
     def _print_final_stats(self):
         elapsed = time.time() - self.start_time if self.start_time else 0
         hours, rem = divmod(elapsed, 3600)
         minutes, seconds = divmod(rem, 60)
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
+
         log.info(f"===== FINAL STATS =====")
         log.info(f"Session duration: {int(hours)}h {int(minutes)}m {int(seconds)}s")
         log.info(f"Total trades: {self.total_trades}")
@@ -125,6 +140,20 @@ class Engine:
         log.info(f"Cumulative PnL: {self.cumulative_pnl:.2f} USDT")
         log.info(f"Final equity: {self.equity:.2f} USDT")
         log.info(f"Peak equity: {self.peak_equity:.2f} USDT")
+
+        if self.asset_stats:
+            log.info(f"--- Asset Performance ---")
+            # Sort by PnL
+            sorted_assets = sorted(self.asset_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+            for sym, stats in sorted_assets:
+                b_total = stats['buy_wins'] + stats['buy_losses']
+                s_total = stats['sell_wins'] + stats['sell_losses']
+                b_winrate = (stats['buy_wins'] / b_total * 100) if b_total > 0 else 0
+                s_winrate = (stats['sell_wins'] / s_total * 100) if s_total > 0 else 0
+
+                log.info(f"{sym:10} | PnL: {stats['pnl']:7.2f} | "
+                         f"Long: {stats['buy_wins']}/{b_total} ({b_winrate:5.1f}%) | "
+                         f"Short: {stats['sell_wins']}/{s_total} ({s_winrate:5.1f}%)")
 
     def _asset_is_tradable(self, symbol: str, side: str) -> bool:
         # Check volume

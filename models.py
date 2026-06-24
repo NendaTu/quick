@@ -155,9 +155,13 @@ class LearningModel:
 
         # RSI Restrictions
         if RESTRICT_RSI:
-            if direction == "buy" and rsi > RSI_LONG:
-                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_LONG}")
-                return None
+            if direction == "buy":
+                if rsi > RSI_LONG:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_LONG}")
+                    return None
+                if rsi < RSI_BUY_FLOOR:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_BUY_FLOOR} (Floor)")
+                    return None
             if direction == "sell" and rsi < RSI_SHORT:
                 log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_SHORT}")
                 return None
@@ -176,8 +180,26 @@ class LearningModel:
                     return None
 
         entry = book.best_ask if direction == "buy" else book.best_bid
-        tp_move = TP_MOVE
-        sl_move = SL_MOVE
+        max_lev = LEVERAGE_LIMITS.get(symbol, 125)
+
+        # Dynamic TP/SL calculation
+        if USE_DYNAMIC_TARGETS:
+            # TP = Net ROE target + fees (entry + exit)
+            entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+            exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+
+            # Use max_lev to determine required price move for TARGET_NET_ROE
+            tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate)
+
+            # Safety: ensure tp_move is at least a minimum threshold or the config baseline
+            tp_move = max(tp_move, TP_MOVE)
+        else:
+            tp_move = TP_MOVE
+
+        if USE_ATR_SL and features.get("atr"):
+            sl_move = (features["atr"] * ATR_SL_MULT) / entry
+        else:
+            sl_move = SL_MOVE
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)

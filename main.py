@@ -34,7 +34,12 @@ async def main():
         db_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger().addHandler(db_handler)
 
-    await engine.start()
+    try:
+        await engine.start()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        engine._print_final_stats()
 
 if __name__ == "__main__":
     log.info(f"Starting bot in {MODE.upper()} mode")
