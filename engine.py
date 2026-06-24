@@ -11,6 +11,7 @@ class Engine:
     def __init__(self):
         self.books: Dict[str, OrderBook] = {sym: OrderBook(sym) for sym in ASSETS + [BTC_SYMBOL]}
         self.leverage_limits = {}
+        self.pending_entries: Set[str] = set() # key is 'SYMBOL_buy' or 'SYMBOL_sell'
         self.equity = INITIAL_EQUITY
         self.starting_equity = INITIAL_EQUITY
         self.peak_equity = INITIAL_EQUITY
@@ -88,11 +89,21 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
+    def _report_entry(self, symbol: str, side: str, qty: float, entry: float):
+        pos_key = f"{symbol}_{side}"
+        self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry}
+        if pos_key in self.pending_entries:
+            self.pending_entries.remove(pos_key)
+
     def _report_exit(self, symbol: str, side: str, round_trip_pnl: float):
         # Local registration cleanup
         pos_key = f"{symbol}_{side}"
         if pos_key in self.open_positions:
             del self.open_positions[pos_key]
+
+        # Also ensure it's cleared from pending if it was an entry failure
+        if pos_key in self.pending_entries:
+            self.pending_entries.remove(pos_key)
 
         self.total_trades += 1
         self.cumulative_pnl += round_trip_pnl
@@ -122,9 +133,9 @@ class Engine:
         if RESTRICT_LIQUIDITY and (bid_vol < 1 or ask_vol < 1):
             return False
 
-        # Check if this specific side is already open
+        # Check if this specific side is already open or pending
         pos_key = f"{symbol}_{side}"
-        if pos_key in self.open_positions:
+        if pos_key in self.open_positions or pos_key in self.pending_entries:
             return False
 
         return True
@@ -165,8 +176,10 @@ class Engine:
                         # Optimization: only get expensive features if we might trade
                         # or for BTC (global confluence)
                         if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
-                             # Skip if BOTH sides are already open (nothing left to trade)
-                             if f"{sym}_buy" in self.open_positions and f"{sym}_sell" in self.open_positions:
+                             # Skip if BOTH sides are already open or pending
+                             is_full = (f"{sym}_buy" in self.open_positions or f"{sym}_buy" in self.pending_entries) and \
+                                       (f"{sym}_sell" in self.open_positions or f"{sym}_sell" in self.pending_entries)
+                             if is_full:
                                  continue
 
                              feat = self.exchange.get_features(sym)
@@ -211,7 +224,10 @@ class Engine:
 
                         # Immediate local registration to prevent race condition
                         pos_key = f"{sym}_{side}"
-                        self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry}
+                        if ENTRY_ORDER_TYPE == "market":
+                            self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry}
+                        else:
+                            self.pending_entries.add(pos_key)
 
                         signal_msg = (f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
                                       f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
@@ -227,13 +243,13 @@ class Engine:
 
                         resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:
-                            # Show signal with fill if LOG_SIGNALS is False
+                            # Show signal with fill/place if LOG_SIGNALS is False
                             log.info(f"Entry Triggered | {signal_msg}")
 
                         if resp.get("code") != "00000":
                             # Reject local registration if exchange fails
-                            if pos_key in self.open_positions:
-                                del self.open_positions[pos_key]
+                            if pos_key in self.open_positions: del self.open_positions[pos_key]
+                            if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
 
                 await asyncio.sleep(0.1)
             except Exception as e:

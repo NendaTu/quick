@@ -17,6 +17,12 @@ MAX_CONCURRENT_POSITIONS = 50
 DRAWDOWN_LIMIT = 0.5             # stop if equity <= 50% of peak
 TOTAL_ROI_LIMIT = 1.0            # stop if ROI >= +100%
 
+# --- Execution ---
+ENTRY_ORDER_TYPE = "limit"       # "market" or "limit"
+TP_ORDER_TYPE = "limit"          # "market" or "limit"
+SL_ORDER_TYPE = "market"         # "market" or "limit"
+LIMIT_CHASE_TIMEOUT = 10.0       # seconds
+
 # --- Fees ---
 MAKER_FEE = 0.0002               # 0.02%
 TAKER_FEE = 0.0006               # 0.06%

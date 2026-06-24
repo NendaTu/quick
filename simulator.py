@@ -235,16 +235,27 @@ class Simulator:
 
     async def _process_orders(self):
         fills = []
-        if self.pending_orders:
-            # log.debug(f"Checking {len(self.pending_orders)} pending orders")
-            pass
+        now = time.time()
         for o in list(self.pending_orders):
             sym = o["symbol"]
             side = o["pos_side"]
             price = self.last_price.get(sym)
             if not price: continue
 
-            if o["type"] == "stop":
+            if o["type"] == "entry_limit":
+                # Check if price reached our limit
+                # For a BUY limit, price must be <= limit
+                # For a SELL limit, price must be >= limit
+                if side == "buy" and price <= o["price"]: fills.append((o, "entry"))
+                elif side == "sell" and price >= o["price"]: fills.append((o, "entry"))
+
+                # Chase/Timeout logic
+                elif now - o.get("ts", now) > LIMIT_CHASE_TIMEOUT:
+                    # In a real bot, we'd reposition. For simulation, let's just "take" it
+                    # to keep the data flowing, or expire it. Let's convert to market-ish fill.
+                    fills.append((o, "entry_timeout"))
+
+            elif o["type"] == "stop":
                 if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
                 elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
             elif o["type"] == "tp":
@@ -253,13 +264,31 @@ class Simulator:
 
         for o, et in fills:
             # Simulate realistic network latency and engine processing time
-            # Using a log-normal distribution for more authentic jitter
-            latency = random.lognormvariate(math.log(0.035), 0.4) # mean ~35ms, with tail
+            latency = random.lognormvariate(math.log(0.035), 0.4)
             await asyncio.sleep(max(0.01, min(0.3, latency)))
 
-            exit_action = "sell" if o["pos_side"] == "buy" else "buy"
-            fill_price = self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
-            self._execute_exit(o, fill_price, et)
+            if et in ["entry", "entry_timeout"]:
+                # Maker fill if et == "entry", else Taker
+                order_type = "limit" if et == "entry" else "market"
+                # If timeout, we might get a worse price. For simplicity, use current market.
+                fill_price = o["price"] if et == "entry" else self.last_price.get(o["symbol"])
+
+                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type)
+
+                # Once entry is filled, add TP/SL
+                sid = self.order_id_counter; self.order_id_counter += 1
+                tid = self.order_id_counter; self.order_id_counter += 1
+                self.pending_orders.extend([
+                    {"id": sid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "stop", "triggerPrice": o["stop_price"], "qty": o["qty"]},
+                    {"id": tid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp_price"], "qty": o["qty"]},
+                ])
+            else:
+                order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
+                exit_action = "sell" if o["pos_side"] == "buy" else "buy"
+                # If it's a TP limit, we get exactly our price
+                fill_price = o["price"] if et == "tp" and order_type == "limit" else self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
+                self._execute_exit(o, fill_price, et, order_type)
+
             if o in self.pending_orders:
                 self.pending_orders.remove(o)
 
@@ -302,31 +331,44 @@ class Simulator:
         if available_balance < required_margin:
             return {"code": "1", "msg": "insufficient balance"}
 
-        fill_price = self._calculate_fill_price(symbol, side, qty)
+        if ENTRY_ORDER_TYPE == "market":
+            fill_price = self._calculate_fill_price(symbol, side, qty)
 
-        # SLIPPAGE CONTROL
-        slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
-        if RESTRICT_SLIPPAGE and slippage > MAX_ENTRY_SLIPPAGE:
-            rej_msg = f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%"
-            if LOG_REJECTIONS:
-                log.warning(rej_msg)
-            else:
-                log.debug(rej_msg) # Log as debug so it goes to DB but not console
-            return {"code": "2", "msg": "high slippage"}
+            # SLIPPAGE CONTROL
+            slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
+            if RESTRICT_SLIPPAGE and slippage > MAX_ENTRY_SLIPPAGE:
+                rej_msg = f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%"
+                if LOG_REJECTIONS:
+                    log.warning(rej_msg)
+                else:
+                    log.debug(rej_msg) # Log as debug so it goes to DB but not console
+                return {"code": "2", "msg": "high slippage"}
 
-        self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt)
+            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market")
 
-        sid = self.order_id_counter; self.order_id_counter += 1
-        tid = self.order_id_counter; self.order_id_counter += 1
+            sid = self.order_id_counter; self.order_id_counter += 1
+            tid = self.order_id_counter; self.order_id_counter += 1
 
-        self.pending_orders.extend([
-            {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty},
-            {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty},
-        ])
-        return {"code": "00000", "data": {"orderId": str(sid)}}
+            self.pending_orders.extend([
+                {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty},
+                {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty},
+            ])
+            return {"code": "00000", "data": {"orderId": str(sid)}}
+        else:
+            # Limit Entry
+            eid = self.order_id_counter; self.order_id_counter += 1
+            self.pending_orders.append({
+                "id": eid, "symbol": symbol, "pos_side": side, "type": "entry_limit",
+                "price": entry_price, "qty": qty, "ts": time.time(),
+                "stop_price": stop_price, "tp_price": tp_price,
+                "btc_conf": btc_conf, "drt": drt
+            })
+            log.info(f"PLACED LIMIT ENTRY {symbol} {side.upper()} {qty:.3f} @ {entry_price:.8f}")
+            return {"code": "00000", "data": {"orderId": str(eid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5):
-        fee = qty * fill_price * TAKER_FEE
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market"):
+        fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
+        fee = qty * fill_price * fee_rate
         self.equity -= fee
 
         max_lev = self.leverage_limits.get(symbol, 20)
@@ -336,9 +378,12 @@ class Simulator:
         self.positions[(symbol, side)] = {
             "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt
         }
-        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
+        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
-    def _execute_exit(self, order, fill_price, exit_type):
+        if self.engine:
+            self.engine._report_entry(symbol, side, qty, fill_price)
+
+    def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]
         side = order["pos_side"]
         pos = self.positions.get((sym, side))
@@ -354,13 +399,14 @@ class Simulator:
         else:
             pnl = (pos["entry_price"] - fill_price) * qty
 
-        fee = qty * fill_price * TAKER_FEE
+        fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
+        fee = qty * fill_price * fee_rate
         round_trip_pnl = pnl - fee - pos["entry_fee"]
         self.equity += (pnl - fee)
         self.used_margin -= pos.get("margin", 0)
         self.used_margin = max(0, self.used_margin)
 
-        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
+        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
                  f"[{pos['btc_conf']}] drt_entry={pos.get('entry_drt',0.5):.4f} drt_exit={exit_drt:.4f} | "
                  f"equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
