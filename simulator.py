@@ -215,6 +215,9 @@ class Simulator:
 
     async def _process_orders(self):
         fills = []
+        if self.pending_orders:
+            # log.debug(f"Checking {len(self.pending_orders)} pending orders")
+            pass
         for o in list(self.pending_orders):
             sym = o["symbol"]
             side = o["pos_side"]

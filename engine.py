@@ -1,5 +1,5 @@
 import asyncio, time, logging, math
-from typing import Dict
+from typing import Dict, Set
 from config import *
 from orderbook import OrderBook
 from simulator import Simulator
@@ -15,6 +15,7 @@ class Engine:
         self.starting_equity = INITIAL_EQUITY
         self.peak_equity = INITIAL_EQUITY
 
+        # open_positions key is 'SYMBOL_buy' or 'SYMBOL_sell'
         self.open_positions: Dict[str, dict] = {}
         self.enabled_assets = set(ASSETS)
 
@@ -44,7 +45,7 @@ class Engine:
         if MODE == "paper":
             await self.exchange.warm_up()
             self.leverage_limits = self.exchange.get_leverage_limits()
-            log.info(f"Leverage limits: {self.leverage_limits}")
+            log.info(f"Leverage limits: {len(self.leverage_limits)} assets loaded.")
         else:
             log.error("Only paper mode is implemented.")
             return
@@ -60,7 +61,7 @@ class Engine:
 
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
-            # Update local equity from exchange
+            # Sync equity
             self.equity = self.exchange.equity
 
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
@@ -110,11 +111,13 @@ class Engine:
         log.info(f"Peak equity: {self.peak_equity:.2f} USDT")
 
     def _asset_is_tradable(self, symbol: str, side: str) -> bool:
+        # Check volume
         book = self.books[symbol]
         bid_vol, ask_vol = book.top_bid_ask_qty()
         if bid_vol < 1 or ask_vol < 1:
             return False
 
+        # Check if this specific side is already open
         if f"{symbol}_{side}" in self.open_positions:
             return False
 
@@ -123,59 +126,76 @@ class Engine:
     async def _trading_loop(self):
         await asyncio.sleep(5)
         last_summary_time = time.time()
+        log.info("Trading loop started.")
 
         while not self.stop_event.is_set():
             try:
-                # 1. Periodic Summary (Moved to top)
+                # 1. Periodic Summary
                 now = time.time()
                 if now - last_summary_time >= 30.0:
                     self._log_periodic_summary()
                     last_summary_time = now
 
-                # 2. Update Features
+                # 2. Update Features and Train (Selective)
                 for sym in ASSETS + [BTC_SYMBOL]:
                     book = self.books[sym]
                     if book.best_bid <= 0 or book.best_ask <= 0:
                         continue
+
                     current_mid = (book.best_bid + book.best_ask) / 2
                     old_mid = self._last_mid.get(sym)
-                    if old_mid is not None:
+
+                    if old_mid is not None and current_mid != old_mid:
                         direction_up = current_mid > old_mid
                         prev_feat = self._last_features.get(sym)
                         if prev_feat is not None:
                             self.model.train_on_tick(sym, prev_feat, direction_up)
-                            self.model.add_tick(sym, prev_feat, direction_up)
-                    self._last_mid[sym] = current_mid
-                    self._last_features[sym] = self.exchange.get_features(sym)
+
+                        self._last_mid[sym] = current_mid
+                        # Optimization: only get expensive features if we might trade
+                        # or for BTC (global confluence)
+                        if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
+                             self._last_features[sym] = self.exchange.get_features(sym)
 
                 # 3. Check Signal and Trade
-                for sym in ASSETS:
-                    # Position limit check inside the loop
-                    if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
-                        break
+                if len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
+                    for sym in ASSETS:
+                        # Re-check limit inside loop to avoid burst over-trading
+                        if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
+                            break
 
-                    book = self.books[sym]
-                    signal = self.model.predict(sym, book, self.equity)
-                    if signal is None:
-                        continue
+                        book = self.books[sym]
+                        if book.best_bid <= 0: continue
 
-                    side = signal["side"]
-                    if not self._asset_is_tradable(sym, side):
-                        continue
+                        # Only predict if we don't have BOTH sides open
+                        if f"{sym}_buy" in self.open_positions and f"{sym}_sell" in self.open_positions:
+                            continue
 
-                    qty = signal["qty"]
-                    entry = signal["entry_price"]
-                    stop = signal["stop_price"]
-                    tp = signal["exit_price"]
-                    btc_conf = signal["btc_confluence"]
+                        signal = self.model.predict(sym, book, self.equity)
+                        if signal is None:
+                            continue
 
-                    log.info(f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
-                             f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
-                             f"[{btc_conf}] drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
-                             f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
-                             f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
+                        side = signal["side"]
+                        if not self._asset_is_tradable(sym, side):
+                            continue
 
-                    self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
+                        qty = signal["qty"]
+                        entry = signal["entry_price"]
+                        stop = signal["stop_price"]
+                        tp = signal["exit_price"]
+                        btc_conf = signal["btc_confluence"]
+
+                        # Immediate local registration to prevent race condition
+                        pos_key = f"{sym}_{side}"
+                        self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry}
+
+                        log.info(f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
+                                 f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
+                                 f"[{btc_conf}] drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
+                                 f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
+                                 f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
+
+                        self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
 
                 await asyncio.sleep(0.1)
             except Exception as e:

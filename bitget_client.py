@@ -112,9 +112,16 @@ class BitGetWSClient:
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             if msg.data == "pong": continue
-                            data = json.loads(msg.data)
-                            if "data" in data:
-                                await self.callback(data)
+                            try:
+                                data = json.loads(msg.data)
+                                if "data" in data:
+                                    await self.callback(data)
+                                elif data.get("event") == "subscribe":
+                                    log.info(f"Subscribed: {data.get('arg')}")
+                                elif data.get("action") == "snapshot":
+                                    await self.callback(data)
+                            except Exception as e:
+                                log.error(f"Error parsing WS message: {e}")
                         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                             break
 
