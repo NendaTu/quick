@@ -87,3 +87,28 @@ TREND_STRENGTH_MIN = 0.1         # DRT minimum
 TP_MOVE = 0.0015                 # 0.3% take‑profit
 SL_MOVE = 0.001                 # 0.3% stop‑loss
 MAX_ENTRY_SLIPPAGE = 0.001     # 0.05% max slippage for entry
+
+# --- Scoring Thresholds ---
+RSI_LONG = 45.0
+RSI_SHORT = 55.0
+TREND_15M_MIN = 0.0001
+
+# --- Restriction Toggles (Naked Baseline) ---
+RESTRICT_DRT = False
+RESTRICT_IMBALANCE = False
+RESTRICT_CONFIDENCE = False
+RESTRICT_DIRECTIONAL_SANITY = False
+RESTRICT_RSI = False
+RESTRICT_MACD = False
+RESTRICT_EMA = False
+RESTRICT_15M_TREND = False
+RESTRICT_SUPERTREND = False
+RESTRICT_ATR = False
+RESTRICT_VOL_PCT = False
+RESTRICT_SPREAD = False
+RESTRICT_BTC_CONFLUENCE = False
+RESTRICT_ASSET_CONFLUENCE = False
+RESTRICT_LIQUIDITY = False
+RESTRICT_SLIPPAGE = False
+RESTRICT_MIN_VAL = False
+RESTRICT_SCORE = False

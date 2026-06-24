@@ -65,12 +65,12 @@ class LearningModel:
         # 1. Trend Strength Filter (Symmetric)
         drt = features.get("drt", 0.5)
         trend_offset = abs(drt - 0.5)
-        if trend_offset < TREND_STRENGTH_MIN:
-            return None # Ignore weak/flat trends
+        if RESTRICT_DRT and trend_offset < TREND_STRENGTH_MIN:
+            return None
 
         imb = features.get("imbalance", 0)
         # 2. Imbalance filter
-        if abs(imb) < MIN_IMBALANCE:
+        if RESTRICT_IMBALANCE and abs(imb) < MIN_IMBALANCE:
             return None
 
         # --- SCORING WITH LEARNED WEIGHTS ---
@@ -82,21 +82,27 @@ class LearningModel:
         elif imb > MIN_IMBALANCE: imb_score = 1
         elif imb < -0.10: imb_score = -2
         elif imb < -MIN_IMBALANCE: imb_score = -1
-        score += imb_score * self.weights["imbalance"]
 
-        # RSI contribution (RELAXED)
+        if RESTRICT_IMBALANCE or not RESTRICT_SCORE:
+            score += imb_score * self.weights["imbalance"]
+
+        # RSI contribution
         rsi = features.get("rsi", 50)
         rsi_score = 0
-        if rsi < 45: rsi_score = 1
-        elif rsi > 55: rsi_score = -1
-        score += rsi_score * self.weights["rsi"]
+        if rsi < RSI_LONG: rsi_score = 1
+        elif rsi > RSI_SHORT: rsi_score = -1
+
+        if RESTRICT_RSI or not RESTRICT_SCORE:
+            score += rsi_score * self.weights["rsi"]
 
         # MACD contribution
         macd_hist = features.get("macd_hist", 0)
         macd_score = 0
         if macd_hist > 0: macd_score = 1
         elif macd_hist < 0: macd_score = -1
-        score += macd_score * self.weights["macd"]
+
+        if RESTRICT_MACD or not RESTRICT_SCORE:
+            score += macd_score * self.weights["macd"]
 
         # EMA contribution
         ema_short = features.get("ema_short", 0)
@@ -104,30 +110,41 @@ class LearningModel:
         ema_score = 0
         if ema_short > ema_long: ema_score = 1
         elif ema_short < ema_long: ema_score = -1
-        score += ema_score * self.weights["ema"]
 
-        # Trend/Confluence contribution (RELAXED)
+        if RESTRICT_EMA or not RESTRICT_SCORE:
+            score += ema_score * self.weights["ema"]
+
+        # Trend/Confluence contribution
         asset_15m = features.get("asset_15m", 0)
         trend_score = 0
-        if asset_15m > 0.0001: trend_score = 1
-        elif asset_15m < -0.0001: trend_score = -1
-        score += trend_score * self.weights["trend"]
+        if asset_15m > TREND_15M_MIN: trend_score = 1
+        elif asset_15m < -TREND_15M_MIN: trend_score = -1
 
-        # Check for trade signal (score >= 1)
-        if abs(score) < 1:
+        if RESTRICT_15M_TREND or not RESTRICT_SCORE:
+            score += trend_score * self.weights["trend"]
+
+        # Check for trade signal
+        if RESTRICT_SCORE and abs(score) < 1:
             return None
 
         # Confidence calculation
         confidence = min(1.0, (abs(score) + 1) / 10)
-        if confidence < MIN_CONFIDENCE:
+        if RESTRICT_CONFIDENCE and confidence < MIN_CONFIDENCE:
             return None
 
         # Direction check: ensure scoring matches the DRT trend
         # Buying is only allowed if DRT > 0.5, selling if DRT < 0.5
-        if score > 0 and drt < 0.5: return None
-        if score < 0 and drt > 0.5: return None
+        if RESTRICT_DIRECTIONAL_SANITY:
+            if score > 0 and drt < 0.5: return None
+            if score < 0 and drt > 0.5: return None
 
-        direction = "buy" if score > 0 else "sell"
+        # If everything is False, we still need a direction
+        # Priority: Score Direction -> Imbalance -> DRT
+        if score > 0: direction = "buy"
+        elif score < 0: direction = "sell"
+        elif imb > 0: direction = "buy"
+        elif imb < 0: direction = "sell"
+        else: direction = "buy" if drt >= 0.5 else "sell"
 
         entry = book.best_ask if direction == "buy" else book.best_bid
         tp_move = TP_MOVE

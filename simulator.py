@@ -289,10 +289,10 @@ class Simulator:
         price_place = int(spec.get('pricePlace', 2))
         return round(avg_price, price_place)
 
-    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf=""):
+    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5):
         spec = self.contract_specs.get(symbol, {})
         min_usdt = float(spec.get('minTradeUSDT', 5.0))
-        if qty * entry_price < min_usdt:
+        if RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
             return {"code": "3", "msg": f"order value below min {min_usdt}"}
 
         max_lev = self.leverage_limits.get(symbol, 20)
@@ -306,7 +306,7 @@ class Simulator:
 
         # SLIPPAGE CONTROL
         slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
-        if slippage > MAX_ENTRY_SLIPPAGE:
+        if RESTRICT_SLIPPAGE and slippage > MAX_ENTRY_SLIPPAGE:
             rej_msg = f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%"
             if LOG_REJECTIONS:
                 log.warning(rej_msg)
@@ -314,7 +314,7 @@ class Simulator:
                 log.debug(rej_msg) # Log as debug so it goes to DB but not console
             return {"code": "2", "msg": "high slippage"}
 
-        self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf)
+        self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt)
 
         sid = self.order_id_counter; self.order_id_counter += 1
         tid = self.order_id_counter; self.order_id_counter += 1
@@ -325,7 +325,7 @@ class Simulator:
         ])
         return {"code": "00000", "data": {"orderId": str(sid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf):
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5):
         fee = qty * fill_price * TAKER_FEE
         self.equity -= fee
 
@@ -334,15 +334,19 @@ class Simulator:
         self.used_margin += margin
 
         self.positions[(symbol, side)] = {
-            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin
+            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt
         }
-        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} [{btc_conf}] | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
+        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
     def _execute_exit(self, order, fill_price, exit_type):
         sym = order["symbol"]
         side = order["pos_side"]
         pos = self.positions.get((sym, side))
         if not pos: return
+
+        # Fetch real-time DRT for exit audit
+        exit_features = self.get_features(sym)
+        exit_drt = exit_features.get("drt", 0.5)
 
         qty = min(order["qty"], pos["qty"])
         if side == "buy":
@@ -356,7 +360,9 @@ class Simulator:
         self.used_margin -= pos.get("margin", 0)
         self.used_margin = max(0, self.used_margin)
 
-        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
+        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
+                 f"[{pos['btc_conf']}] drt_entry={pos.get('entry_drt',0.5):.4f} drt_exit={exit_drt:.4f} | "
+                 f"equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         del self.positions[(sym, side)]
         self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]

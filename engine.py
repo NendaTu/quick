@@ -119,7 +119,7 @@ class Engine:
         # Check volume
         book = self.books[symbol]
         bid_vol, ask_vol = book.top_bid_ask_qty()
-        if bid_vol < 1 or ask_vol < 1:
+        if RESTRICT_LIQUIDITY and (bid_vol < 1 or ask_vol < 1):
             return False
 
         # Check if this specific side is already open
@@ -199,6 +199,7 @@ class Engine:
                         stop = signal["stop_price"]
                         tp = signal["exit_price"]
                         btc_conf = signal["btc_confluence"]
+                        drt = signal.get("drt", 0.5)
 
                         # Immediate local registration to prevent race condition
                         pos_key = f"{sym}_{side}"
@@ -206,7 +207,7 @@ class Engine:
 
                         signal_msg = (f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
                                       f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
-                                      f"[{btc_conf}] drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
+                                      f"[{btc_conf}] drt={drt:.4f} rsi={signal.get('rsi',50):.1f} "
                                       f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
                                       f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
 
@@ -216,7 +217,7 @@ class Engine:
                         else:
                             log.debug(signal_msg)
 
-                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
+                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:
                             # Show signal with fill if LOG_SIGNALS is False
                             log.info(f"Entry Triggered | {signal_msg}")
