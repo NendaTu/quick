@@ -2,6 +2,18 @@ import asyncio, logging
 from engine import Engine
 from config import MODE, RISK_PER_TRADE
 
+class DBLogHandler(logging.Handler):
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.db.save_log(record.levelname, record.name, msg)
+        except Exception:
+            self.handleError(record)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(message)s",
@@ -11,6 +23,13 @@ log = logging.getLogger("scalper")
 
 async def main():
     engine = Engine()
+
+    # Add DB logging
+    if hasattr(engine.exchange, "db"):
+        db_handler = DBLogHandler(engine.exchange.db)
+        db_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(db_handler)
+
     await engine.start()
 
 if __name__ == "__main__":

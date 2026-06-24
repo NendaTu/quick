@@ -307,8 +307,11 @@ class Simulator:
         # SLIPPAGE CONTROL
         slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
         if slippage > MAX_ENTRY_SLIPPAGE:
+            rej_msg = f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%"
             if LOG_REJECTIONS:
-                log.warning(f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
+                log.warning(rej_msg)
+            else:
+                log.debug(rej_msg) # Log as debug so it goes to DB but not console
             return {"code": "2", "msg": "high slippage"}
 
         self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf)

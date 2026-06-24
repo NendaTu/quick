@@ -1,7 +1,6 @@
 import sqlite3
 import time
 import logging
-import asyncio
 import threading
 import queue
 
@@ -42,8 +41,30 @@ class Database:
                     PRIMARY KEY (symbol, timeframe, timestamp)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    start_time REAL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS logs (
+                    session_id INTEGER,
+                    timestamp REAL,
+                    level TEXT,
+                    logger TEXT,
+                    message TEXT,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id)
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time ON ticks (symbol, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time ON candles (symbol, timeframe, timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session_id)")
+
+            # Create a new session
+            cursor = conn.execute("INSERT INTO sessions (start_time) VALUES (?)", (time.time(),))
+            self.session_id = cursor.lastrowid
+            conn.commit()
 
     def _write_worker(self):
         conn = sqlite3.connect(self.db_path)
@@ -75,6 +96,11 @@ class Database:
                             INSERT OR REPLACE INTO candles (symbol, timeframe, timestamp, open, high, low, close, volume)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, data)
+                    elif type == "log":
+                        cursor.execute(
+                            "INSERT INTO logs (session_id, timestamp, level, logger, message) VALUES (?, ?, ?, ?, ?)",
+                            data
+                        )
                 conn.commit()
                 for _ in range(len(items)):
                     self.write_queue.task_done()
@@ -88,6 +114,9 @@ class Database:
 
     def save_candle(self, symbol, timeframe, timestamp, open, high, low, close, volume):
         self.write_queue.put(("candle", (symbol, timeframe, timestamp, open, high, low, close, volume)))
+
+    def save_log(self, level, logger_name, message):
+        self.write_queue.put(("log", (self.session_id, time.time(), level, logger_name, message)))
 
     def get_recent_ticks(self, symbol, limit=1000):
         with sqlite3.connect(self.db_path) as conn:
@@ -114,6 +143,19 @@ class Database:
             res_ticks = conn.execute("DELETE FROM ticks WHERE timestamp < ?", (now - tick_retention_seconds,))
             res_candles = conn.execute("DELETE FROM candles WHERE timestamp < ?", (now - candle_retention_days * 86400,))
             log.info(f"Purged {res_ticks.rowcount} old ticks and {res_candles.rowcount} old candles.")
+            self.purge_old_sessions()
+
+    def purge_old_sessions(self, keep_sessions=3):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT id FROM sessions ORDER BY start_time DESC LIMIT ?", (keep_sessions,))
+            recent_ids = [row[0] for row in cursor.fetchall()]
+            if not recent_ids: return
+
+            placeholders = ",".join("?" * len(recent_ids))
+            conn.execute(f"DELETE FROM logs WHERE session_id NOT IN ({placeholders})", recent_ids)
+            conn.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", recent_ids)
+            conn.commit()
+            log.info(f"Purged old sessions. Kept IDs: {recent_ids}")
 
     def stop(self):
         self.stop_event.set()

@@ -204,13 +204,23 @@ class Engine:
                         pos_key = f"{sym}_{side}"
                         self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry}
 
-                        log.info(f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
-                                 f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
-                                 f"[{btc_conf}] drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
-                                 f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
-                                 f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
+                        signal_msg = (f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
+                                      f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
+                                      f"[{btc_conf}] drt={signal.get('drt',0):.3f} rsi={signal.get('rsi',50):.1f} "
+                                      f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
+                                      f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
+
+                        # Always log for DB, but conditionally for console
+                        if LOG_SIGNALS:
+                            log.info(signal_msg)
+                        else:
+                            log.debug(signal_msg)
 
                         resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
+                        if resp.get("code") == "00000" and not LOG_SIGNALS:
+                            # Show signal with fill if LOG_SIGNALS is False
+                            log.info(f"Entry Triggered | {signal_msg}")
+
                         if resp.get("code") != "00000":
                             # Reject local registration if exchange fails
                             if pos_key in self.open_positions:
