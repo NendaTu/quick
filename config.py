@@ -15,7 +15,9 @@ LOG_REJECTIONS = False            # Toggle rejection logs in console
 LOG_SIGNALS = False               # Toggle signal logs in console
 MAX_CONCURRENT_POSITIONS = 50
 DRAWDOWN_LIMIT = 0.5             # stop if equity <= 50% of peak
-TOTAL_ROI_LIMIT = 1.0            # stop if ROI >= +100%
+TOTAL_ROI_LIMIT = 0.1            # stop if ROI >= +10% (+100 PnL)
+MAX_TRADES_LIMIT = 500           # stop after 500 trades
+MAX_DURATION = 14400             # stop after 4 hours (seconds)
 
 # --- Execution ---
 ENTRY_ORDER_TYPE = "limit"       # "market" or "limit"

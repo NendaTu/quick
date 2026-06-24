@@ -68,14 +68,28 @@ class Engine:
             # Sync equity
             self.equity = self.exchange.equity
 
+            # 1. Drawdown Limit
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
                 log.critical(f"DRAWDOWN LIMIT HIT: equity={self.equity:.2f}, peak={self.peak_equity:.2f}")
                 self.stop_event.set()
 
+            # 2. ROI Limit (+100 PnL)
             roi = (self.equity / self.starting_equity) - 1
             if roi >= TOTAL_ROI_LIMIT:
                 log.critical(f"ROI TARGET REACHED: equity={self.equity:.2f}, ROI={roi*100:.1f}%")
                 self.stop_event.set()
+
+            # 3. Trade Count Limit
+            if self.total_trades >= MAX_TRADES_LIMIT:
+                log.critical(f"TRADE LIMIT REACHED: {self.total_trades} trades")
+                self.stop_event.set()
+
+            # 4. Duration Limit
+            if self.start_time:
+                elapsed = time.time() - self.start_time
+                if elapsed >= MAX_DURATION:
+                    log.critical(f"DURATION LIMIT REACHED: {elapsed:.0f}s")
+                    self.stop_event.set()
 
             if self.equity > self.peak_equity:
                 self.peak_equity = self.equity
