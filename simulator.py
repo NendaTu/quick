@@ -200,11 +200,6 @@ class Simulator:
             await self._process_orders()
             engine.equity = self.equity
 
-            engine.open_positions = {
-                f"{sym}_{side}": {"side": p["side"], "qty": p["qty"], "entry": p["entry_price"]}
-                for (sym, side), p in self.positions.items()
-            }
-
             # Heartbeat log
             now = time.time()
             if now - last_heartbeat > 60:
@@ -264,6 +259,13 @@ class Simulator:
         if self.equity < required_margin: return {"code": "1", "msg": "insufficient balance"}
 
         fill_price = self._calculate_fill_price(symbol, side, qty)
+
+        # SLIPPAGE CONTROL
+        slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
+        if slippage > MAX_ENTRY_SLIPPAGE:
+            log.warning(f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
+            return {"code": "2", "msg": "high slippage"}
+
         self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf)
 
         sid = self.order_id_counter; self.order_id_counter += 1
@@ -304,4 +306,4 @@ class Simulator:
         del self.positions[(sym, side)]
         self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
-        if self.engine: self.engine._update_stats(round_trip_pnl)
+        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl)

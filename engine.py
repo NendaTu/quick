@@ -88,7 +88,12 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
-    def _update_stats(self, round_trip_pnl: float):
+    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float):
+        # Local registration cleanup
+        pos_key = f"{symbol}_{side}"
+        if pos_key in self.open_positions:
+            del self.open_positions[pos_key]
+
         self.total_trades += 1
         self.cumulative_pnl += round_trip_pnl
         if round_trip_pnl > 0:
@@ -118,7 +123,8 @@ class Engine:
             return False
 
         # Check if this specific side is already open
-        if f"{symbol}_{side}" in self.open_positions:
+        pos_key = f"{symbol}_{side}"
+        if pos_key in self.open_positions:
             return False
 
         return True
@@ -137,25 +143,32 @@ class Engine:
                     last_summary_time = now
 
                 # 2. Update Features and Train (Selective)
+                all_features = {}
                 for sym in ASSETS + [BTC_SYMBOL]:
-                    book = self.books[sym]
-                    if book.best_bid <= 0 or book.best_ask <= 0:
-                        continue
+                    try:
+                        book = self.books[sym]
+                        if book.best_bid <= 0 or book.best_ask <= 0:
+                            continue
 
-                    current_mid = (book.best_bid + book.best_ask) / 2
-                    old_mid = self._last_mid.get(sym)
+                        current_mid = (book.best_bid + book.best_ask) / 2
+                        old_mid = self._last_mid.get(sym)
 
-                    if old_mid is not None and current_mid != old_mid:
-                        direction_up = current_mid > old_mid
-                        prev_feat = self._last_features.get(sym)
-                        if prev_feat is not None:
-                            self.model.train_on_tick(sym, prev_feat, direction_up)
+                        if old_mid is not None and current_mid != old_mid:
+                            direction_up = current_mid > old_mid
+                            prev_feat = self._last_features.get(sym)
+                            if prev_feat is not None:
+                                self.model.train_on_tick(sym, prev_feat, direction_up)
 
                         self._last_mid[sym] = current_mid
+
                         # Optimization: only get expensive features if we might trade
                         # or for BTC (global confluence)
                         if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
-                             self._last_features[sym] = self.exchange.get_features(sym)
+                             feat = self.exchange.get_features(sym)
+                             self._last_features[sym] = feat
+                             all_features[sym] = feat
+                    except Exception as e:
+                        log.error(f"Feature calculation error for {sym}: {e}")
 
                 # 3. Check Signal and Trade
                 if len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
@@ -195,7 +208,11 @@ class Engine:
                                  f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
                                  f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
 
-                        self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
+                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf)
+                        if resp.get("code") != "00000":
+                            # Reject local registration if exchange fails
+                            if pos_key in self.open_positions:
+                                del self.open_positions[pos_key]
 
                 await asyncio.sleep(0.1)
             except Exception as e:
