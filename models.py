@@ -66,11 +66,13 @@ class LearningModel:
         drt = features.get("drt", 0.5)
         trend_offset = abs(drt - 0.5)
         if RESTRICT_DRT and trend_offset < TREND_STRENGTH_MIN:
+            log.debug(f"REJECT {symbol}: Trend strength {trend_offset:.4f} < {TREND_STRENGTH_MIN}")
             return None
 
         imb = features.get("imbalance", 0)
         # 2. Imbalance filter
         if RESTRICT_IMBALANCE and abs(imb) < MIN_IMBALANCE:
+            log.debug(f"REJECT {symbol}: Imbalance {imb:.4f} < {MIN_IMBALANCE}")
             return None
 
         # --- SCORING WITH LEARNED WEIGHTS ---
@@ -125,18 +127,23 @@ class LearningModel:
 
         # Check for trade signal
         if RESTRICT_SCORE and abs(score) < 1:
+            log.debug(f"REJECT {symbol}: Score {score:.1f} < 1")
             return None
 
         # Confidence calculation
         confidence = min(1.0, (abs(score) + 1) / 10)
         if RESTRICT_CONFIDENCE and confidence < MIN_CONFIDENCE:
+            log.debug(f"REJECT {symbol}: Confidence {confidence:.2f} < {MIN_CONFIDENCE}")
             return None
 
         # Direction check: ensure scoring matches the DRT trend
-        # Buying is only allowed if DRT > 0.5, selling if DRT < 0.5
         if RESTRICT_DIRECTIONAL_SANITY:
-            if score > 0 and drt < 0.5: return None
-            if score < 0 and drt > 0.5: return None
+            if score > 0 and drt < 0.5:
+                log.debug(f"REJECT {symbol}: Long score with bearish DRT {drt:.4f}")
+                return None
+            if score < 0 and drt > 0.5:
+                log.debug(f"REJECT {symbol}: Short score with bullish DRT {drt:.4f}")
+                return None
 
         # If everything is False, we still need a direction
         # Priority: Score Direction -> Imbalance -> DRT
@@ -149,8 +156,10 @@ class LearningModel:
         # RSI Restrictions
         if RESTRICT_RSI:
             if direction == "buy" and rsi > RSI_LONG:
+                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_LONG}")
                 return None
             if direction == "sell" and rsi < RSI_SHORT:
+                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_SHORT}")
                 return None
 
         # BTC Confluence Restrictions
@@ -159,9 +168,11 @@ class LearningModel:
             btc_1h = features.get("btc_1h", 0)
             if direction == "buy":
                 if btc_15m < BTC_CONF_15M_MIN or btc_1h < BTC_CONF_1H_MIN:
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] < {BTC_CONF_15M_MIN}")
                     return None
             else: # sell
                 if btc_15m > -BTC_CONF_15M_MIN or btc_1h > -BTC_CONF_1H_MIN:
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN}")
                     return None
 
         entry = book.best_ask if direction == "buy" else book.best_bid
