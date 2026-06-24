@@ -89,9 +89,9 @@ TF_TICKS = {
 MIN_CONFIDENCE = 0.66             # minimum probability to trade
 MIN_IMBALANCE = 0.033             # only trade if |imbalance| > this
 TREND_STRENGTH_MIN = 0.1         # DRT minimum
-# Win/Loss barriers (asymmetric 1.6:1)
-TP_MOVE = 0.005                 # 0.5% take‑profit
-SL_MOVE = 0.003                 # 0.3% stop‑loss
+# Win/Loss barriers (symmetric 1:1)
+TP_MOVE = 0.0015                 # 0.3% take‑profit
+SL_MOVE = 0.001                 # 0.3% stop‑loss
 MAX_ENTRY_SLIPPAGE = 0.001     # 0.05% max slippage for entry
 
 # --- Scoring Thresholds ---
@@ -112,9 +112,13 @@ RESTRICT_SUPERTREND = False
 RESTRICT_ATR = False
 RESTRICT_VOL_PCT = False
 RESTRICT_SPREAD = False
-RESTRICT_BTC_CONFLUENCE = False
+RESTRICT_BTC_CONFLUENCE = True
 RESTRICT_ASSET_CONFLUENCE = False
 RESTRICT_LIQUIDITY = False
 RESTRICT_SLIPPAGE = False
 RESTRICT_MIN_VAL = False
-RESTRICT_SCORE = False
+RESTRICT_SCORE = True
+
+# --- BTC Confluence Thresholds ---
+BTC_CONF_15M_MIN = 0.001
+BTC_CONF_1H_MIN = 0.001

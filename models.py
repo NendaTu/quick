@@ -153,6 +153,17 @@ class LearningModel:
             if direction == "sell" and rsi < RSI_SHORT:
                 return None
 
+        # BTC Confluence Restrictions
+        if RESTRICT_BTC_CONFLUENCE:
+            btc_15m = features.get("btc_15m", 0)
+            btc_1h = features.get("btc_1h", 0)
+            if direction == "buy":
+                if btc_15m < BTC_CONF_15M_MIN or btc_1h < BTC_CONF_1H_MIN:
+                    return None
+            else: # sell
+                if btc_15m > -BTC_CONF_15M_MIN or btc_1h > -BTC_CONF_1H_MIN:
+                    return None
+
         entry = book.best_ask if direction == "buy" else book.best_bid
         tp_move = TP_MOVE
         sl_move = SL_MOVE
