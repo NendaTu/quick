@@ -56,11 +56,6 @@ LEVERAGE_LIMITS = {
     "DOTUSDT": 75.0, "ICPUSDT": 50.0, "ONDOUSDT": 50.0, "BGBUSDT": 50.0, "PIUSDT": 50.0
 }
 
-# --- Simulation parameters ---
-SIM_SIGMA = 0.0002               # tick volatility (log‑return)
-SIM_SIGNAL_STRENGTH = 0.0002    # how much imbalance moves price
-SIM_IMBALANCE_NOISE = 0.02       # random walk of imbalance
-
 # --- Indicator windows (number of ticks, each tick = ~0.2s) ---
 INDICATOR_PRICE_HISTORY = 500    # max ticks to keep
 RSI_PERIOD = 14

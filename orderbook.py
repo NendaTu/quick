@@ -2,7 +2,7 @@ import math, random
 from typing import List, Tuple
 
 class SimulatedOrderBook:
-    """Random‑walk order book used by the Simulator."""
+    """Order book placeholder used by the Simulator, updated via WebSocket."""
     def __init__(self, symbol: str, initial_price: float, spread_pct: float = 0.0006):
         self.symbol = symbol
         self.mid_price = initial_price
@@ -12,6 +12,7 @@ class SimulatedOrderBook:
         self._regenerate()
 
     def _regenerate(self):
+        """Initial dummy generation until real data arrives."""
         half = self.spread_pct / 2
         self.bids = [
             (self.mid_price * (1 - half - i * 0.0001), random.uniform(500, 2000))
@@ -21,15 +22,6 @@ class SimulatedOrderBook:
             (self.mid_price * (1 + half + i * 0.0001), random.uniform(500, 2000))
             for i in range(3)
         ]
-
-    def random_step(self, factor: float = None):
-        """Advance price by a geometric random factor."""
-        if factor is None:
-            sigma = 0.0002
-            factor = math.exp(random.gauss(0, sigma))
-        self.mid_price *= factor
-        self.spread_pct = max(0.0002, self.spread_pct + random.gauss(0, 0.00001))
-        self._regenerate()
 
     @property
     def best_bid(self): return self.bids[0][0] if self.bids else 0.0
