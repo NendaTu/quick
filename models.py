@@ -146,6 +146,11 @@ class LearningModel:
         elif imb < 0: direction = "sell"
         else: direction = "buy" if drt >= 0.5 else "sell"
 
+        # Specific Restriction: Longs to RSI < 45
+        if direction == "buy" and RESTRICT_RSI:
+            if rsi >= RSI_LONG:
+                return None
+
         entry = book.best_ask if direction == "buy" else book.best_bid
         tp_move = TP_MOVE
         sl_move = SL_MOVE
