@@ -55,3 +55,24 @@ To transition from "Data Collection" to "Baseline Profitability":
 - **Engage RESTRICT_SCORE**: We must require positive indicator confluence to slow down trade frequency.
 - **Widen Barriers**: Increase TP/SL to at least 0.5% / 0.3% to overcome the fixed fee overhead (0.12%).
 - **BTC Confluence**: Data continues to suggest that ignoring BTC direction is a primary cause of loss bursts.
+
+---
+
+# Technical Analysis Update - Maker-Fee Optimization (Run 18: 226 Trades)
+
+## Performance Impact
+
+| Metric | Buy Win Avg | Buy Loss Avg | Sell Win Avg | Sell Loss Avg |
+| :--- | :--- | :--- | :--- | :--- |
+| **RSI** | **23.5** | 15.5 | **78.6** | 77.4 |
+| **DRT** | **0.35** | 0.44 | **0.58** | 0.64 |
+
+### **Analysis of Maker-Execution**
+Run 18 successfully utilized the new **Limit Entry** and **Limit TP** architecture, reducing fee overhead from 0.12% to approximately **0.08%** round-trip (Maker Entry + Taker SL).
+
+1. **Win Rate Persistence**: Despite the 33-66% fee reduction, the Win Rate remained low (**9.7%**). This confirms that "tight" strategy barriers (0.1% SL) are catching random market noise rather than trend pivots.
+2. **Directional Mismatch**: Winning buys occurred at an average DRT of 0.35 (Bearish trend), suggesting they caught successful mean-reversion bounces from oversold RSI. However, the high volume of losses in the same zone indicates that RSI alone is not a sufficient filter.
+3. **Execution Fidelity**: Logs confirmed that `PLACED LIMIT ENTRY` and `FILLED ENTRY ... (LIMIT)` followed the 10-second chase logic perfectly, providing the intended 0.02% Maker fee benefit.
+
+### **Strategic Recommendation**:
+The evidence now strongly supports **widening the Take-Profit and Stop-Loss barriers**. Currently, the "signal edge" is being diluted by market noise and fixed transaction costs. Expanding the target profit to >0.5% will allow the Maker-fee advantage to compound significantly.
