@@ -165,6 +165,10 @@ class Engine:
                         # Optimization: only get expensive features if we might trade
                         # or for BTC (global confluence)
                         if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
+                             # Skip if BOTH sides are already open (nothing left to trade)
+                             if f"{sym}_buy" in self.open_positions and f"{sym}_sell" in self.open_positions:
+                                 continue
+
                              feat = self.exchange.get_features(sym)
                              self._last_features[sym] = feat
                              all_features[sym] = feat
@@ -191,6 +195,10 @@ class Engine:
                             continue
 
                         side = signal["side"]
+                        # Skip if a position in this direction is already open
+                        if f"{sym}_{side}" in self.open_positions:
+                            continue
+
                         if not self._asset_is_tradable(sym, side):
                             continue
 
