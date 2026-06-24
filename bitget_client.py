@@ -104,7 +104,8 @@ class BitGetWSClient:
                     subscribe_msg = {"op": "subscribe", "args": []}
                     for sym in self.symbols:
                         # BitGet V2 instType for USDT-M Futures is 'USDT-FUTURES'
-                        subscribe_msg["args"].append({"instType": "USDT-FUTURES", "channel": "books", "instId": sym})
+                        # Use books15 for snapshot updates (avoiding delta merging)
+                        subscribe_msg["args"].append({"instType": "USDT-FUTURES", "channel": "books15", "instId": sym})
                         subscribe_msg["args"].append({"instType": "USDT-FUTURES", "channel": "trade", "instId": sym})
 
                     await ws.send_json(subscribe_msg)

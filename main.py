@@ -14,11 +14,15 @@ class DBLogHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Configure root logger to DEBUG to capture everything for the DB
+logging.getLogger().setLevel(logging.DEBUG)
+formatter = logging.Formatter("%(asctime)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+# Console handler (Only INFO and above)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logging.getLogger().addHandler(console_handler)
 log = logging.getLogger("scalper")
 
 async def main():

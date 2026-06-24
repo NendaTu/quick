@@ -16,9 +16,10 @@ class Database:
         self.worker_thread.start()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=10000")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS ticks (
                     symbol TEXT,
@@ -67,7 +68,8 @@ class Database:
             conn.commit()
 
     def _write_worker(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         while not self.stop_event.is_set():
             try:
                 # Batch processing
@@ -101,6 +103,21 @@ class Database:
                             "INSERT INTO logs (session_id, timestamp, level, logger, message) VALUES (?, ?, ?, ?, ?)",
                             data
                         )
+                    elif type == "purge":
+                        tick_retention_seconds, candle_retention_days = data
+                        now = time.time()
+                        res_ticks = cursor.execute("DELETE FROM ticks WHERE timestamp < ?", (now - tick_retention_seconds,))
+                        res_candles = cursor.execute("DELETE FROM candles WHERE timestamp < ?", (now - candle_retention_days * 86400,))
+                        log.info(f"Background Purge: {res_ticks.rowcount} ticks, {res_candles.rowcount} candles.")
+                    elif type == "purge_sessions":
+                        keep_sessions = data
+                        cursor.execute("SELECT id FROM sessions ORDER BY start_time DESC LIMIT ?", (keep_sessions,))
+                        recent_ids = [row[0] for row in cursor.fetchall()]
+                        if recent_ids:
+                            placeholders = ",".join("?" * len(recent_ids))
+                            cursor.execute(f"DELETE FROM logs WHERE session_id NOT IN ({placeholders})", recent_ids)
+                            cursor.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", recent_ids)
+                            log.info(f"Background Purge Sessions: Kept IDs {recent_ids}")
                 conn.commit()
                 for _ in range(len(items)):
                     self.write_queue.task_done()
@@ -119,7 +136,8 @@ class Database:
         self.write_queue.put(("log", (self.session_id, time.time(), level, logger_name, message)))
 
     def get_recent_ticks(self, symbol, limit=1000):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout=10000")
             cursor = conn.execute(
                 "SELECT timestamp, price, side, size FROM ticks WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?",
                 (symbol, limit)
@@ -127,7 +145,8 @@ class Database:
             return cursor.fetchall()[::-1]
 
     def get_recent_candles(self, symbol, timeframe, limit=500):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout=10000")
             cursor = conn.execute("""
                 SELECT timestamp, open, high, low, close, volume
                 FROM candles
@@ -137,25 +156,11 @@ class Database:
             return cursor.fetchall()[::-1]
 
     def purge_old_data(self, tick_retention_seconds=3600, candle_retention_days=7):
-        now = time.time()
-        # Direct execution for maintenance
-        with sqlite3.connect(self.db_path) as conn:
-            res_ticks = conn.execute("DELETE FROM ticks WHERE timestamp < ?", (now - tick_retention_seconds,))
-            res_candles = conn.execute("DELETE FROM candles WHERE timestamp < ?", (now - candle_retention_days * 86400,))
-            log.info(f"Purged {res_ticks.rowcount} old ticks and {res_candles.rowcount} old candles.")
-            self.purge_old_sessions()
+        self.write_queue.put(("purge", (tick_retention_seconds, candle_retention_days)))
+        self.purge_old_sessions()
 
     def purge_old_sessions(self, keep_sessions=3):
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT id FROM sessions ORDER BY start_time DESC LIMIT ?", (keep_sessions,))
-            recent_ids = [row[0] for row in cursor.fetchall()]
-            if not recent_ids: return
-
-            placeholders = ",".join("?" * len(recent_ids))
-            conn.execute(f"DELETE FROM logs WHERE session_id NOT IN ({placeholders})", recent_ids)
-            conn.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", recent_ids)
-            conn.commit()
-            log.info(f"Purged old sessions. Kept IDs: {recent_ids}")
+        self.write_queue.put(("purge_sessions", keep_sessions))
 
     def stop(self):
         self.stop_event.set()

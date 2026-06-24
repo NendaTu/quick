@@ -12,7 +12,7 @@ BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 INITIAL_EQUITY = 100.0
 RISK_PER_TRADE = 0.01            # fraction of equity risked per trade
 LOG_REJECTIONS = False            # Toggle rejection logs in console
-LOG_SIGNALS = True               # Toggle signal logs in console
+LOG_SIGNALS = False               # Toggle signal logs in console
 MAX_CONCURRENT_POSITIONS = 50
 DRAWDOWN_LIMIT = 0.5             # stop if equity <= 50% of peak
 TOTAL_ROI_LIMIT = 1.0            # stop if ROI >= +100%
@@ -80,10 +80,10 @@ TF_TICKS = {
 }
 
 # --- Model thresholds ---
-MIN_CONFIDENCE = 0.1             # minimum probability to trade
-MIN_IMBALANCE = 0.01             # only trade if |imbalance| > this
+MIN_CONFIDENCE = 0.66             # minimum probability to trade
+MIN_IMBALANCE = 0.033             # only trade if |imbalance| > this
 TREND_STRENGTH_MIN = 0.1         # DRT minimum
 # Win/Loss barriers (symmetric 1:1)
-TP_MOVE = 0.003                 # 0.3% take‑profit
-SL_MOVE = 0.003                 # 0.3% stop‑loss
-MAX_ENTRY_SLIPPAGE = 0.0005     # 0.05% max slippage for entry
+TP_MOVE = 0.0015                 # 0.3% take‑profit
+SL_MOVE = 0.001                 # 0.3% stop‑loss
+MAX_ENTRY_SLIPPAGE = 0.001     # 0.05% max slippage for entry

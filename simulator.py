@@ -162,7 +162,7 @@ class Simulator:
         data = msg.get("data", [])
         if not data: return
 
-        if channel == "books":
+        if channel == "books15":
             d = data[0]
             self.books[instId].bids = [(float(p), float(q)) for p, q in d.get("bids", [])]
             self.books[instId].asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
