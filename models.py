@@ -62,17 +62,26 @@ class LearningModel:
         if not features:
             return None
 
-        imb = features.get("imbalance", 0)
+        # 1. Trend Strength Filter (Symmetric)
+        drt = features.get("drt", 0.5)
+        trend_offset = abs(drt - 0.5)
+        if trend_offset < TREND_STRENGTH_MIN:
+            return None # Ignore weak/flat trends
 
-        # --- RELAXED SCORING WITH LEARNED WEIGHTS ---
+        imb = features.get("imbalance", 0)
+        # 2. Imbalance filter
+        if abs(imb) < MIN_IMBALANCE:
+            return None
+
+        # --- SCORING WITH LEARNED WEIGHTS ---
         score = 0
 
-        # Imbalance contribution (RELAXED)
+        # Imbalance contribution
         imb_score = 0
         if imb > 0.10: imb_score = 2
-        elif imb > 0.01: imb_score = 1
+        elif imb > MIN_IMBALANCE: imb_score = 1
         elif imb < -0.10: imb_score = -2
-        elif imb < -0.01: imb_score = -1
+        elif imb < -MIN_IMBALANCE: imb_score = -1
         score += imb_score * self.weights["imbalance"]
 
         # RSI contribution (RELAXED)
@@ -104,11 +113,19 @@ class LearningModel:
         elif asset_15m < -0.0001: trend_score = -1
         score += trend_score * self.weights["trend"]
 
-        # Check for trade signal (RELAXED: score >= 1)
+        # Check for trade signal (score >= 1)
         if abs(score) < 1:
             return None
 
-        # REMOVED safety alignment check to maximize activity
+        # Confidence calculation
+        confidence = min(1.0, (abs(score) + 1) / 10)
+        if confidence < MIN_CONFIDENCE:
+            return None
+
+        # Direction check: ensure scoring matches the DRT trend
+        # Buying is only allowed if DRT > 0.5, selling if DRT < 0.5
+        if score > 0 and drt < 0.5: return None
+        if score < 0 and drt > 0.5: return None
 
         direction = "buy" if score > 0 else "sell"
 
@@ -157,7 +174,7 @@ class LearningModel:
             "exit_price": exit_price,
             "stop_price": stop_price,
             "qty": qty,
-            "confidence": min(1.0, (abs(score) + 1) / 10),
+            "confidence": confidence,
             "btc_confluence": btc_conf
         }
 
