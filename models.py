@@ -15,7 +15,7 @@ class LearningModel:
             "ema": 1.0,
             "trend": 1.0
         }
-        self.lr = 0.01
+        self.lr = 0.0 # Disabled as per user request "Not yet"
 
     def train_on_tick(self, symbol, prev_features, actual_up):
         # Very basic online learning: increment weight if indicator was correct, decrement if wrong
@@ -129,9 +129,20 @@ class LearningModel:
             return None
 
         qty = risk_amount / risk_per_unit
-        qty = math.floor(qty * 1000) / 1000
+
+        # Respect contract precision
+        spec = self.simulator.contract_specs.get(symbol, {})
+        vol_place = int(spec.get('volumePlace', 3))
+        price_place = int(spec.get('pricePlace', 2))
+
+        qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
         if qty <= 0:
             return None
+
+        # Round prices
+        entry = round(entry, price_place)
+        exit_price = round(exit_price, price_place)
+        stop_price = round(stop_price, price_place)
 
         max_lev = LEVERAGE_LIMITS.get(symbol, 125)
         required_margin = (qty * entry) / max_lev

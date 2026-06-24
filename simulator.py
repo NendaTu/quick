@@ -14,6 +14,7 @@ class Simulator:
     def __init__(self):
         self.books: Dict[str, SimulatedOrderBook] = {}
         self.leverage_limits = LEVERAGE_LIMITS.copy()
+        self.contract_specs: Dict[str, dict] = {}
         self.equity = INITIAL_EQUITY
         self.used_margin = 0.0
 
@@ -29,6 +30,8 @@ class Simulator:
         self.confluence_history: Dict[str, Dict[str, List[float]]] = {}
         self.last_candle_ts: Dict[str, Dict[str, float]] = {}
         self.last_price: Dict[str, float] = {}
+        self._btc_confluence_cache = {}
+        self._last_confluence_update = 0
 
         all_assets = ASSETS + [BTC_SYMBOL]
         for sym in all_assets:
@@ -40,6 +43,15 @@ class Simulator:
 
     async def warm_up(self):
         log.info("Starting data warm-up...")
+
+        # Fetch contract specs first
+        specs = await self.client.get_symbols()
+        for s in specs:
+            sym = s['symbol']
+            self.contract_specs[sym] = s
+            if sym in LEVERAGE_LIMITS:
+                self.leverage_limits[sym] = float(s.get('maxLever', LEVERAGE_LIMITS[sym]))
+
         symbols = ASSETS + [BTC_SYMBOL]
         semaphore = asyncio.Semaphore(10) # Respect rate limits
 
@@ -106,15 +118,17 @@ class Simulator:
         supertrend_val, supertrend_dir = compute_supertrend(highs, lows, closes, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER)
         drt = compute_drt(closes, 20)
 
-        # Cache BTC changes globally per tick in the engine if possible,
-        # but here we'll just keep it simple for now.
-        btc_changes = {}
-        for tf in ["15m", "1H", "4H", "1D"]:
-            h = self.confluence_history[BTC_SYMBOL][tf]
-            if len(h) >= 2:
-                btc_changes[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
-            else:
-                btc_changes[f"btc_{tf}"] = 0.0
+        # BTC confluence cache (global per tick)
+        now = time.time()
+        if now - self._last_confluence_update > 0.1: # Update cache every 100ms
+            self._btc_confluence_cache = {}
+            for tf in ["15m", "1H", "4H", "1D"]:
+                h = self.confluence_history[BTC_SYMBOL][tf]
+                if len(h) >= 2:
+                    self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
+                else:
+                    self._btc_confluence_cache[f"btc_{tf}"] = 0.0
+            self._last_confluence_update = now
 
         asset_changes = {}
         for tf in ["15m", "1H", "4H", "1D"]:
@@ -138,7 +152,7 @@ class Simulator:
             "supertrend": supertrend_val,
             "supertrend_dir": supertrend_dir,
             "drt": drt,
-            **btc_changes,
+            **self._btc_confluence_cache,
             **asset_changes,
         }
 
@@ -238,7 +252,11 @@ class Simulator:
                 elif side == "sell" and price <= o["price"]: fills.append((o, "tp"))
 
         for o, et in fills:
-            await asyncio.sleep(random.uniform(0.02, 0.05))
+            # Simulate realistic network latency and engine processing time
+            # Using a log-normal distribution for more authentic jitter
+            latency = random.lognormvariate(math.log(0.035), 0.4) # mean ~35ms, with tail
+            await asyncio.sleep(max(0.01, min(0.3, latency)))
+
             exit_action = "sell" if o["pos_side"] == "buy" else "buy"
             fill_price = self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
             self._execute_exit(o, fill_price, et)
@@ -263,9 +281,20 @@ class Simulator:
 
         if filled_qty < qty:
             total_cost += (qty - filled_qty) * (levels[-1][0] if levels else self.last_price.get(symbol, 0)) * 1.01
-        return total_cost / qty if qty > 0 else 0
+
+        avg_price = total_cost / qty if qty > 0 else 0
+
+        # Respect price precision for fill
+        spec = self.contract_specs.get(symbol, {})
+        price_place = int(spec.get('pricePlace', 2))
+        return round(avg_price, price_place)
 
     def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf=""):
+        spec = self.contract_specs.get(symbol, {})
+        min_usdt = float(spec.get('minTradeUSDT', 5.0))
+        if qty * entry_price < min_usdt:
+            return {"code": "3", "msg": f"order value below min {min_usdt}"}
+
         max_lev = self.leverage_limits.get(symbol, 20)
         required_margin = (qty * entry_price) / max_lev
 
