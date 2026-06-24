@@ -14,7 +14,9 @@ class Simulator:
     def __init__(self):
         self.books: Dict[str, SimulatedOrderBook] = {}
         self.leverage_limits = LEVERAGE_LIMITS.copy()
+        self.contract_specs: Dict[str, dict] = {}
         self.equity = INITIAL_EQUITY
+        self.used_margin = 0.0
 
         self.positions: Dict[Tuple[str, str], dict] = {}
         self.pending_orders: List[dict] = []
@@ -28,6 +30,8 @@ class Simulator:
         self.confluence_history: Dict[str, Dict[str, List[float]]] = {}
         self.last_candle_ts: Dict[str, Dict[str, float]] = {}
         self.last_price: Dict[str, float] = {}
+        self._btc_confluence_cache = {}
+        self._last_confluence_update = 0
 
         all_assets = ASSETS + [BTC_SYMBOL]
         for sym in all_assets:
@@ -39,36 +43,51 @@ class Simulator:
 
     async def warm_up(self):
         log.info("Starting data warm-up...")
-        for sym in ASSETS + [BTC_SYMBOL]:
-            m1_data = await self.client.get_candles(sym, "1m", limit=500)
-            if not isinstance(m1_data, list):
-                log.warning(f"Failed to fetch 1m candles for {sym}")
-                continue
 
-            for c in reversed(m1_data):
-                ts = float(c[0]) / 1000
-                o, h, l, cl, v = map(float, c[1:6])
-                self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
-                self.ohlcv_1m[sym].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-                self.last_candle_ts[sym]["1m"] = ts
+        # Fetch contract specs first
+        specs = await self.client.get_symbols()
+        for s in specs:
+            sym = s['symbol']
+            self.contract_specs[sym] = s
+            if sym in LEVERAGE_LIMITS:
+                self.leverage_limits[sym] = float(s.get('maxLever', LEVERAGE_LIMITS[sym]))
 
-            if m1_data:
-                price = float(m1_data[0][4])
-                self.books[sym].mid_price = price
-                self.last_price[sym] = price
-                self.books[sym]._regenerate()
+        symbols = ASSETS + [BTC_SYMBOL]
+        semaphore = asyncio.Semaphore(10) # Respect rate limits
 
-            for tf in ["15m", "1H", "4H", "1D"]:
-                c_data = await self.client.get_candles(sym, tf, limit=100)
-                if not isinstance(c_data, list):
-                    log.warning(f"Failed to fetch {tf} candles for {sym}")
-                    continue
-                for c in reversed(c_data):
-                    ts = float(c[0]) / 1000
-                    cl = float(c[4])
-                    self.confluence_history[sym][tf].append(cl)
-                    self.last_candle_ts[sym][tf] = ts
+        async def fetch_symbol_data(sym):
+            async with semaphore:
+                # 1. Fetch 1m candles for indicators
+                m1_data = await self.client.get_candles(sym, "1m", limit=500)
+                if isinstance(m1_data, list):
+                    for c in reversed(m1_data):
+                        ts = float(c[0]) / 1000
+                        o, h, l, cl, v = map(float, c[1:6])
+                        self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+                        self.ohlcv_1m[sym].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                        self.last_candle_ts[sym]["1m"] = ts
 
+                    if m1_data:
+                        price = float(m1_data[0][4])
+                        self.books[sym].mid_price = price
+                        self.last_price[sym] = price
+                        self.books[sym]._regenerate()
+                else:
+                    log.warning(f"Failed to fetch 1m candles for {sym}")
+
+                # 2. Fetch confluence timeframes
+                for tf in ["15m", "1H", "4H", "1D"]:
+                    c_data = await self.client.get_candles(sym, tf, limit=100)
+                    if isinstance(c_data, list):
+                        for c in reversed(c_data):
+                            ts = float(c[0]) / 1000
+                            cl = float(c[4])
+                            self.confluence_history[sym][tf].append(cl)
+                            self.last_candle_ts[sym][tf] = ts
+                    else:
+                        log.warning(f"Failed to fetch {tf} candles for {sym}")
+
+        await asyncio.gather(*(fetch_symbol_data(s) for s in symbols))
         log.info("Warm-up complete.")
 
     def get_features(self, symbol: str) -> Dict[str, float]:
@@ -85,9 +104,11 @@ class Simulator:
         history = self.ohlcv_1m.get(symbol, [])
         if len(history) < 50: return {}
 
-        closes = [x["c"] for x in history]
-        highs = [x["h"] for x in history]
-        lows = [x["l"] for x in history]
+        # Optimization: only take what we need
+        relevant_history = history[-(INDICATOR_PRICE_HISTORY + 50):]
+        closes = [x["c"] for x in relevant_history]
+        highs = [x["h"] for x in relevant_history]
+        lows = [x["l"] for x in relevant_history]
 
         rsi = compute_rsi(closes, RSI_PERIOD)
         atr = compute_atr(highs, lows, closes, ATR_PERIOD)
@@ -97,13 +118,17 @@ class Simulator:
         supertrend_val, supertrend_dir = compute_supertrend(highs, lows, closes, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER)
         drt = compute_drt(closes, 20)
 
-        btc_changes = {}
-        for tf in ["15m", "1H", "4H", "1D"]:
-            h = self.confluence_history[BTC_SYMBOL][tf]
-            if len(h) >= 2:
-                btc_changes[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
-            else:
-                btc_changes[f"btc_{tf}"] = 0.0
+        # BTC confluence cache (global per tick)
+        now = time.time()
+        if now - self._last_confluence_update > 0.1: # Update cache every 100ms
+            self._btc_confluence_cache = {}
+            for tf in ["15m", "1H", "4H", "1D"]:
+                h = self.confluence_history[BTC_SYMBOL][tf]
+                if len(h) >= 2:
+                    self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
+                else:
+                    self._btc_confluence_cache[f"btc_{tf}"] = 0.0
+            self._last_confluence_update = now
 
         asset_changes = {}
         for tf in ["15m", "1H", "4H", "1D"]:
@@ -127,7 +152,7 @@ class Simulator:
             "supertrend": supertrend_val,
             "supertrend_dir": supertrend_dir,
             "drt": drt,
-            **btc_changes,
+            **self._btc_confluence_cache,
             **asset_changes,
         }
 
@@ -137,7 +162,7 @@ class Simulator:
         data = msg.get("data", [])
         if not data: return
 
-        if channel == "books25":
+        if channel == "books15":
             d = data[0]
             self.books[instId].bids = [(float(p), float(q)) for p, q in d.get("bids", [])]
             self.books[instId].asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
@@ -210,16 +235,27 @@ class Simulator:
 
     async def _process_orders(self):
         fills = []
-        if self.pending_orders:
-            # log.debug(f"Checking {len(self.pending_orders)} pending orders")
-            pass
+        now = time.time()
         for o in list(self.pending_orders):
             sym = o["symbol"]
             side = o["pos_side"]
             price = self.last_price.get(sym)
             if not price: continue
 
-            if o["type"] == "stop":
+            if o["type"] == "entry_limit":
+                # Check if price reached our limit
+                # For a BUY limit, price must be <= limit
+                # For a SELL limit, price must be >= limit
+                if side == "buy" and price <= o["price"]: fills.append((o, "entry"))
+                elif side == "sell" and price >= o["price"]: fills.append((o, "entry"))
+
+                # Chase/Timeout logic
+                elif now - o.get("ts", now) > LIMIT_CHASE_TIMEOUT:
+                    # In a real bot, we'd reposition. For simulation, let's just "take" it
+                    # to keep the data flowing, or expire it. Let's convert to market-ish fill.
+                    fills.append((o, "entry_timeout"))
+
+            elif o["type"] == "stop":
                 if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
                 elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
             elif o["type"] == "tp":
@@ -227,10 +263,32 @@ class Simulator:
                 elif side == "sell" and price <= o["price"]: fills.append((o, "tp"))
 
         for o, et in fills:
-            await asyncio.sleep(random.uniform(0.02, 0.05))
-            exit_action = "sell" if o["pos_side"] == "buy" else "buy"
-            fill_price = self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
-            self._execute_exit(o, fill_price, et)
+            # Simulate realistic network latency and engine processing time
+            latency = random.lognormvariate(math.log(0.035), 0.4)
+            await asyncio.sleep(max(0.01, min(0.3, latency)))
+
+            if et in ["entry", "entry_timeout"]:
+                # Maker fill if et == "entry", else Taker
+                order_type = "limit" if et == "entry" else "market"
+                # If timeout, we might get a worse price. For simplicity, use current market.
+                fill_price = o["price"] if et == "entry" else self.last_price.get(o["symbol"])
+
+                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type)
+
+                # Once entry is filled, add TP/SL
+                sid = self.order_id_counter; self.order_id_counter += 1
+                tid = self.order_id_counter; self.order_id_counter += 1
+                self.pending_orders.extend([
+                    {"id": sid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "stop", "triggerPrice": o["stop_price"], "qty": o["qty"]},
+                    {"id": tid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp_price"], "qty": o["qty"]},
+                ])
+            else:
+                order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
+                exit_action = "sell" if o["pos_side"] == "buy" else "buy"
+                # If it's a TP limit, we get exactly our price
+                fill_price = o["price"] if et == "tp" and order_type == "limit" else self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
+                self._execute_exit(o, fill_price, et, order_type)
+
             if o in self.pending_orders:
                 self.pending_orders.remove(o)
 
@@ -252,45 +310,88 @@ class Simulator:
 
         if filled_qty < qty:
             total_cost += (qty - filled_qty) * (levels[-1][0] if levels else self.last_price.get(symbol, 0)) * 1.01
-        return total_cost / qty if qty > 0 else 0
 
-    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf=""):
-        required_margin = (qty * entry_price) / self.leverage_limits.get(symbol, 20)
-        if self.equity < required_margin: return {"code": "1", "msg": "insufficient balance"}
+        avg_price = total_cost / qty if qty > 0 else 0
 
-        fill_price = self._calculate_fill_price(symbol, side, qty)
+        # Respect price precision for fill
+        spec = self.contract_specs.get(symbol, {})
+        price_place = int(spec.get('pricePlace', 2))
+        return round(avg_price, price_place)
 
-        # SLIPPAGE CONTROL
-        slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
-        if slippage > MAX_ENTRY_SLIPPAGE:
-            if LOG_REJECTIONS:
-                log.warning(f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
-            return {"code": "2", "msg": "high slippage"}
+    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5):
+        spec = self.contract_specs.get(symbol, {})
+        min_usdt = float(spec.get('minTradeUSDT', 5.0))
+        if RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
+            return {"code": "3", "msg": f"order value below min {min_usdt}"}
 
-        self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf)
+        max_lev = self.leverage_limits.get(symbol, 20)
+        required_margin = (qty * entry_price) / max_lev
 
-        sid = self.order_id_counter; self.order_id_counter += 1
-        tid = self.order_id_counter; self.order_id_counter += 1
+        available_balance = self.equity - self.used_margin
+        if available_balance < required_margin:
+            return {"code": "1", "msg": "insufficient balance"}
 
-        self.pending_orders.extend([
-            {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty},
-            {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty},
-        ])
-        return {"code": "00000", "data": {"orderId": str(sid)}}
+        if ENTRY_ORDER_TYPE == "market":
+            fill_price = self._calculate_fill_price(symbol, side, qty)
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf):
-        fee = qty * fill_price * TAKER_FEE
+            # SLIPPAGE CONTROL
+            slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
+            if RESTRICT_SLIPPAGE and slippage > MAX_ENTRY_SLIPPAGE:
+                rej_msg = f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%"
+                if LOG_REJECTIONS:
+                    log.warning(rej_msg)
+                else:
+                    log.debug(rej_msg) # Log as debug so it goes to DB but not console
+                return {"code": "2", "msg": "high slippage"}
+
+            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market")
+
+            sid = self.order_id_counter; self.order_id_counter += 1
+            tid = self.order_id_counter; self.order_id_counter += 1
+
+            self.pending_orders.extend([
+                {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty},
+                {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty},
+            ])
+            return {"code": "00000", "data": {"orderId": str(sid)}}
+        else:
+            # Limit Entry
+            eid = self.order_id_counter; self.order_id_counter += 1
+            self.pending_orders.append({
+                "id": eid, "symbol": symbol, "pos_side": side, "type": "entry_limit",
+                "price": entry_price, "qty": qty, "ts": time.time(),
+                "stop_price": stop_price, "tp_price": tp_price,
+                "btc_conf": btc_conf, "drt": drt
+            })
+            log.info(f"PLACED LIMIT ENTRY {symbol} {side.upper()} {qty:.3f} @ {entry_price:.8f}")
+            return {"code": "00000", "data": {"orderId": str(eid)}}
+
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market"):
+        fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
+        fee = qty * fill_price * fee_rate
         self.equity -= fee
-        self.positions[(symbol, side)] = {
-            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf
-        }
-        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} [{btc_conf}] | equity={self.equity:.2f}")
 
-    def _execute_exit(self, order, fill_price, exit_type):
+        max_lev = self.leverage_limits.get(symbol, 20)
+        margin = (qty * fill_price) / max_lev
+        self.used_margin += margin
+
+        self.positions[(symbol, side)] = {
+            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt
+        }
+        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
+
+        if self.engine:
+            self.engine._report_entry(symbol, side, qty, fill_price)
+
+    def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]
         side = order["pos_side"]
         pos = self.positions.get((sym, side))
         if not pos: return
+
+        # Fetch real-time DRT for exit audit
+        exit_features = self.get_features(sym)
+        exit_drt = exit_features.get("drt", 0.5)
 
         qty = min(order["qty"], pos["qty"])
         if side == "buy":
@@ -298,11 +399,16 @@ class Simulator:
         else:
             pnl = (pos["entry_price"] - fill_price) * qty
 
-        fee = qty * fill_price * TAKER_FEE
+        fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
+        fee = qty * fill_price * fee_rate
         round_trip_pnl = pnl - fee - pos["entry_fee"]
         self.equity += (pnl - fee)
+        self.used_margin -= pos.get("margin", 0)
+        self.used_margin = max(0, self.used_margin)
 
-        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f}")
+        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
+                 f"[{pos['btc_conf']}] drt_entry={pos.get('entry_drt',0.5):.4f} drt_exit={exit_drt:.4f} | "
+                 f"equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         del self.positions[(sym, side)]
         self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]

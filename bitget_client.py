@@ -103,9 +103,10 @@ class BitGetWSClient:
 
                     subscribe_msg = {"op": "subscribe", "args": []}
                     for sym in self.symbols:
-                        # Use books25 for deeper liquidity visibility and better slippage calculation
-                        subscribe_msg["args"].append({"instType": "umc", "channel": "books25", "instId": sym})
-                        subscribe_msg["args"].append({"instType": "umc", "channel": "trade", "instId": sym})
+                        # BitGet V2 instType for USDT-M Futures is 'USDT-FUTURES'
+                        # Use books15 for snapshot updates (avoiding delta merging)
+                        subscribe_msg["args"].append({"instType": "USDT-FUTURES", "channel": "books15", "instId": sym})
+                        subscribe_msg["args"].append({"instType": "USDT-FUTURES", "channel": "trade", "instId": sym})
 
                     await ws.send_json(subscribe_msg)
                     hb_task = asyncio.create_task(self._heartbeat(ws))

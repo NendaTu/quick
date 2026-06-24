@@ -9,12 +9,19 @@ BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
 BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
 # --- Account ---
-INITIAL_EQUITY = 100.0
-RISK_PER_TRADE = 0.01            # fraction of equity risked per trade
+INITIAL_EQUITY = 1000.0
+RISK_PER_TRADE = 0.002           # fraction of equity risked per trade
 LOG_REJECTIONS = False            # Toggle rejection logs in console
+LOG_SIGNALS = False               # Toggle signal logs in console
 MAX_CONCURRENT_POSITIONS = 50
 DRAWDOWN_LIMIT = 0.5             # stop if equity <= 50% of peak
 TOTAL_ROI_LIMIT = 1.0            # stop if ROI >= +100%
+
+# --- Execution ---
+ENTRY_ORDER_TYPE = "limit"       # "market" or "limit"
+TP_ORDER_TYPE = "limit"          # "market" or "limit"
+SL_ORDER_TYPE = "market"         # "market" or "limit"
+LIMIT_CHASE_TIMEOUT = 10.0       # seconds
 
 # --- Fees ---
 MAKER_FEE = 0.0002               # 0.02%
@@ -79,10 +86,39 @@ TF_TICKS = {
 }
 
 # --- Model thresholds ---
-MIN_CONFIDENCE = 0.1             # minimum probability to trade
-MIN_IMBALANCE = 0.01             # only trade if |imbalance| > this
+MIN_CONFIDENCE = 0.66             # minimum probability to trade
+MIN_IMBALANCE = 0.033             # only trade if |imbalance| > this
 TREND_STRENGTH_MIN = 0.1         # DRT minimum
 # Win/Loss barriers (symmetric 1:1)
-TP_MOVE = 0.003                 # 1.5% take‑profit
+TP_MOVE = 0.0015                 # 0.3% take‑profit
 SL_MOVE = 0.001                 # 0.3% stop‑loss
 MAX_ENTRY_SLIPPAGE = 0.001     # 0.05% max slippage for entry
+
+# --- Scoring Thresholds ---
+RSI_LONG = 40.0
+RSI_SHORT = 60.0
+TREND_15M_MIN = 0.0001
+
+# --- Restriction Toggles (Naked Baseline) ---
+RESTRICT_DRT = False
+RESTRICT_IMBALANCE = False
+RESTRICT_CONFIDENCE = False
+RESTRICT_DIRECTIONAL_SANITY = False
+RESTRICT_RSI = True
+RESTRICT_MACD = False
+RESTRICT_EMA = False
+RESTRICT_15M_TREND = False
+RESTRICT_SUPERTREND = False
+RESTRICT_ATR = False
+RESTRICT_VOL_PCT = False
+RESTRICT_SPREAD = False
+RESTRICT_BTC_CONFLUENCE = False
+RESTRICT_ASSET_CONFLUENCE = False
+RESTRICT_LIQUIDITY = False
+RESTRICT_SLIPPAGE = False
+RESTRICT_MIN_VAL = False
+RESTRICT_SCORE = True
+
+# --- BTC Confluence Thresholds ---
+BTC_CONF_15M_MIN = 0.0002
+BTC_CONF_1H_MIN = 0.0002

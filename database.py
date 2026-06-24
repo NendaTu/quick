@@ -1,7 +1,6 @@
 import sqlite3
 import time
 import logging
-import asyncio
 import threading
 import queue
 
@@ -17,9 +16,10 @@ class Database:
         self.worker_thread.start()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=10000")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS ticks (
                     symbol TEXT,
@@ -42,11 +42,34 @@ class Database:
                     PRIMARY KEY (symbol, timeframe, timestamp)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    start_time REAL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS logs (
+                    session_id INTEGER,
+                    timestamp REAL,
+                    level TEXT,
+                    logger TEXT,
+                    message TEXT,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id)
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time ON ticks (symbol, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time ON candles (symbol, timeframe, timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session_id)")
+
+            # Create a new session
+            cursor = conn.execute("INSERT INTO sessions (start_time) VALUES (?)", (time.time(),))
+            self.session_id = cursor.lastrowid
+            conn.commit()
 
     def _write_worker(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         while not self.stop_event.is_set():
             try:
                 # Batch processing
@@ -75,6 +98,26 @@ class Database:
                             INSERT OR REPLACE INTO candles (symbol, timeframe, timestamp, open, high, low, close, volume)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, data)
+                    elif type == "log":
+                        cursor.execute(
+                            "INSERT INTO logs (session_id, timestamp, level, logger, message) VALUES (?, ?, ?, ?, ?)",
+                            data
+                        )
+                    elif type == "purge":
+                        tick_retention_seconds, candle_retention_days = data
+                        now = time.time()
+                        res_ticks = cursor.execute("DELETE FROM ticks WHERE timestamp < ?", (now - tick_retention_seconds,))
+                        res_candles = cursor.execute("DELETE FROM candles WHERE timestamp < ?", (now - candle_retention_days * 86400,))
+                        log.info(f"Background Purge: {res_ticks.rowcount} ticks, {res_candles.rowcount} candles.")
+                    elif type == "purge_sessions":
+                        keep_sessions = data
+                        cursor.execute("SELECT id FROM sessions ORDER BY start_time DESC LIMIT ?", (keep_sessions,))
+                        recent_ids = [row[0] for row in cursor.fetchall()]
+                        if recent_ids:
+                            placeholders = ",".join("?" * len(recent_ids))
+                            cursor.execute(f"DELETE FROM logs WHERE session_id NOT IN ({placeholders})", recent_ids)
+                            cursor.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", recent_ids)
+                            log.info(f"Background Purge Sessions: Kept IDs {recent_ids}")
                 conn.commit()
                 for _ in range(len(items)):
                     self.write_queue.task_done()
@@ -89,8 +132,12 @@ class Database:
     def save_candle(self, symbol, timeframe, timestamp, open, high, low, close, volume):
         self.write_queue.put(("candle", (symbol, timeframe, timestamp, open, high, low, close, volume)))
 
+    def save_log(self, level, logger_name, message):
+        self.write_queue.put(("log", (self.session_id, time.time(), level, logger_name, message)))
+
     def get_recent_ticks(self, symbol, limit=1000):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout=10000")
             cursor = conn.execute(
                 "SELECT timestamp, price, side, size FROM ticks WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?",
                 (symbol, limit)
@@ -98,7 +145,8 @@ class Database:
             return cursor.fetchall()[::-1]
 
     def get_recent_candles(self, symbol, timeframe, limit=500):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout=10000")
             cursor = conn.execute("""
                 SELECT timestamp, open, high, low, close, volume
                 FROM candles
@@ -108,12 +156,11 @@ class Database:
             return cursor.fetchall()[::-1]
 
     def purge_old_data(self, tick_retention_seconds=3600, candle_retention_days=7):
-        now = time.time()
-        # Direct execution for maintenance
-        with sqlite3.connect(self.db_path) as conn:
-            res_ticks = conn.execute("DELETE FROM ticks WHERE timestamp < ?", (now - tick_retention_seconds,))
-            res_candles = conn.execute("DELETE FROM candles WHERE timestamp < ?", (now - candle_retention_days * 86400,))
-            log.info(f"Purged {res_ticks.rowcount} old ticks and {res_candles.rowcount} old candles.")
+        self.write_queue.put(("purge", (tick_retention_seconds, candle_retention_days)))
+        self.purge_old_sessions()
+
+    def purge_old_sessions(self, keep_sessions=3):
+        self.write_queue.put(("purge_sessions", keep_sessions))
 
     def stop(self):
         self.stop_event.set()

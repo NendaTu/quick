@@ -8,69 +8,172 @@ log = logging.getLogger("scalper.models")
 class LearningModel:
     def __init__(self, simulator):
         self.simulator = simulator
+        self.weights = {
+            "imbalance": 1.0,
+            "rsi": 1.0,
+            "macd": 1.0,
+            "ema": 1.0,
+            "trend": 1.0
+        }
+        self.lr = 0.0 # Disabled as per user request "Not yet"
 
     def train_on_tick(self, symbol, prev_features, actual_up):
-        pass
+        # Very basic online learning: increment weight if indicator was correct, decrement if wrong
 
-    def add_tick(self, symbol, prev_features, direction_up):
-        pass
+        # 1. Imbalance
+        imb = prev_features.get("imbalance", 0)
+        if imb != 0:
+            pred_up = imb > 0
+            self.weights["imbalance"] += self.lr if pred_up == actual_up else -self.lr
 
-    def predict(self, symbol, book, equity):
-        features = self.simulator.get_features(symbol)
+        # 2. RSI
+        rsi = prev_features.get("rsi", 50)
+        if rsi < 45 or rsi > 55:
+            pred_up = rsi < 45
+            self.weights["rsi"] += self.lr if pred_up == actual_up else -self.lr
+
+        # 3. MACD
+        macd_hist = prev_features.get("macd_hist", 0)
+        if macd_hist != 0:
+            pred_up = macd_hist > 0
+            self.weights["macd"] += self.lr if pred_up == actual_up else -self.lr
+
+        # 4. EMA
+        ema_short = prev_features.get("ema_short", 0)
+        ema_long = prev_features.get("ema_long", 0)
+        if ema_short != ema_long:
+            pred_up = ema_short > ema_long
+            self.weights["ema"] += self.lr if pred_up == actual_up else -self.lr
+
+        # 5. Trend
+        asset_15m = prev_features.get("asset_15m", 0)
+        if abs(asset_15m) > 0.0001:
+            pred_up = asset_15m > 0
+            self.weights["trend"] += self.lr if pred_up == actual_up else -self.lr
+
+        # Keep weights in a reasonable range
+        for k in self.weights:
+            self.weights[k] = max(0.1, min(5.0, self.weights[k]))
+
+    def predict(self, symbol, book, equity, features=None):
+        if features is None:
+            features = self.simulator.get_features(symbol)
+
         if not features:
             return None
 
-        imb = features.get("imbalance", 0)
+        # 1. Trend Strength Filter (Symmetric)
+        drt = features.get("drt", 0.5)
+        trend_offset = abs(drt - 0.5)
+        if RESTRICT_DRT and trend_offset < TREND_STRENGTH_MIN:
+            log.debug(f"REJECT {symbol}: Trend strength {trend_offset:.4f} < {TREND_STRENGTH_MIN}")
+            return None
 
-        # --- RELAXED SCORING ---
+        imb = features.get("imbalance", 0)
+        # 2. Imbalance filter
+        if RESTRICT_IMBALANCE and abs(imb) < MIN_IMBALANCE:
+            log.debug(f"REJECT {symbol}: Imbalance {imb:.4f} < {MIN_IMBALANCE}")
+            return None
+
+        # --- SCORING WITH LEARNED WEIGHTS ---
         score = 0
 
-        # Imbalance contribution (RELAXED)
-        if imb > 0.10:
-            score += 2
-        elif imb > 0.01:
-            score += 1
-        elif imb < -0.10:
-            score -= 2
-        elif imb < -0.01:
-            score -= 1
+        # Imbalance contribution
+        imb_score = 0
+        if imb > 0.10: imb_score = 2
+        elif imb > MIN_IMBALANCE: imb_score = 1
+        elif imb < -0.10: imb_score = -2
+        elif imb < -MIN_IMBALANCE: imb_score = -1
 
-        # RSI contribution (RELAXED)
+        if RESTRICT_IMBALANCE or not RESTRICT_SCORE:
+            score += imb_score * self.weights["imbalance"]
+
+        # RSI contribution
         rsi = features.get("rsi", 50)
-        if rsi < 45: # Higher threshold for long
-            score += 1
-        elif rsi > 55: # Lower threshold for short
-            score -= 1
+        rsi_score = 0
+        if rsi < RSI_LONG: rsi_score = 1
+        elif rsi > RSI_SHORT: rsi_score = -1
+
+        if RESTRICT_RSI or not RESTRICT_SCORE:
+            score += rsi_score * self.weights["rsi"]
 
         # MACD contribution
         macd_hist = features.get("macd_hist", 0)
-        if macd_hist > 0:
-            score += 1
-        elif macd_hist < 0:
-            score -= 1
+        macd_score = 0
+        if macd_hist > 0: macd_score = 1
+        elif macd_hist < 0: macd_score = -1
+
+        if RESTRICT_MACD or not RESTRICT_SCORE:
+            score += macd_score * self.weights["macd"]
 
         # EMA contribution
         ema_short = features.get("ema_short", 0)
         ema_long = features.get("ema_long", 0)
-        if ema_short > ema_long:
-            score += 1
-        elif ema_short < ema_long:
-            score -= 1
+        ema_score = 0
+        if ema_short > ema_long: ema_score = 1
+        elif ema_short < ema_long: ema_score = -1
 
-        # Trend/Confluence contribution (RELAXED)
+        if RESTRICT_EMA or not RESTRICT_SCORE:
+            score += ema_score * self.weights["ema"]
+
+        # Trend/Confluence contribution
         asset_15m = features.get("asset_15m", 0)
-        if asset_15m > 0.0001:
-            score += 1
-        elif asset_15m < -0.0001:
-            score -= 1
+        trend_score = 0
+        if asset_15m > TREND_15M_MIN: trend_score = 1
+        elif asset_15m < -TREND_15M_MIN: trend_score = -1
 
-        # Check for trade signal (RELAXED: score >= 1)
-        if abs(score) < 1:
+        if RESTRICT_15M_TREND or not RESTRICT_SCORE:
+            score += trend_score * self.weights["trend"]
+
+        # Check for trade signal
+        if RESTRICT_SCORE and abs(score) < 1:
+            log.debug(f"REJECT {symbol}: Score {score:.1f} < 1")
             return None
 
-        # REMOVED safety alignment check to maximize activity
+        # Confidence calculation
+        confidence = min(1.0, (abs(score) + 1) / 10)
+        if RESTRICT_CONFIDENCE and confidence < MIN_CONFIDENCE:
+            log.debug(f"REJECT {symbol}: Confidence {confidence:.2f} < {MIN_CONFIDENCE}")
+            return None
 
-        direction = "buy" if score > 0 else "sell"
+        # Direction check: ensure scoring matches the DRT trend
+        if RESTRICT_DIRECTIONAL_SANITY:
+            if score > 0 and drt < 0.5:
+                log.debug(f"REJECT {symbol}: Long score with bearish DRT {drt:.4f}")
+                return None
+            if score < 0 and drt > 0.5:
+                log.debug(f"REJECT {symbol}: Short score with bullish DRT {drt:.4f}")
+                return None
+
+        # If everything is False, we still need a direction
+        # Priority: Score Direction -> Imbalance -> DRT
+        if score > 0: direction = "buy"
+        elif score < 0: direction = "sell"
+        elif imb > 0: direction = "buy"
+        elif imb < 0: direction = "sell"
+        else: direction = "buy" if drt >= 0.5 else "sell"
+
+        # RSI Restrictions
+        if RESTRICT_RSI:
+            if direction == "buy" and rsi > RSI_LONG:
+                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_LONG}")
+                return None
+            if direction == "sell" and rsi < RSI_SHORT:
+                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_SHORT}")
+                return None
+
+        # BTC Confluence Restrictions
+        if RESTRICT_BTC_CONFLUENCE:
+            btc_15m = features.get("btc_15m", 0)
+            btc_1h = features.get("btc_1h", 0)
+            if direction == "buy":
+                if btc_15m < BTC_CONF_15M_MIN or btc_1h < BTC_CONF_1H_MIN:
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] < {BTC_CONF_15M_MIN}")
+                    return None
+            else: # sell
+                if btc_15m > -BTC_CONF_15M_MIN or btc_1h > -BTC_CONF_1H_MIN:
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN}")
+                    return None
 
         entry = book.best_ask if direction == "buy" else book.best_bid
         tp_move = TP_MOVE
@@ -89,9 +192,20 @@ class LearningModel:
             return None
 
         qty = risk_amount / risk_per_unit
-        qty = math.floor(qty * 1000) / 1000
+
+        # Respect contract precision
+        spec = self.simulator.contract_specs.get(symbol, {})
+        vol_place = int(spec.get('volumePlace', 3))
+        price_place = int(spec.get('pricePlace', 2))
+
+        qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
         if qty <= 0:
             return None
+
+        # Round prices
+        entry = round(entry, price_place)
+        exit_price = round(exit_price, price_place)
+        stop_price = round(stop_price, price_place)
 
         max_lev = LEVERAGE_LIMITS.get(symbol, 125)
         required_margin = (qty * entry) / max_lev
@@ -106,7 +220,7 @@ class LearningModel:
             "exit_price": exit_price,
             "stop_price": stop_price,
             "qty": qty,
-            "confidence": min(1.0, (abs(score) + 1) / 10),
+            "confidence": confidence,
             "btc_confluence": btc_conf
         }
 
