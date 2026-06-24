@@ -83,6 +83,6 @@ MIN_CONFIDENCE = 0.1             # minimum probability to trade
 MIN_IMBALANCE = 0.01             # only trade if |imbalance| > this
 TREND_STRENGTH_MIN = 0.1         # DRT minimum
 # Win/Loss barriers (symmetric 1:1)
-TP_MOVE = 0.003                 # 1.5% take‑profit
-SL_MOVE = 0.001                 # 0.3% stop‑loss
-MAX_ENTRY_SLIPPAGE = 0.001     # 0.05% max slippage for entry
+TP_MOVE = 0.003                 # 0.3% take‑profit
+SL_MOVE = 0.003                 # 0.3% stop‑loss
+MAX_ENTRY_SLIPPAGE = 0.0005     # 0.05% max slippage for entry

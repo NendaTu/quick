@@ -8,61 +8,101 @@ log = logging.getLogger("scalper.models")
 class LearningModel:
     def __init__(self, simulator):
         self.simulator = simulator
+        self.weights = {
+            "imbalance": 1.0,
+            "rsi": 1.0,
+            "macd": 1.0,
+            "ema": 1.0,
+            "trend": 1.0
+        }
+        self.lr = 0.01
 
     def train_on_tick(self, symbol, prev_features, actual_up):
-        pass
+        # Very basic online learning: increment weight if indicator was correct, decrement if wrong
 
-    def add_tick(self, symbol, prev_features, direction_up):
-        pass
+        # 1. Imbalance
+        imb = prev_features.get("imbalance", 0)
+        if imb != 0:
+            pred_up = imb > 0
+            self.weights["imbalance"] += self.lr if pred_up == actual_up else -self.lr
 
-    def predict(self, symbol, book, equity):
-        features = self.simulator.get_features(symbol)
+        # 2. RSI
+        rsi = prev_features.get("rsi", 50)
+        if rsi < 45 or rsi > 55:
+            pred_up = rsi < 45
+            self.weights["rsi"] += self.lr if pred_up == actual_up else -self.lr
+
+        # 3. MACD
+        macd_hist = prev_features.get("macd_hist", 0)
+        if macd_hist != 0:
+            pred_up = macd_hist > 0
+            self.weights["macd"] += self.lr if pred_up == actual_up else -self.lr
+
+        # 4. EMA
+        ema_short = prev_features.get("ema_short", 0)
+        ema_long = prev_features.get("ema_long", 0)
+        if ema_short != ema_long:
+            pred_up = ema_short > ema_long
+            self.weights["ema"] += self.lr if pred_up == actual_up else -self.lr
+
+        # 5. Trend
+        asset_15m = prev_features.get("asset_15m", 0)
+        if abs(asset_15m) > 0.0001:
+            pred_up = asset_15m > 0
+            self.weights["trend"] += self.lr if pred_up == actual_up else -self.lr
+
+        # Keep weights in a reasonable range
+        for k in self.weights:
+            self.weights[k] = max(0.1, min(5.0, self.weights[k]))
+
+    def predict(self, symbol, book, equity, features=None):
+        if features is None:
+            features = self.simulator.get_features(symbol)
+
         if not features:
             return None
 
         imb = features.get("imbalance", 0)
 
-        # --- RELAXED SCORING ---
+        # --- RELAXED SCORING WITH LEARNED WEIGHTS ---
         score = 0
 
         # Imbalance contribution (RELAXED)
-        if imb > 0.10:
-            score += 2
-        elif imb > 0.01:
-            score += 1
-        elif imb < -0.10:
-            score -= 2
-        elif imb < -0.01:
-            score -= 1
+        imb_score = 0
+        if imb > 0.10: imb_score = 2
+        elif imb > 0.01: imb_score = 1
+        elif imb < -0.10: imb_score = -2
+        elif imb < -0.01: imb_score = -1
+        score += imb_score * self.weights["imbalance"]
 
         # RSI contribution (RELAXED)
         rsi = features.get("rsi", 50)
-        if rsi < 45: # Higher threshold for long
-            score += 1
-        elif rsi > 55: # Lower threshold for short
-            score -= 1
+        rsi_score = 0
+        if rsi < 45: rsi_score = 1
+        elif rsi > 55: rsi_score = -1
+        score += rsi_score * self.weights["rsi"]
 
         # MACD contribution
         macd_hist = features.get("macd_hist", 0)
-        if macd_hist > 0:
-            score += 1
-        elif macd_hist < 0:
-            score -= 1
+        macd_score = 0
+        if macd_hist > 0: macd_score = 1
+        elif macd_hist < 0: macd_score = -1
+        score += macd_score * self.weights["macd"]
 
         # EMA contribution
         ema_short = features.get("ema_short", 0)
         ema_long = features.get("ema_long", 0)
-        if ema_short > ema_long:
-            score += 1
-        elif ema_short < ema_long:
-            score -= 1
+        ema_score = 0
+        if ema_short > ema_long: ema_score = 1
+        elif ema_short < ema_long: ema_score = -1
+        score += ema_score * self.weights["ema"]
 
         # Trend/Confluence contribution (RELAXED)
         asset_15m = features.get("asset_15m", 0)
-        if asset_15m > 0.0001:
-            score += 1
-        elif asset_15m < -0.0001:
-            score -= 1
+        trend_score = 0
+        if asset_15m > 0.0001: trend_score = 1
+        elif asset_15m < -0.0001: trend_score = -1
+        score += trend_score * self.weights["trend"]
 
         # Check for trade signal (RELAXED: score >= 1)
         if abs(score) < 1:

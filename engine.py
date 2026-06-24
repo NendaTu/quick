@@ -185,7 +185,8 @@ class Engine:
                         if f"{sym}_buy" in self.open_positions and f"{sym}_sell" in self.open_positions:
                             continue
 
-                        signal = self.model.predict(sym, book, self.equity)
+                        feat = all_features.get(sym)
+                        signal = self.model.predict(sym, book, self.equity, features=feat)
                         if signal is None:
                             continue
 

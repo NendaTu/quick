@@ -15,6 +15,7 @@ class Simulator:
         self.books: Dict[str, SimulatedOrderBook] = {}
         self.leverage_limits = LEVERAGE_LIMITS.copy()
         self.equity = INITIAL_EQUITY
+        self.used_margin = 0.0
 
         self.positions: Dict[Tuple[str, str], dict] = {}
         self.pending_orders: List[dict] = []
@@ -39,36 +40,42 @@ class Simulator:
 
     async def warm_up(self):
         log.info("Starting data warm-up...")
-        for sym in ASSETS + [BTC_SYMBOL]:
-            m1_data = await self.client.get_candles(sym, "1m", limit=500)
-            if not isinstance(m1_data, list):
-                log.warning(f"Failed to fetch 1m candles for {sym}")
-                continue
+        symbols = ASSETS + [BTC_SYMBOL]
+        semaphore = asyncio.Semaphore(10) # Respect rate limits
 
-            for c in reversed(m1_data):
-                ts = float(c[0]) / 1000
-                o, h, l, cl, v = map(float, c[1:6])
-                self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
-                self.ohlcv_1m[sym].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-                self.last_candle_ts[sym]["1m"] = ts
+        async def fetch_symbol_data(sym):
+            async with semaphore:
+                # 1. Fetch 1m candles for indicators
+                m1_data = await self.client.get_candles(sym, "1m", limit=500)
+                if isinstance(m1_data, list):
+                    for c in reversed(m1_data):
+                        ts = float(c[0]) / 1000
+                        o, h, l, cl, v = map(float, c[1:6])
+                        self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+                        self.ohlcv_1m[sym].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                        self.last_candle_ts[sym]["1m"] = ts
 
-            if m1_data:
-                price = float(m1_data[0][4])
-                self.books[sym].mid_price = price
-                self.last_price[sym] = price
-                self.books[sym]._regenerate()
+                    if m1_data:
+                        price = float(m1_data[0][4])
+                        self.books[sym].mid_price = price
+                        self.last_price[sym] = price
+                        self.books[sym]._regenerate()
+                else:
+                    log.warning(f"Failed to fetch 1m candles for {sym}")
 
-            for tf in ["15m", "1H", "4H", "1D"]:
-                c_data = await self.client.get_candles(sym, tf, limit=100)
-                if not isinstance(c_data, list):
-                    log.warning(f"Failed to fetch {tf} candles for {sym}")
-                    continue
-                for c in reversed(c_data):
-                    ts = float(c[0]) / 1000
-                    cl = float(c[4])
-                    self.confluence_history[sym][tf].append(cl)
-                    self.last_candle_ts[sym][tf] = ts
+                # 2. Fetch confluence timeframes
+                for tf in ["15m", "1H", "4H", "1D"]:
+                    c_data = await self.client.get_candles(sym, tf, limit=100)
+                    if isinstance(c_data, list):
+                        for c in reversed(c_data):
+                            ts = float(c[0]) / 1000
+                            cl = float(c[4])
+                            self.confluence_history[sym][tf].append(cl)
+                            self.last_candle_ts[sym][tf] = ts
+                    else:
+                        log.warning(f"Failed to fetch {tf} candles for {sym}")
 
+        await asyncio.gather(*(fetch_symbol_data(s) for s in symbols))
         log.info("Warm-up complete.")
 
     def get_features(self, symbol: str) -> Dict[str, float]:
@@ -85,9 +92,11 @@ class Simulator:
         history = self.ohlcv_1m.get(symbol, [])
         if len(history) < 50: return {}
 
-        closes = [x["c"] for x in history]
-        highs = [x["h"] for x in history]
-        lows = [x["l"] for x in history]
+        # Optimization: only take what we need
+        relevant_history = history[-(INDICATOR_PRICE_HISTORY + 50):]
+        closes = [x["c"] for x in relevant_history]
+        highs = [x["h"] for x in relevant_history]
+        lows = [x["l"] for x in relevant_history]
 
         rsi = compute_rsi(closes, RSI_PERIOD)
         atr = compute_atr(highs, lows, closes, ATR_PERIOD)
@@ -97,6 +106,8 @@ class Simulator:
         supertrend_val, supertrend_dir = compute_supertrend(highs, lows, closes, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER)
         drt = compute_drt(closes, 20)
 
+        # Cache BTC changes globally per tick in the engine if possible,
+        # but here we'll just keep it simple for now.
         btc_changes = {}
         for tf in ["15m", "1H", "4H", "1D"]:
             h = self.confluence_history[BTC_SYMBOL][tf]
@@ -255,8 +266,12 @@ class Simulator:
         return total_cost / qty if qty > 0 else 0
 
     def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf=""):
-        required_margin = (qty * entry_price) / self.leverage_limits.get(symbol, 20)
-        if self.equity < required_margin: return {"code": "1", "msg": "insufficient balance"}
+        max_lev = self.leverage_limits.get(symbol, 20)
+        required_margin = (qty * entry_price) / max_lev
+
+        available_balance = self.equity - self.used_margin
+        if available_balance < required_margin:
+            return {"code": "1", "msg": "insufficient balance"}
 
         fill_price = self._calculate_fill_price(symbol, side, qty)
 
@@ -281,10 +296,15 @@ class Simulator:
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf):
         fee = qty * fill_price * TAKER_FEE
         self.equity -= fee
+
+        max_lev = self.leverage_limits.get(symbol, 20)
+        margin = (qty * fill_price) / max_lev
+        self.used_margin += margin
+
         self.positions[(symbol, side)] = {
-            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf
+            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin
         }
-        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} [{btc_conf}] | equity={self.equity:.2f}")
+        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} [{btc_conf}] | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
     def _execute_exit(self, order, fill_price, exit_type):
         sym = order["symbol"]
@@ -301,8 +321,10 @@ class Simulator:
         fee = qty * fill_price * TAKER_FEE
         round_trip_pnl = pnl - fee - pos["entry_fee"]
         self.equity += (pnl - fee)
+        self.used_margin -= pos.get("margin", 0)
+        self.used_margin = max(0, self.used_margin)
 
-        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f}")
+        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} [{pos['btc_conf']}] | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         del self.positions[(sym, side)]
         self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
