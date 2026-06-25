@@ -266,6 +266,26 @@ class Simulator:
             price = self.last_price.get(sym)
             if not price: continue
 
+            # Breakeven Trigger Logic
+            if USE_BREAKEVEN_TRIGGER and o["type"] == "stop":
+                pos = self.positions.get((sym, side))
+                if pos and not o.get("is_breakeven"):
+                    entry = pos["entry_price"]
+                    max_lev = self.leverage_limits.get(sym, 20)
+
+                    # Calculate current ROE
+                    if side == "buy":
+                        roe = (price / entry - 1) * max_lev
+                    else:
+                        roe = (entry / price - 1) * max_lev
+
+                    if roe >= BREAKEVEN_ROI_THRESHOLD:
+                        # Move SL to Entry + small buffer (0.05%) to cover partial fees
+                        buffer = 0.0005
+                        o["triggerPrice"] = entry * (1 + buffer) if side == "buy" else entry * (1 - buffer)
+                        o["is_breakeven"] = True
+                        log.info(f"BREAKEVEN TRIGGERED for {sym} {side.upper()} @ ROE={roe*100:.2f}% | SL moved to {o['triggerPrice']:.8f}")
+
             if o["type"] == "entry_limit":
                 # Check if price reached our limit
                 # For a BUY limit, price must be <= limit

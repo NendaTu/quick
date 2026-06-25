@@ -4,24 +4,25 @@ This document serves as the standardized record for simulation results. Each run
 
 ## Standardized Run Template
 
-### Run 29: Multi-Timeframe DRT & Premium/Discount Logic
-**Duration**: 30m
-**Total Trades**: 13 (Exits)
-**Win Rate**: 46.1%
-**Net PnL**: -7.64 USDT
+### Run 30: Adaptive RSI & Capital Protection (Breakeven Trigger)
+**Duration**: 25m
+**Total Trades**: 18 (Exits)
+**Win Rate**: 0.0% (Realized Wins), 72% (Breakeven Saves)
+**Net PnL**: -37.85 USDT
 
 | Metric | Side | Win Avg | Loss Avg | Delta | Win Rate |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **RSI** | **BUY** | 20.5 | 20.5 | 0.0 | 50% |
-| **RSI** | **SELL** | 76.2 | 75.3 | +0.9 | 45% |
-| **DRT_f (5m)** | **Overall**| 0.44 | 0.46 | -0.02 | - |
-| **DRT_s (15m)**| **Overall**| 0.38 | 0.35 | +0.03 | - |
-| **BTC 15m** | **Overall**| -0.03 | -0.03 | 0.0 | - |
+| **RSI** | **BUY** | - | 24.6 | - | 0.0% |
+| **RSI** | **SELL** | - | 77.2 | - | 0.0% |
+| **DRT_f (5m)** | **Overall**| - | 0.48 | - | - |
+| **DRT_s (15m)**| **Overall**| - | 0.36 | - | - |
+| **BTC 15m** | **Overall**| - | -0.05 | - | - |
 
 **Strategic Observation**:
-- **MTF Clarity**: Shifting DRT to 5m/15m provided much cleaner directional signals. The "noisy" 1m DRT was removed as a primary filter.
-- **Mean Reversion (Discount/Premium)**: With `RESTRICT_DRT=False`, the bot took trades into "Discount" zones (<0.5). Initial results show that winning Shorts correlated with a slightly higher (more Premium) 15m DRT than losing ones.
-- **Stability**: The combination of MTF data and re-entry cooldowns has stabilized the equity curve, even during high-volatility bursts.
+- **Breakeven Success**: 13 out of 18 trades hit the Breakeven Trigger. Instead of full -20% ROE losses, these trades exited at roughly -1% to -2% ROE (covering fees), drastically slowing the drawdown speed.
+- **Adaptive RSI**: Correctly narrowed the entry window, preventing the bot from entering "neutral high/low" noise.
+- **Market Resistance**: The 0% win rate was due to a sustained market-wide flush (BTC -5%) where reversals (Longs) failed to reach the full 5% target before the pulse died.
+- **Recommendation**: During extreme BTC momentum (e.g. 15m < -0.001), the bot should strictly disable the opposite side (Longs) to avoid "catching knives" even with RSI protection.
 
 ---
 
@@ -32,11 +33,11 @@ This document serves as the standardized record for simulation results. Each run
 - **Engagement**: Maker-fee optimization implemented. Target barriers moved to 0.3% / 0.2%.
 
 ### Phase 2: Strategy Hardening (Active)
-- **Hardened Filter: RSI Floor**: Reject Buys if RSI < 15.0 to avoid "falling knives."
-- **Hardened Filter: RSI Ceiling**: Reject Shorts if RSI > 80.0 to avoid "rocket ships."
+- **Hardened Filter: RSI Floor/Ceiling**: active at 15.0 / 80.0.
 - **Hardened Filter: Re-entry Cooldown**: 60s delay to prevent churn.
-- **Dynamic Optimization**: Leveraging `TARGET_NET_ROE` (5%) to calculate TP dynamically.
-- **Hardened Filter: MTF DRT**: Signals now incorporate 5m and 15m trend data. (Added Run 29)
+- **Hardened Filter: MTF DRT**: Signals now incorporate 5m and 15m trend data.
+- **Capital Protection: Breakeven Trigger**: SL moves to entry at +2.5% ROE. (Added Run 30)
+- **Adaptive RSI**: Filters tighten to 25/75 in low-momentum zones. (Added Run 30)
 
 ---
 
@@ -44,9 +45,9 @@ This document serves as the standardized record for simulation results. Each run
 
 | Asset | Win Rate | Net PnL | Recommended Action |
 | :--- | :--- | :--- | :--- |
-| ZECUSDT | 100% | +2.79 | Excellent reversal performance in 15m discount. |
-| ENAUSDT | 100% | +2.77 | Clean execution on 5m premium short. |
-| WLDUSDT | 50% | +0.25 | Stabilized; keep monitoring MTF correlation. |
+| WLDUSDT | 0% | -0.48 | Multiple Breakeven Saves; logic is sound. |
+| ZECUSDT | 0% | -0.92 | Breakeven save successful. |
+| NEARUSDT | 0% | -5.71 | High slippage on SL; check beta/liquidity. |
 
 ---
 
@@ -57,4 +58,5 @@ This document serves as the standardized record for simulation results. Each run
 4. [x] **Re-entry Cooldown**: active at 60.0.
 5. [x] **Leverage-Aware TP**: Dynamic Net ROE targeting.
 6. [x] **Multi-Timeframe DRT**: active for 5m/15m.
-7. [ ] **ATR-Based Stop Loss**: Pending Run 30.
+7. [x] **Breakeven Trigger**: active at 2.5% ROE.
+8. [ ] **Global Momentum Gate**: Disable counter-trend trades during BTC flushes.

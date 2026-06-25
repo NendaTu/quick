@@ -145,24 +145,46 @@ class LearningModel:
 
         # RSI Restrictions
         if RESTRICT_RSI:
+            # 1. Adaptive RSI Logic
+            upper_limit = RSI_SHORT
+            lower_limit = RSI_LONG
+
+            if USE_ADAPTIVE_RSI:
+                drt_f = features.get("drt_fast", 0.5)
+                # If momentum is not extreme (>0.6 or <0.4), use TIGHT filters
+                if direction == "buy" and drt_f < 0.6:
+                    lower_limit = RSI_TIGHT_LONG
+                elif direction == "sell" and drt_f > 0.4:
+                    upper_limit = RSI_TIGHT_SHORT
+
             if direction == "buy":
-                if rsi > RSI_LONG:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_LONG}")
+                if rsi > lower_limit:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {lower_limit} (Adaptive)")
                     return None
                 if rsi < RSI_BUY_FLOOR:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_BUY_FLOOR} (Floor)")
                     return None
             if direction == "sell":
-                if rsi < RSI_SHORT:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_SHORT}")
+                if rsi < upper_limit:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive)")
                     return None
                 if rsi > RSI_SHORT_CEILING:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling)")
                     return None
 
+        # DRT Velocity Check
+        if USE_DRT_VELOCITY:
+            drt_1m = features.get("drt", 0.5)
+            drt_5m = features.get("drt_fast", 0.5)
+            if direction == "buy" and drt_1m <= drt_5m:
+                log.debug(f"REJECT {symbol}: DRT velocity negative ({drt_1m:.4f} <= {drt_5m:.4f})")
+                return None
+            if direction == "sell" and drt_1m >= drt_5m:
+                log.debug(f"REJECT {symbol}: DRT velocity positive ({drt_1m:.4f} >= {drt_5m:.4f})")
+                return None
+
         # BTC Confluence Restrictions
         if RESTRICT_BTC_CONFLUENCE:
-            btc_15m = features.get("btc_15m", 0)
             btc_1h = features.get("btc_1h", 0)
             if direction == "buy":
                 if btc_15m < BTC_CONF_15M_MIN or btc_1h < BTC_CONF_1H_MIN:
@@ -184,6 +206,12 @@ class LearningModel:
 
             # Use max_lev to determine required price move for TARGET_NET_ROE
             tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate)
+
+            # Cap TP by 15m ATR
+            if USE_ATR_CAPPED_TP and features.get("atr"):
+                # Use a rough 15m ATR proxy (since atr is 1m in features, multiply by sqrt(15) ~3.8)
+                atr_15m_move = (features["atr"] * 3.8) / entry
+                tp_move = min(tp_move, atr_15m_move)
 
             # Safety: ensure tp_move is at least a minimum threshold or the config baseline
             tp_move = max(tp_move, TP_MOVE)

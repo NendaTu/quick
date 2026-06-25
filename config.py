@@ -102,8 +102,17 @@ RSI_BUY_FLOOR = 15.0             # Reject Buys if RSI < this
 RSI_SHORT_CEILING = 80.0         # Reject Shorts if RSI > this
 REENTRY_COOLDOWN = 60.0          # Seconds to wait after exit before re-entering same asset
 USE_DYNAMIC_TARGETS = True       # Calculate TP/SL based on leverage and TARGET_NET_ROE
-USE_ATR_SL = False               # Use ATR for stop loss
-ATR_SL_MULT = 2.0                # ATR multiplier for SL
+USE_ATR_SL = True                # Use ATR for stop loss
+ATR_SL_MULT = 1.5                # ATR multiplier for SL
+
+# --- Advanced Strategy Features ---
+USE_BREAKEVEN_TRIGGER = True     # Move SL to entry after price moves halfway to TP
+BREAKEVEN_ROI_THRESHOLD = 0.025  # 2.5% ROE threshold for breakeven
+USE_ATR_CAPPED_TP = True         # Cap dynamic TP by 15m ATR to ensure reachability
+USE_DRT_VELOCITY = True          # Ensure pulse is accelerating in trade direction
+USE_ADAPTIVE_RSI = True          # Tighten RSI filters unless momentum is high
+RSI_TIGHT_LONG = 25.0
+RSI_TIGHT_SHORT = 75.0
 
 # --- Scoring Thresholds ---
 RSI_LONG = 40.0
@@ -139,7 +148,7 @@ RESTRICT_ASSET_CONFLUENCE = False
 RESTRICT_LIQUIDITY = False
 RESTRICT_SLIPPAGE = False
 RESTRICT_MIN_VAL = False
-RESTRICT_SCORE = True
+RESTRICT_SCORE = False
 
 # --- BTC Confluence Thresholds ---
 BTC_CONF_15M_MIN = 0.0002
