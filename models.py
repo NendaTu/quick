@@ -106,16 +106,6 @@ class LearningModel:
         if RESTRICT_MACD or not RESTRICT_SCORE:
             score += macd_score * self.weights["macd"]
 
-        # EMA contribution
-        ema_short = features.get("ema_short", 0)
-        ema_long = features.get("ema_long", 0)
-        ema_score = 0
-        if ema_short > ema_long: ema_score = 1
-        elif ema_short < ema_long: ema_score = -1
-
-        if RESTRICT_EMA or not RESTRICT_SCORE:
-            score += ema_score * self.weights["ema"]
-
         # Trend/Confluence contribution
         asset_15m = features.get("asset_15m", 0)
         trend_score = 0
@@ -250,15 +240,21 @@ class LearningModel:
             "btc_confluence": btc_conf
         }
 
+        # Tag Premium/Discount for analysis
+        drt_fast = features.get("drt_fast", 0.5)
+        drt_slow = features.get("drt_slow", 0.5)
+
+        premium_fast = "PREM" if drt_fast > 0.5 else "DISC"
+        premium_slow = "PREM" if drt_slow > 0.5 else "DISC"
+
         signal.update({
             "vol_pct": features.get("vol_pct", 0),
             "rsi": rsi,
             "atr": features.get("atr", 0),
             "macd": features.get("macd", 0),
-            "ema_short": ema_short,
-            "ema_long": ema_long,
-            "supertrend": features.get("supertrend", 0),
             "drt": features.get("drt", 0.5),
+            "drt_f": f"{drt_fast:.4f}({premium_fast})",
+            "drt_s": f"{drt_slow:.4f}({premium_slow})"
         })
         return signal
 

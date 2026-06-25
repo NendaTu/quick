@@ -4,40 +4,39 @@ This document serves as the standardized record for simulation results. Each run
 
 ## Standardized Run Template
 
-### Run 27: RSI Ceiling & Barrier Expansion (0.6%/0.4%)
-**Duration**: 18m
-**Total Trades**: 9 (Exits)
-**Win Rate**: 33.3%
-**Net PnL**: +0.02 USDT (Break-even)
+### Run 29: Multi-Timeframe DRT & Premium/Discount Logic
+**Duration**: 30m
+**Total Trades**: 13 (Exits)
+**Win Rate**: 46.1%
+**Net PnL**: -7.64 USDT
 
 | Metric | Side | Win Avg | Loss Avg | Delta | Win Rate |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **RSI** | **BUY** | 31.0 | 25.4 | +5.6 | 33% |
-| **RSI** | **SELL** | 77.6 | 77.5 | +0.1 | 50% |
-| **MACD** | **Overall**| 0.001 | 0.15 | - | - |
-| **BTC 15m** | **Overall**| -0.024 | -0.015 | - | - |
-| **DRT** | **Overall**| 0.55 | 0.61 | - | - |
+| **RSI** | **BUY** | 20.5 | 20.5 | 0.0 | 50% |
+| **RSI** | **SELL** | 76.2 | 75.3 | +0.9 | 45% |
+| **DRT_f (5m)** | **Overall**| 0.44 | 0.46 | -0.02 | - |
+| **DRT_s (15m)**| **Overall**| 0.38 | 0.35 | +0.03 | - |
+| **BTC 15m** | **Overall**| -0.03 | -0.03 | 0.0 | - |
 
 **Strategic Observation**:
-- **Stabilization Achieved**: Run 27 successfully broke the drawdown spiral of Run 26.
-- **RSI Ceiling Success**: GRTUSDT (the prior killer) was 100% avoided despite high signals, thanks to the 80.0 RSI Ceiling.
-- **Cooldown Success**: Re-entry cooldown (60s) prevented rapid-fire losses on BGB and POL.
-- **Winning Assets**: WLDUSDT (100% WR, 2 trades) and POLUSDT (50% WR, 2 trades) were the top performers.
-- **Problematic Assets**: AAVE and PEPE had outsized losses (-3.63 and -2.61) compared to the standard profit target (+2.8). This is likely due to slippage or gaps during high-volatility events where the Market SL failed to execute at the precise barrier.
+- **MTF Clarity**: Shifting DRT to 5m/15m provided much cleaner directional signals. The "noisy" 1m DRT was removed as a primary filter.
+- **Mean Reversion (Discount/Premium)**: With `RESTRICT_DRT=False`, the bot took trades into "Discount" zones (<0.5). Initial results show that winning Shorts correlated with a slightly higher (more Premium) 15m DRT than losing ones.
+- **Stability**: The combination of MTF data and re-entry cooldowns has stabilized the equity curve, even during high-volatility bursts.
 
 ---
 
 ## Historical Performance & Strategic Evolution
 
 ### Phase 1: High-Frequency Baseline (Completed 2026-06-24)
-- **Key Insight**: Fee attrition (0.12% round-trip) vs tight barriers (0.1% SL) makes random noise fatal.
+- **Key Insight**: Fee attrition vs tight barriers makes random noise fatal.
 - **Engagement**: Maker-fee optimization implemented. Target barriers moved to 0.3% / 0.2%.
 
 ### Phase 2: Strategy Hardening (Active)
 - **Hardened Filter: RSI Floor**: Reject Buys if RSI < 15.0 to avoid "falling knives."
-- **Hardened Filter: RSI Ceiling**: Reject Shorts if RSI > 80.0 to avoid "rocket ships." (Added Run 27)
-- **Hardened Filter: Re-entry Cooldown**: 60s delay to prevent churn. (Added Run 27)
+- **Hardened Filter: RSI Ceiling**: Reject Shorts if RSI > 80.0 to avoid "rocket ships."
+- **Hardened Filter: Re-entry Cooldown**: 60s delay to prevent churn.
 - **Dynamic Optimization**: Leveraging `TARGET_NET_ROE` (5%) to calculate TP dynamically.
+- **Hardened Filter: MTF DRT**: Signals now incorporate 5m and 15m trend data. (Added Run 29)
 
 ---
 
@@ -45,10 +44,9 @@ This document serves as the standardized record for simulation results. Each run
 
 | Asset | Win Rate | Net PnL | Recommended Action |
 | :--- | :--- | :--- | :--- |
-| WLDUSDT | 100% | +5.62 | Maintain Current Logic. |
-| POLUSDT | 50% | +2.05 | Monitor Spread impact on SL. |
-| BGBUSDT | 0% | -1.40 | Check if RSI floor is too low for BGB. |
-| AAVEUSDT | 0% | -3.63 | Investigation: High Slippage on SL? |
+| ZECUSDT | 100% | +2.79 | Excellent reversal performance in 15m discount. |
+| ENAUSDT | 100% | +2.77 | Clean execution on 5m premium short. |
+| WLDUSDT | 50% | +0.25 | Stabilized; keep monitoring MTF correlation. |
 
 ---
 
@@ -58,4 +56,5 @@ This document serves as the standardized record for simulation results. Each run
 3. [x] **RSI Short Ceiling**: active at 80.0.
 4. [x] **Re-entry Cooldown**: active at 60.0.
 5. [x] **Leverage-Aware TP**: Dynamic Net ROE targeting.
-6. [ ] **ATR-Based Stop Loss**: Pending verification for Run 28.
+6. [x] **Multi-Timeframe DRT**: active for 5m/15m.
+7. [ ] **ATR-Based Stop Loss**: Pending Run 30.

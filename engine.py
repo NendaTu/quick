@@ -282,9 +282,8 @@ class Engine:
 
                         signal_msg = (f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
                                       f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
-                                      f"[{btc_conf}] drt={drt:.4f} rsi={signal.get('rsi',50):.1f} "
-                                      f"macd={signal.get('macd',0):.4f} ema={signal.get('ema_short',0):.4f} "
-                                      f"vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
+                                      f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
+                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
 
                         # Always log for DB, but conditionally for console
                         if LOG_SIGNALS:

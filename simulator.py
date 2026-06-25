@@ -26,7 +26,7 @@ class Simulator:
         self.db = Database()
         self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
-        self.ohlcv_1m: Dict[str, List[dict]] = {}
+        self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
         self.confluence_history: Dict[str, Dict[str, List[float]]] = {}
         self.last_candle_ts: Dict[str, Dict[str, float]] = {}
         self.last_price: Dict[str, float] = {}
@@ -36,9 +36,9 @@ class Simulator:
         all_assets = ASSETS + [BTC_SYMBOL]
         for sym in all_assets:
             self.books[sym] = SimulatedOrderBook(sym, BASE_PRICES.get(sym, 1.0))
-            self.ohlcv_1m[sym] = []
-            self.confluence_history[sym] = {"15m": [], "1H": [], "4H": [], "1D": []}
-            self.last_candle_ts[sym] = {"1m": 0, "15m": 0, "1H": 0, "4H": 0, "1D": 0}
+            self.ohlcv[sym] = {tf: [] for tf in AVAILABLE_TIMEFRAMES}
+            self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D"]}
+            self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
             self.last_price[sym] = BASE_PRICES.get(sym, 1.0)
 
     async def warm_up(self):
@@ -57,25 +57,28 @@ class Simulator:
 
         async def fetch_symbol_data(sym):
             async with semaphore:
-                # 1. Fetch 1m candles for indicators
-                m1_data = await self.client.get_candles(sym, "1m", limit=500)
-                if isinstance(m1_data, list):
-                    for c in reversed(m1_data):
-                        ts = float(c[0]) / 1000
-                        o, h, l, cl, v = map(float, c[1:6])
-                        self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
-                        self.ohlcv_1m[sym].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-                        self.last_candle_ts[sym]["1m"] = ts
+                # 1. Fetch OHLCV for all relevant timeframes
+                for tf in AVAILABLE_TIMEFRAMES:
+                    limit = 500 if tf == "1m" else 100
+                    data = await self.client.get_candles(sym, tf, limit=limit)
+                    if isinstance(data, list):
+                        for c in reversed(data):
+                            ts = float(c[0]) / 1000
+                            o, h, l, cl, v = map(float, c[1:6])
+                            if tf == "1m":
+                                self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+                            self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                            self.last_candle_ts[sym][tf] = ts
 
-                    if m1_data:
-                        price = float(m1_data[0][4])
-                        self.books[sym].mid_price = price
-                        self.last_price[sym] = price
-                        self.books[sym]._regenerate()
-                else:
-                    log.warning(f"Failed to fetch 1m candles for {sym}")
+                        if tf == "1m" and data:
+                            price = float(data[0][4])
+                            self.books[sym].mid_price = price
+                            self.last_price[sym] = price
+                            self.books[sym]._regenerate()
+                    else:
+                        log.warning(f"Failed to fetch {tf} candles for {sym}")
 
-                # 2. Fetch confluence timeframes
+                # 2. Fetch confluence history (closes only)
                 for tf in ["15m", "1H", "4H", "1D"]:
                     c_data = await self.client.get_candles(sym, tf, limit=100)
                     if isinstance(c_data, list):
@@ -101,22 +104,34 @@ class Simulator:
         spread = book.best_ask - book.best_bid
         vol_pct = min(1.0, total_vol / 4000.0)
 
-        history = self.ohlcv_1m.get(symbol, [])
-        if len(history) < 50: return {}
+        def get_ohlc(tf):
+            h = self.ohlcv.get(symbol, {}).get(tf, [])
+            if not h: return [], [], []
+            relevant = h[-(INDICATOR_PRICE_HISTORY + 50):]
+            return [x["c"] for x in relevant], [x["h"] for x in relevant], [x["l"] for x in relevant]
 
-        # Optimization: only take what we need
-        relevant_history = history[-(INDICATOR_PRICE_HISTORY + 50):]
-        closes = [x["c"] for x in relevant_history]
-        highs = [x["h"] for x in relevant_history]
-        lows = [x["l"] for x in relevant_history]
+        # RSI (1m)
+        c1, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["rsi"])
+        rsi = compute_rsi(c1, RSI_PERIOD) if len(c1) > 20 else 50.0
 
-        rsi = compute_rsi(closes, RSI_PERIOD)
-        atr = compute_atr(highs, lows, closes, ATR_PERIOD)
-        macd, macd_signal, macd_hist = compute_macd(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
-        ema_short = compute_ema(closes, EMA_SHORT)
-        ema_long = compute_ema(closes, EMA_LONG)
-        supertrend_val, supertrend_dir = compute_supertrend(highs, lows, closes, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER)
-        drt = compute_drt(closes, 20)
+        # MACD (1m)
+        c1, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["macd"])
+        macd, macd_signal, macd_hist = compute_macd(c1, MACD_FAST, MACD_SLOW, MACD_SIGNAL) if len(c1) > 30 else (0,0,0)
+
+        # ATR (1m)
+        c1, h1, l1 = get_ohlc(INDICATOR_TIMEFRAMES["atr"])
+        atr = compute_atr(h1, l1, c1, ATR_PERIOD) if len(c1) > 20 else 0.0
+
+        # DRT SLOW (15m)
+        cs, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["drt_slow"])
+        drt_slow = compute_drt(cs, 20) if len(cs) >= 20 else 0.5
+
+        # DRT FAST (5m)
+        cf, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["drt_fast"])
+        drt_fast = compute_drt(cf, 20) if len(cf) >= 20 else 0.5
+
+        # Legacy DRT for backwards compatibility in logs
+        drt = compute_drt(c1, 20) if len(c1) >= 20 else 0.5
 
         # BTC confluence cache (global per tick)
         now = time.time()
@@ -147,11 +162,9 @@ class Simulator:
             "macd": macd,
             "macd_signal": macd_signal,
             "macd_hist": macd_hist,
-            "ema_short": ema_short,
-            "ema_long": ema_long,
-            "supertrend": supertrend_val,
-            "supertrend_dir": supertrend_dir,
             "drt": drt,
+            "drt_slow": drt_slow,
+            "drt_fast": drt_fast,
             **self._btc_confluence_cache,
             **asset_changes,
         }
@@ -181,32 +194,43 @@ class Simulator:
                 self._update_candles(instId, price, size, ts)
 
     def _update_candles(self, symbol, price, size, ts):
-        tf_map = {"1m": 60, "15m": 900, "1H": 3600, "4H": 14400, "1D": 86400}
+        tf_map = {
+            "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+            "1H": 3600, "4H": 14400, "1D": 86400
+        }
         for tf_name, seconds in tf_map.items():
+            if tf_name not in AVAILABLE_TIMEFRAMES: continue
+
             candle_start = (ts // seconds) * seconds
             last_ts = self.last_candle_ts[symbol].get(tf_name, 0)
 
             if candle_start > last_ts:
+                # New candle
+                self.ohlcv[symbol][tf_name].append({"ts": candle_start, "o": price, "h": price, "l": price, "c": price, "v": size})
+                if len(self.ohlcv[symbol][tf_name]) > 1000: self.ohlcv[symbol][tf_name].pop(0)
+
+                # Persistence for 1m
                 if tf_name == "1m":
-                    self.ohlcv_1m[symbol].append({"ts": candle_start, "o": price, "h": price, "l": price, "c": price, "v": size})
-                    if len(self.ohlcv_1m[symbol]) > 1000: self.ohlcv_1m[symbol].pop(0)
-                    prev = self.ohlcv_1m[symbol][-2] if len(self.ohlcv_1m[symbol]) > 1 else None
+                    prev = self.ohlcv[symbol][tf_name][-2] if len(self.ohlcv[symbol][tf_name]) > 1 else None
                     if prev:
                         self.db.save_candle(symbol, "1m", prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
-                else:
+
+                # Update confluence history if it's a tracking timeframe
+                if tf_name in self.confluence_history[symbol]:
                     self.confluence_history[symbol][tf_name].append(price)
                     if len(self.confluence_history[symbol][tf_name]) > 200: self.confluence_history[symbol][tf_name].pop(0)
+
                 self.last_candle_ts[symbol][tf_name] = candle_start
             else:
-                if tf_name == "1m":
-                    if self.ohlcv_1m[symbol]:
-                        curr = self.ohlcv_1m[symbol][-1]
-                        curr["h"] = max(curr["h"], price)
-                        curr["l"] = min(curr["l"], price)
-                        curr["c"] = price
-                        curr["v"] += size
-                else:
-                    if self.confluence_history[symbol][tf_name]:
+                # Update current candle
+                if self.ohlcv[symbol][tf_name]:
+                    curr = self.ohlcv[symbol][tf_name][-1]
+                    curr["h"] = max(curr["h"], price)
+                    curr["l"] = min(curr["l"], price)
+                    curr["c"] = price
+                    curr["v"] += size
+
+                    if tf_name in self.confluence_history[symbol]:
                         self.confluence_history[symbol][tf_name][-1] = price
 
     async def data_feed_task(self, engine):
