@@ -115,7 +115,11 @@ class Engine:
         pos_key = f"{symbol}_{side}"
         # If orig_side not passed (e.g. from simulator), default to current
         if orig_side is None: orig_side = side
-        self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry, "orig_side": orig_side, "is_contr": is_contr}
+        self.open_positions[pos_key] = {
+            "side": side, "qty": qty, "entry": entry,
+            "orig_side": orig_side, "is_contr": is_contr,
+            "ts": time.time()
+        }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
@@ -245,7 +249,26 @@ class Engine:
                     except Exception as e:
                         log.error(f"Feature calculation error for {sym}: {e}")
 
-                # 3. Check Signal and Trade
+                # 3. TTL (Time-to-Live) Exit Check
+                for pos_key in list(self.open_positions.keys()):
+                    pos = self.open_positions[pos_key]
+                    if time.time() - pos.get("ts", 0) > TRADE_TTL_SECONDS:
+                        sym = pos_key.split("_")[0]
+                        side = pos["side"]
+                        # Request TTL Exit from simulator (Mid-price limit exit)
+                        if hasattr(self.exchange, "books"):
+                            book = self.exchange.books.get(sym)
+                            if book:
+                                mid = (book.best_bid + book.best_ask) / 2
+                                log.info(f"TTL EXPIRED for {pos_key} ({time.time() - pos['ts']:.0f}s) | Triggering Limit Exit @ {mid:.8f}")
+                                self.exchange.pending_orders.append({
+                                    "symbol": sym, "pos_side": side, "type": "tp",
+                                    "price": mid, "qty": pos["qty"], "is_ttl": True
+                                })
+                                # Remove from local state to prevent double TTL
+                                del self.open_positions[pos_key]
+
+                # 4. Check Signal and Trade
                 if len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
                     for sym in self.enabled_assets:
                         # Re-check limit inside loop to avoid burst over-trading

@@ -277,7 +277,8 @@ class LearningModel:
 
             # Use max_lev to determine required price move for TARGET_NET_ROE
             max_lev = self.simulator.leverage_limits.get(symbol, 20)
-            tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate)
+            # Factor in fee overhead and EXPECTED_SLIPPAGE on the exit side
+            tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
 
             # Cap TP by 15m ATR
             if USE_ATR_CAPPED_TP and features.get("atr"):

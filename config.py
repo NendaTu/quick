@@ -22,7 +22,10 @@ MAX_DURATION = 14400             # stop after 4 hours (seconds)
 # --- Execution ---
 ENTRY_ORDER_TYPE = "limit"       # "market" or "limit"
 TP_ORDER_TYPE = "limit"          # "market" or "limit"
-SL_ORDER_TYPE = "market"         # "market" or "limit"
+SL_ORDER_TYPE = "limit"          # "market" or "limit"
+SL_DISASTER_BUFFER = 0.001       # 0.1% move past SL price before Market backup
+TRADE_TTL_SECONDS = 180          # 3 minute limit
+EXPECTED_SLIPPAGE = 0.0005       # 0.05% expected slippage for math
 LIMIT_CHASE_TIMEOUT = 10.0       # seconds
 
 # --- Fees ---
@@ -94,14 +97,14 @@ RSI_SHORT = 60.0
 TREND_15M_MIN = 0.0001
 
 # --- Timeframes ---
-AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "4H", "1D"]
+AVAILABLE_TIMEFRAMES = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"]
 INDICATOR_TIMEFRAMES = {
-    "rsi": "1m",
-    "macd": "1m",
-    "ema": "1m",
-    "atr": "1m",
-    "drt_slow": "15m",
-    "drt_fast": "5m",
+    "rsi": "1min",
+    "macd": "1min",
+    "ema": "1min",
+    "atr": "1min",
+    "drt_slow": "15min",
+    "drt_fast": "5min",
 }
 
 # --- Restriction Toggles (Naked Baseline) ---

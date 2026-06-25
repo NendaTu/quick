@@ -221,8 +221,8 @@ class Simulator:
 
     def _update_candles(self, symbol, price, size, ts):
         tf_map = {
-            "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
-            "1H": 3600, "4H": 14400, "1D": 86400
+            "1min": 60, "5min": 300, "15min": 900, "30min": 1800,
+            "1h": 3600, "4h": 14400, "1day": 86400
         }
         for tf_name, seconds in tf_map.items():
             if tf_name not in AVAILABLE_TIMEFRAMES: continue
@@ -236,7 +236,7 @@ class Simulator:
                 if len(self.ohlcv[symbol][tf_name]) > 1000: self.ohlcv[symbol][tf_name].pop(0)
 
                 # Persistence for 1m
-                if tf_name == "1m":
+                if tf_name == "1min":
                     prev = self.ohlcv[symbol][tf_name][-2] if len(self.ohlcv[symbol][tf_name]) > 1 else None
                     if prev:
                         self.db.save_candle(symbol, "1m", prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
@@ -326,8 +326,23 @@ class Simulator:
                     fills.append((o, "entry_timeout"))
 
             elif o["type"] == "stop":
-                if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
-                elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
+                # Soft Stop Logic
+                if SL_ORDER_TYPE == "limit":
+                    # Check if price reached our limit (for BUY stop, price <= limit)
+                    if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
+                    elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
+
+                    # Disaster Backup: If price moves TOO FAR past our limit, market fill
+                    else:
+                        # For a BUY stop (exit side 'sell'): we want to exit if price CRASHES below our limit
+                        # For a SELL stop (exit side 'buy'): we want to exit if price MOONS above our limit
+                        distance = (price / o["triggerPrice"] - 1) if side == "buy" else (o["triggerPrice"] / price - 1)
+                        if distance > SL_DISASTER_BUFFER:
+                            fills.append((o, "stop_disaster"))
+                else:
+                    # Market Stop
+                    if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
+                    elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
             elif o["type"] == "tp":
                 if side == "buy" and price >= o["price"]: fills.append((o, "tp"))
                 elif side == "sell" and price <= o["price"]: fills.append((o, "tp"))
@@ -353,11 +368,22 @@ class Simulator:
                     {"id": tid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp_price"], "qty": o["qty"], "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
                 ])
             else:
-                order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
+                if et == "stop_disaster":
+                    order_type = "market"
+                    exit_type = "stop_backup"
+                else:
+                    order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
+                    exit_type = et
+
                 exit_action = "sell" if o["pos_side"] == "buy" else "buy"
-                # If it's a TP limit, we get exactly our price
-                fill_price = o["price"] if et == "tp" and order_type == "limit" else self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
-                self._execute_exit(o, fill_price, et, order_type)
+
+                # Use limit price if it's a limit order, else calculate slippage for market
+                if order_type == "limit":
+                    fill_price = o.get("price") or o.get("triggerPrice")
+                else:
+                    fill_price = self._calculate_fill_price(o["symbol"], exit_action, o["qty"])
+
+                self._execute_exit(o, fill_price, exit_type, order_type)
 
             if o in self.pending_orders:
                 self.pending_orders.remove(o)
