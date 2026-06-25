@@ -75,10 +75,12 @@ class Simulator:
                 self.last_price[sym] = price
 
         symbols = self.discovered_assets + [BTC_SYMBOL]
-        semaphore = asyncio.Semaphore(10) # Respect rate limits
+        semaphore = asyncio.Semaphore(5) # Reduced to stay within strict limits
 
         async def fetch_symbol_data(sym):
             async with semaphore:
+                # Add a small staggered delay to prevent burst 429s
+                await asyncio.sleep(0.1 * random.random())
                 # 1. Fetch OHLCV for all relevant timeframes
                 for tf in AVAILABLE_TIMEFRAMES:
                     limit = 500 if tf == "1m" else 100

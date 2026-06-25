@@ -4,6 +4,7 @@ import time
 import base64
 import json
 import asyncio
+import random
 import aiohttp
 import logging
 import urllib.parse
@@ -42,7 +43,7 @@ class BitGetClient:
             "locale": "en-US"
         }
 
-    async def request(self, method: str, path: str, params: Dict = None, data: Dict = None) -> Dict:
+    async def request(self, method: str, path: str, params: Dict = None, data: Dict = None, retries: int = 5) -> Dict:
         session = await self.get_session()
 
         signed_path = path
@@ -54,15 +55,36 @@ class BitGetClient:
         body = json.dumps(data) if data else ""
         headers = self._get_headers(method, signed_path, body)
 
-        try:
-            async with session.request(method, url, data=body, headers=headers) as response:
-                result = await response.json()
-                if result.get("code") != "00000":
-                    log.error(f"BitGet Error: {result} on {url}")
-                return result
-        except Exception as e:
-            log.error(f"Request Exception: {e} on {url}")
-            return {"code": "error", "msg": str(e), "data": None}
+        for attempt in range(retries):
+            try:
+                async with session.request(method, url, data=body, headers=headers) as response:
+                    if response.status == 429:
+                        wait = (2 ** attempt) + (random.random() * 0.1)
+                        log.warning(f"Rate limited (429). Retrying in {wait:.2f}s... (Attempt {attempt+1}/{retries})")
+                        await asyncio.sleep(wait)
+                        # Re-generate headers for new timestamp on retry
+                        headers = self._get_headers(method, signed_path, body)
+                        continue
+
+                    result = await response.json()
+                    if result.get("code") == "429" or result.get("code") == "400031": # Bitget specific rate limit codes
+                        wait = (2 ** attempt) + (random.random() * 0.1)
+                        log.warning(f"Rate limited ({result.get('code')}). Retrying in {wait:.2f}s... (Attempt {attempt+1}/{retries})")
+                        await asyncio.sleep(wait)
+                        headers = self._get_headers(method, signed_path, body)
+                        continue
+
+                    if result.get("code") != "00000":
+                        log.error(f"BitGet Error: {result} on {url}")
+                    return result
+            except Exception as e:
+                log.error(f"Request Exception: {e} on {url}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+                return {"code": "error", "msg": str(e), "data": None}
+
+        return {"code": "error", "msg": "Max retries exceeded", "data": None}
 
     async def get_candles(self, symbol: str, granularity: str, limit: int = 100) -> List:
         # BitGet V2 granularity is case-sensitive for some timeframes (e.g. 1H, 4H, 1D)
