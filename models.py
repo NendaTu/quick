@@ -75,6 +75,36 @@ class LearningModel:
             log.debug(f"REJECT {symbol}: Imbalance {imb:.4f} < {MIN_IMBALANCE}")
             return None
 
+        # 3. Liquidity/Volume filter
+        vol_pct = features.get("vol_pct", 0)
+        if RESTRICT_VOL_PCT and vol_pct < VOL_PCT_MIN:
+            log.debug(f"REJECT {symbol}: Volatility pct {vol_pct:.4f} < {VOL_PCT_MIN}")
+            return None
+
+        # 4. Spread filter
+        mid = features.get("mid", 0)
+        book_bid, book_ask = book.best_bid, book.best_ask
+        spread_pct = (book_ask - book_bid) / mid if mid > 0 else 0
+        if RESTRICT_SPREAD and spread_pct > MAX_SPREAD_PCT:
+            log.debug(f"REJECT {symbol}: Spread pct {spread_pct:.4f} > {MAX_SPREAD_PCT}")
+            return None
+
+        # 5. ATR filter
+        atr = features.get("atr", 0)
+        if RESTRICT_ATR and atr < ATR_MIN:
+            log.debug(f"REJECT {symbol}: ATR {atr:.8f} < {ATR_MIN}")
+            return None
+
+        # 6. Supertrend filter
+        supertrend_dir = features.get("supertrend_dir", 0)
+        if RESTRICT_SUPERTREND and supertrend_dir != 0:
+            if direction == "buy" and supertrend_dir != 1:
+                log.debug(f"REJECT {symbol}: Supertrend bearish for long")
+                return None
+            if direction == "sell" and supertrend_dir != -1:
+                log.debug(f"REJECT {symbol}: Supertrend bullish for short")
+                return None
+
         # --- SCORING WITH LEARNED WEIGHTS ---
         score = 0
 
@@ -105,16 +135,6 @@ class LearningModel:
 
         if RESTRICT_MACD or not RESTRICT_SCORE:
             score += macd_score * self.weights["macd"]
-
-        # EMA contribution
-        ema_short = features.get("ema_short", 0)
-        ema_long = features.get("ema_long", 0)
-        ema_score = 0
-        if ema_short > ema_long: ema_score = 1
-        elif ema_short < ema_long: ema_score = -1
-
-        if RESTRICT_EMA or not RESTRICT_SCORE:
-            score += ema_score * self.weights["ema"]
 
         # Trend/Confluence contribution
         asset_15m = features.get("asset_15m", 0)
@@ -153,31 +173,128 @@ class LearningModel:
         elif imb < 0: direction = "sell"
         else: direction = "buy" if drt >= 0.5 else "sell"
 
+        # --- CONTRARIAN FILTER LOGIC ---
+        # If CONTRARIAN_FILTER is True, we flip the INTENDED direction for all hard gates
+        # This means we approval a "Buy" based on "Sell" criteria.
+        gate_direction = direction
+        if CONTRARIAN_GLOBAL and CONTRARIAN_FILTER:
+            gate_direction = "sell" if direction == "buy" else "buy"
+
+        # Hard Gates for restricted indicators
+        if RESTRICT_MACD:
+            if gate_direction == "buy" and macd_hist <= 0:
+                log.debug(f"REJECT {symbol}: MACD bearish for {gate_direction}")
+                return None
+            if gate_direction == "sell" and macd_hist >= 0:
+                log.debug(f"REJECT {symbol}: MACD bullish for {gate_direction}")
+                return None
+
+        if RESTRICT_15M_TREND:
+            if gate_direction == "buy" and asset_15m <= 0:
+                log.debug(f"REJECT {symbol}: 15m trend bearish for {gate_direction}")
+                return None
+            if gate_direction == "sell" and asset_15m >= 0:
+                log.debug(f"REJECT {symbol}: 15m trend bullish for {gate_direction}")
+                return None
+
         # RSI Restrictions
         if RESTRICT_RSI:
-            if direction == "buy" and rsi > RSI_LONG:
-                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_LONG}")
+            # 1. Adaptive RSI Logic
+            upper_limit = RSI_SHORT
+            lower_limit = RSI_LONG
+
+            if USE_ADAPTIVE_RSI:
+                drt_f = features.get("drt_fast", 0.5)
+                # If momentum is not extreme (>0.6 or <0.4), use TIGHT filters
+                if gate_direction == "buy" and drt_f < 0.6:
+                    lower_limit = RSI_TIGHT_LONG
+                elif gate_direction == "sell" and drt_f > 0.4:
+                    upper_limit = RSI_TIGHT_SHORT
+
+            if gate_direction == "buy":
+                if rsi > lower_limit:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {lower_limit} (Adaptive {gate_direction})")
+                    return None
+                if rsi < RSI_BUY_FLOOR:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_BUY_FLOOR} (Floor {gate_direction})")
+                    return None
+            if gate_direction == "sell":
+                if rsi < upper_limit:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive {gate_direction})")
+                    return None
+                if rsi > RSI_SHORT_CEILING:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling {gate_direction})")
+                    return None
+
+        # DRT Velocity Check
+        if USE_DRT_VELOCITY:
+            drt_1m = features.get("drt", 0.5)
+            drt_5m = features.get("drt_fast", 0.5)
+            if gate_direction == "buy" and drt_1m <= drt_5m:
+                log.debug(f"REJECT {symbol}: DRT velocity negative for {gate_direction} ({drt_1m:.4f} <= {drt_5m:.4f})")
                 return None
-            if direction == "sell" and rsi < RSI_SHORT:
-                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_SHORT}")
+            if gate_direction == "sell" and drt_1m >= drt_5m:
+                log.debug(f"REJECT {symbol}: DRT velocity positive for {gate_direction} ({drt_1m:.4f} >= {drt_5m:.4f})")
                 return None
 
         # BTC Confluence Restrictions
         if RESTRICT_BTC_CONFLUENCE:
             btc_15m = features.get("btc_15m", 0)
             btc_1h = features.get("btc_1h", 0)
-            if direction == "buy":
+            if gate_direction == "buy":
                 if btc_15m < BTC_CONF_15M_MIN or btc_1h < BTC_CONF_1H_MIN:
-                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] < {BTC_CONF_15M_MIN}")
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] < {BTC_CONF_15M_MIN} for {gate_direction}")
                     return None
             else: # sell
                 if btc_15m > -BTC_CONF_15M_MIN or btc_1h > -BTC_CONF_1H_MIN:
-                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN}")
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN} for {gate_direction}")
                     return None
 
+        # Asset Confluence (15m alignment)
+        if RESTRICT_ASSET_CONFLUENCE:
+            asset_15m = features.get("asset_15m", 0)
+            if gate_direction == "buy" and asset_15m < 0:
+                log.debug(f"REJECT {symbol}: Asset 15m negative momentum {asset_15m:.4f} for {gate_direction}")
+                return None
+            if gate_direction == "sell" and asset_15m > 0:
+                log.debug(f"REJECT {symbol}: Asset 15m positive momentum {asset_15m:.4f} for {gate_direction}")
+                return None
+
+        # --- CONTRARIAN GLOBAL EXECUTION ---
+        original_direction = direction
+        if CONTRARIAN_GLOBAL:
+            # Flip the final order direction
+            direction = "sell" if original_direction == "buy" else "buy"
+
         entry = book.best_ask if direction == "buy" else book.best_bid
-        tp_move = TP_MOVE
-        sl_move = SL_MOVE
+        max_lev = self.simulator.leverage_limits.get(symbol, 125)
+
+        # Dynamic TP/SL calculation
+        if USE_DYNAMIC_TARGETS:
+            # TP = Net ROE target + fees (entry + exit)
+            entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+            exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+
+            # Use max_lev to determine required price move for TARGET_NET_ROE
+            max_lev = self.simulator.leverage_limits.get(symbol, 20)
+            # Factor in fee overhead and EXPECTED_SLIPPAGE on the exit side
+            tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
+
+            # Cap TP by 15m ATR
+            if USE_ATR_CAPPED_TP and features.get("atr"):
+                # Use a rough 15m ATR proxy (since atr is 1m in features, multiply by sqrt(15) ~3.8)
+                atr_15m_move = (features["atr"] * 3.8) / entry
+                tp_move = min(tp_move, atr_15m_move)
+
+            # Safety: ensure tp_move is at least a minimum threshold or the config baseline
+            tp_move = max(tp_move, TP_MOVE)
+        else:
+            tp_move = TP_MOVE
+
+        if USE_ATR_SL and features.get("atr"):
+            sl_move = (features["atr"] * ATR_SL_MULT) / entry
+        else:
+            sl_move = SL_MOVE
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)
@@ -185,6 +302,12 @@ class LearningModel:
         else:
             exit_price = entry * (1 - tp_move)
             stop_price = entry * (1 + sl_move)
+
+        # Re-check distances to ensure WEIGHTS are preserved in Contrarian flip
+        # If we flipped a LONG (Entry +0.6% TP, Entry -0.4% SL) to a SHORT,
+        # it must become (Entry -0.6% TP, Entry +0.4% SL).
+        # The current math above already handles this because it uses (1 + tp) for buy
+        # and (1 - tp) for sell.
 
         risk_amount = equity * RISK_PER_TRADE
         risk_per_unit = abs(entry - stop_price)
@@ -207,7 +330,7 @@ class LearningModel:
         exit_price = round(exit_price, price_place)
         stop_price = round(stop_price, price_place)
 
-        max_lev = LEVERAGE_LIMITS.get(symbol, 125)
+        max_lev = self.simulator.leverage_limits.get(symbol, 125)
         required_margin = (qty * entry) / max_lev
         if equity < required_margin:
             return None
@@ -221,18 +344,26 @@ class LearningModel:
             "stop_price": stop_price,
             "qty": qty,
             "confidence": confidence,
-            "btc_confluence": btc_conf
+            "btc_confluence": btc_conf,
+            "original_side": original_direction,
+            "is_contrarian": CONTRARIAN_GLOBAL
         }
+
+        # Tag Premium/Discount for analysis
+        drt_fast = features.get("drt_fast", 0.5)
+        drt_slow = features.get("drt_slow", 0.5)
+
+        premium_fast = "PREM" if drt_fast > 0.5 else "DISC"
+        premium_slow = "PREM" if drt_slow > 0.5 else "DISC"
 
         signal.update({
             "vol_pct": features.get("vol_pct", 0),
             "rsi": rsi,
             "atr": features.get("atr", 0),
             "macd": features.get("macd", 0),
-            "ema_short": ema_short,
-            "ema_long": ema_long,
-            "supertrend": features.get("supertrend", 0),
             "drt": features.get("drt", 0.5),
+            "drt_f": f"{drt_fast:.4f}({premium_fast})",
+            "drt_s": f"{drt_slow:.4f}({premium_slow})"
         })
         return signal
 
