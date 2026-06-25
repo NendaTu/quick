@@ -144,6 +144,9 @@ class Simulator:
         c1, h1, l1 = get_ohlc(INDICATOR_TIMEFRAMES["atr"])
         atr = compute_atr(h1, l1, c1, ATR_PERIOD) if len(c1) > 20 else 0.0
 
+        # Supertrend (1m)
+        supertrend_val, supertrend_dir = compute_supertrend(h1, l1, c1, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER) if len(c1) > 20 else (0, 0)
+
         # DRT SLOW (15m)
         cs, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["drt_slow"])
         drt_slow = compute_drt(cs, 20) if len(cs) >= 20 else 0.5
@@ -178,6 +181,7 @@ class Simulator:
         return {
             "imbalance": imbalance,
             "spread_pct": spread / mid if mid > 0 else 0,
+            "mid": mid,
             "vol_pct": vol_pct,
             "rsi": rsi,
             "atr": atr,

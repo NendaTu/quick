@@ -75,6 +75,36 @@ class LearningModel:
             log.debug(f"REJECT {symbol}: Imbalance {imb:.4f} < {MIN_IMBALANCE}")
             return None
 
+        # 3. Liquidity/Volume filter
+        vol_pct = features.get("vol_pct", 0)
+        if RESTRICT_VOL_PCT and vol_pct < VOL_PCT_MIN:
+            log.debug(f"REJECT {symbol}: Volatility pct {vol_pct:.4f} < {VOL_PCT_MIN}")
+            return None
+
+        # 4. Spread filter
+        mid = features.get("mid", 0)
+        book_bid, book_ask = book.best_bid, book.best_ask
+        spread_pct = (book_ask - book_bid) / mid if mid > 0 else 0
+        if RESTRICT_SPREAD and spread_pct > MAX_SPREAD_PCT:
+            log.debug(f"REJECT {symbol}: Spread pct {spread_pct:.4f} > {MAX_SPREAD_PCT}")
+            return None
+
+        # 5. ATR filter
+        atr = features.get("atr", 0)
+        if RESTRICT_ATR and atr < ATR_MIN:
+            log.debug(f"REJECT {symbol}: ATR {atr:.8f} < {ATR_MIN}")
+            return None
+
+        # 6. Supertrend filter
+        supertrend_dir = features.get("supertrend_dir", 0)
+        if RESTRICT_SUPERTREND and supertrend_dir != 0:
+            if direction == "buy" and supertrend_dir != 1:
+                log.debug(f"REJECT {symbol}: Supertrend bearish for long")
+                return None
+            if direction == "sell" and supertrend_dir != -1:
+                log.debug(f"REJECT {symbol}: Supertrend bullish for short")
+                return None
+
         # --- SCORING WITH LEARNED WEIGHTS ---
         score = 0
 
@@ -143,6 +173,23 @@ class LearningModel:
         elif imb < 0: direction = "sell"
         else: direction = "buy" if drt >= 0.5 else "sell"
 
+        # Hard Gates for restricted indicators
+        if RESTRICT_MACD:
+            if direction == "buy" and macd_hist <= 0:
+                log.debug(f"REJECT {symbol}: MACD bearish for long")
+                return None
+            if direction == "sell" and macd_hist >= 0:
+                log.debug(f"REJECT {symbol}: MACD bullish for short")
+                return None
+
+        if RESTRICT_15M_TREND:
+            if direction == "buy" and asset_15m <= 0:
+                log.debug(f"REJECT {symbol}: 15m trend bearish for long")
+                return None
+            if direction == "sell" and asset_15m >= 0:
+                log.debug(f"REJECT {symbol}: 15m trend bullish for short")
+                return None
+
         # RSI Restrictions
         if RESTRICT_RSI:
             # 1. Adaptive RSI Logic
@@ -195,6 +242,16 @@ class LearningModel:
                 if btc_15m > -BTC_CONF_15M_MIN or btc_1h > -BTC_CONF_1H_MIN:
                     log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN}")
                     return None
+
+        # Asset Confluence (15m alignment)
+        if RESTRICT_ASSET_CONFLUENCE:
+            asset_15m = features.get("asset_15m", 0)
+            if direction == "buy" and asset_15m < 0:
+                log.debug(f"REJECT {symbol}: Asset 15m negative momentum {asset_15m:.4f}")
+                return None
+            if direction == "sell" and asset_15m > 0:
+                log.debug(f"REJECT {symbol}: Asset 15m positive momentum {asset_15m:.4f}")
+                return None
 
         entry = book.best_ask if direction == "buy" else book.best_bid
         max_lev = self.simulator.leverage_limits.get(symbol, 125)

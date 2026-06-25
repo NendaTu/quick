@@ -73,6 +73,9 @@ REENTRY_COOLDOWN = 60.0          # Seconds to wait after exit before re-entering
 USE_DYNAMIC_TARGETS = True       # Calculate TP/SL based on leverage and TARGET_NET_ROE
 USE_ATR_SL = True                # Use ATR for stop loss
 ATR_SL_MULT = 1.5                # ATR multiplier for SL
+ATR_MIN = 0.0001                 # Minimum ATR to avoid low-volatility assets
+VOL_PCT_MIN = 0.05               # Minimum relative volume
+MAX_SPREAD_PCT = 0.002           # Max spread % (0.2%)
 
 # --- Advanced Strategy Features ---
 USE_BREAKEVEN_TRIGGER = True     # Move SL to entry after price moves halfway to TP
@@ -106,7 +109,6 @@ RESTRICT_CONFIDENCE = False
 RESTRICT_DIRECTIONAL_SANITY = False
 RESTRICT_RSI = True
 RESTRICT_MACD = False
-RESTRICT_EMA = False
 RESTRICT_15M_TREND = False
 RESTRICT_SUPERTREND = False
 RESTRICT_ATR = False
