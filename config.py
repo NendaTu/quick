@@ -92,13 +92,15 @@ MIN_CONFIDENCE = 0.66             # minimum probability to trade
 MIN_IMBALANCE = 0.033             # only trade if |imbalance| > this
 TREND_STRENGTH_MIN = 0.1         # DRT minimum
 # Win/Loss barriers (symmetric 1:1)
-TP_MOVE = 0.003                  # 0.3% take‑profit
-SL_MOVE = 0.002                  # 0.2% stop‑loss
+TP_MOVE = 0.006                  # 0.6% take‑profit
+SL_MOVE = 0.004                  # 0.4% stop‑loss
 MAX_ENTRY_SLIPPAGE = 0.001     # 0.05% max slippage for entry
 
 # --- Strategy Hardening ---
 TARGET_NET_ROE = 0.05            # 5% Net ROE target
 RSI_BUY_FLOOR = 15.0             # Reject Buys if RSI < this
+RSI_SHORT_CEILING = 80.0         # Reject Shorts if RSI > this
+REENTRY_COOLDOWN = 60.0          # Seconds to wait after exit before re-entering same asset
 USE_DYNAMIC_TARGETS = True       # Calculate TP/SL based on leverage and TARGET_NET_ROE
 USE_ATR_SL = False               # Use ATR for stop loss
 ATR_SL_MULT = 2.0                # ATR multiplier for SL

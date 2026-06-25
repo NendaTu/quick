@@ -162,9 +162,13 @@ class LearningModel:
                 if rsi < RSI_BUY_FLOOR:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_BUY_FLOOR} (Floor)")
                     return None
-            if direction == "sell" and rsi < RSI_SHORT:
-                log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_SHORT}")
-                return None
+            if direction == "sell":
+                if rsi < RSI_SHORT:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_SHORT}")
+                    return None
+                if rsi > RSI_SHORT_CEILING:
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling)")
+                    return None
 
         # BTC Confluence Restrictions
         if RESTRICT_BTC_CONFLUENCE:

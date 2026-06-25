@@ -4,24 +4,26 @@ This document serves as the standardized record for simulation results. Each run
 
 ## Standardized Run Template
 
-### Run 26: Hardened Baseline Verification
-**Duration**: 1m 34s
-**Total Trades**: 297
-**Win Rate**: 0.0%
-**Net PnL**: -493.76 USDT
+### Run 27: RSI Ceiling & Barrier Expansion (0.6%/0.4%)
+**Duration**: 18m
+**Total Trades**: 9 (Exits)
+**Win Rate**: 33.3%
+**Net PnL**: +0.02 USDT (Break-even)
 
 | Metric | Side | Win Avg | Loss Avg | Delta | Win Rate |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **RSI** | **BUY** | - | - | - | 0.0% |
-| **RSI** | **SELL** | - | 90.5 | - | 0.0% |
-| **MACD** | **Overall**| - | 0.000 | - | - |
-| **BTC 15m** | **Overall**| - | -0.025 | - | - |
-| **DRT** | **Overall**| - | 0.554 | - | - |
+| **RSI** | **BUY** | 31.0 | 25.4 | +5.6 | 33% |
+| **RSI** | **SELL** | 77.6 | 77.5 | +0.1 | 50% |
+| **MACD** | **Overall**| 0.001 | 0.15 | - | - |
+| **BTC 15m** | **Overall**| -0.024 | -0.015 | - | - |
+| **DRT** | **Overall**| 0.55 | 0.61 | - | - |
 
 **Strategic Observation**:
-- **The "High RSI Trap"**: GRTUSDT (289 trades) proved that selling into extreme momentum (RSI 90.5) is as dangerous as buying into a crash.
-- **Stop Loss Churn**: The 0.2% SL was repeatedly hit as the price continued upward.
-- **Dynamic Targeting**: Leverage-aware TP worked but was irrelevant as SLs were hit first.
+- **Stabilization Achieved**: Run 27 successfully broke the drawdown spiral of Run 26.
+- **RSI Ceiling Success**: GRTUSDT (the prior killer) was 100% avoided despite high signals, thanks to the 80.0 RSI Ceiling.
+- **Cooldown Success**: Re-entry cooldown (60s) prevented rapid-fire losses on BGB and POL.
+- **Winning Assets**: WLDUSDT (100% WR, 2 trades) and POLUSDT (50% WR, 2 trades) were the top performers.
+- **Problematic Assets**: AAVE and PEPE had outsized losses (-3.63 and -2.61) compared to the standard profit target (+2.8). This is likely due to slippage or gaps during high-volatility events where the Market SL failed to execute at the precise barrier.
 
 ---
 
@@ -33,10 +35,9 @@ This document serves as the standardized record for simulation results. Each run
 
 ### Phase 2: Strategy Hardening (Active)
 - **Hardened Filter: RSI Floor**: Reject Buys if RSI < 15.0 to avoid "falling knives."
-- **Hardened Filter: BTC Double-Gate**: Required BTC 15m/1H trend alignment.
-- **Dynamic Optimization**: Leveraging `TARGET_NET_ROE` (5%) to calculate TP dynamically based on asset leverage and fee structure.
-- **Action Required: RSI Ceiling**: Implement Short RSI Ceiling (reject if RSI > 85.0) to avoid "rocket ship" shorts.
-- **Action Required: Re-entry Cooldown**: Add a delay between consecutive trades on the same asset to prevent rapid-fire losses during parabolic moves.
+- **Hardened Filter: RSI Ceiling**: Reject Shorts if RSI > 80.0 to avoid "rocket ships." (Added Run 27)
+- **Hardened Filter: Re-entry Cooldown**: 60s delay to prevent churn. (Added Run 27)
+- **Dynamic Optimization**: Leveraging `TARGET_NET_ROE` (5%) to calculate TP dynamically.
 
 ---
 
@@ -44,16 +45,17 @@ This document serves as the standardized record for simulation results. Each run
 
 | Asset | Win Rate | Net PnL | Recommended Action |
 | :--- | :--- | :--- | :--- |
-| XLMUSDT | 0% | -0.91 | Monitor liquidity. |
-| CROUSDT | 0% | -61.09 | Engage RSI Ceiling. |
-| PIUSDT | 0% | -61.29 | Monitor BTC Confluence. |
-| GRTUSDT | 0% | -466.22 | CRITICAL: Implement RSI Ceiling and Cooldown. |
+| WLDUSDT | 100% | +5.62 | Maintain Current Logic. |
+| POLUSDT | 50% | +2.05 | Monitor Spread impact on SL. |
+| BGBUSDT | 0% | -1.40 | Check if RSI floor is too low for BGB. |
+| AAVEUSDT | 0% | -3.63 | Investigation: High Slippage on SL? |
 
 ---
 
 ## Strategic Roadmap Progress
 1. [x] **Maker-Fee Optimization**: Limit Entry/TP active.
 2. [x] **RSI Buy Floor**: active at 15.0.
-3. [x] **Leverage-Aware TP**: Dynamic Net ROE targeting.
-4. [ ] **ATR-Based Stop Loss**: Pending verification in Phase 2.
-5. [ ] **Short RSI Ceiling**: **PRIORITY FOR NEXT RUN.**
+3. [x] **RSI Short Ceiling**: active at 80.0.
+4. [x] **Re-entry Cooldown**: active at 60.0.
+5. [x] **Leverage-Aware TP**: Dynamic Net ROE targeting.
+6. [ ] **ATR-Based Stop Loss**: Pending verification for Run 28.

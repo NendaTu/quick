@@ -27,6 +27,7 @@ class Engine:
 
         # Performance tracking
         self.asset_stats: Dict[str, Dict[str, any]] = {}
+        self.last_exit_time: Dict[str, float] = {}
 
         self._last_mid = {}
         self._last_features = {}
@@ -122,6 +123,8 @@ class Engine:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
+        self.last_exit_time[symbol] = time.time()
+
         self.total_trades += 1
         self.cumulative_pnl += round_trip_pnl
 
@@ -179,6 +182,11 @@ class Engine:
         # Check if this specific side is already open or pending
         pos_key = f"{symbol}_{side}"
         if pos_key in self.open_positions or pos_key in self.pending_entries:
+            return False
+
+        # Cooldown check
+        last_exit = self.last_exit_time.get(symbol, 0)
+        if time.time() - last_exit < REENTRY_COOLDOWN:
             return False
 
         return True
