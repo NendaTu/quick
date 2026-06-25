@@ -82,6 +82,12 @@ class BitGetClient:
         res = await self.request("GET", path, params=params)
         return res.get("data", [])
 
+    async def get_tickers(self) -> List:
+        path = "/api/v2/mix/market/tickers"
+        params = {"productType": "usdt-futures"}
+        res = await self.request("GET", path, params=params)
+        return res.get("data", [])
+
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()

@@ -9,7 +9,7 @@ log = logging.getLogger("scalper.engine")
 
 class Engine:
     def __init__(self):
-        self.books: Dict[str, OrderBook] = {sym: OrderBook(sym) for sym in ASSETS + [BTC_SYMBOL]}
+        self.books: Dict[str, OrderBook] = {}
         self.leverage_limits = {}
         self.pending_entries: Set[str] = set() # key is 'SYMBOL_buy' or 'SYMBOL_sell'
         self.equity = INITIAL_EQUITY
@@ -18,7 +18,7 @@ class Engine:
 
         # open_positions key is 'SYMBOL_buy' or 'SYMBOL_sell'
         self.open_positions: Dict[str, dict] = {}
-        self.enabled_assets = set(ASSETS)
+        self.enabled_assets: List[str] = []
 
         self.total_trades = 0
         self.winning_trades = 0
@@ -50,7 +50,11 @@ class Engine:
         if MODE == "paper":
             await self.exchange.warm_up()
             self.leverage_limits = self.exchange.get_leverage_limits()
-            log.info(f"Leverage limits: {len(self.leverage_limits)} assets loaded.")
+            self.enabled_assets = self.exchange.discovered_assets
+            # Initialize books for discovered assets
+            for sym in self.enabled_assets + [BTC_SYMBOL]:
+                self.books[sym] = OrderBook(sym)
+            log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
         else:
             log.error("Only paper mode is implemented.")
             return
@@ -207,7 +211,7 @@ class Engine:
                 # 2. Update Features and Train (Selective)
                 all_features = {}
                 # Ensure each unique symbol is processed only once
-                for sym in set(ASSETS + [BTC_SYMBOL]):
+                for sym in set(self.enabled_assets + [BTC_SYMBOL]):
                     try:
                         book = self.books[sym]
                         if book.best_bid <= 0 or book.best_ask <= 0:
@@ -241,7 +245,7 @@ class Engine:
 
                 # 3. Check Signal and Trade
                 if len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
-                    for sym in ASSETS:
+                    for sym in self.enabled_assets:
                         # Re-check limit inside loop to avoid burst over-trading
                         if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
                             break

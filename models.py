@@ -185,6 +185,7 @@ class LearningModel:
 
         # BTC Confluence Restrictions
         if RESTRICT_BTC_CONFLUENCE:
+            btc_15m = features.get("btc_15m", 0)
             btc_1h = features.get("btc_1h", 0)
             if direction == "buy":
                 if btc_15m < BTC_CONF_15M_MIN or btc_1h < BTC_CONF_1H_MIN:
@@ -196,7 +197,7 @@ class LearningModel:
                     return None
 
         entry = book.best_ask if direction == "buy" else book.best_bid
-        max_lev = LEVERAGE_LIMITS.get(symbol, 125)
+        max_lev = self.simulator.leverage_limits.get(symbol, 125)
 
         # Dynamic TP/SL calculation
         if USE_DYNAMIC_TARGETS:
@@ -205,6 +206,7 @@ class LearningModel:
             exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
 
             # Use max_lev to determine required price move for TARGET_NET_ROE
+            max_lev = self.simulator.leverage_limits.get(symbol, 20)
             tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate)
 
             # Cap TP by 15m ATR
@@ -251,7 +253,7 @@ class LearningModel:
         exit_price = round(exit_price, price_place)
         stop_price = round(stop_price, price_place)
 
-        max_lev = LEVERAGE_LIMITS.get(symbol, 125)
+        max_lev = self.simulator.leverage_limits.get(symbol, 125)
         required_margin = (qty * entry) / max_lev
         if equity < required_margin:
             return None

@@ -13,7 +13,7 @@ log = logging.getLogger("scalper.simulator")
 class Simulator:
     def __init__(self):
         self.books: Dict[str, SimulatedOrderBook] = {}
-        self.leverage_limits = LEVERAGE_LIMITS.copy()
+        self.leverage_limits = {}
         self.contract_specs: Dict[str, dict] = {}
         self.equity = INITIAL_EQUITY
         self.used_margin = 0.0
@@ -32,27 +32,49 @@ class Simulator:
         self.last_price: Dict[str, float] = {}
         self._btc_confluence_cache = {}
         self._last_confluence_update = 0
-
-        all_assets = ASSETS + [BTC_SYMBOL]
-        for sym in all_assets:
-            self.books[sym] = SimulatedOrderBook(sym, BASE_PRICES.get(sym, 1.0))
-            self.ohlcv[sym] = {tf: [] for tf in AVAILABLE_TIMEFRAMES}
-            self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D"]}
-            self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
-            self.last_price[sym] = BASE_PRICES.get(sym, 1.0)
+        self.discovered_assets: List[str] = []
 
     async def warm_up(self):
-        log.info("Starting data warm-up...")
+        log.info("Discovering top assets and starting warm-up...")
 
-        # Fetch contract specs first
+        # 1. Discover Assets by Volume
+        tickers = await self.client.get_tickers()
+        # Sort by usdtVolume descending
+        sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
+
+        discovered = []
+        for t in sorted_tickers:
+            sym = t["symbol"]
+            # Filter: only USDT futures, not omitted, not stablecoins (proxy: ends with USDT)
+            if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                # Exclude known stables if they show up in volume
+                if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
+                    continue
+                discovered.append(sym)
+                if len(discovered) >= ASSETS_COUNT:
+                    break
+
+        self.discovered_assets = discovered
+        log.info(f"Top {len(discovered)} assets discovered by volume.")
+
+        # 2. Fetch contract specs for discovered assets
         specs = await self.client.get_symbols()
-        for s in specs:
-            sym = s['symbol']
-            self.contract_specs[sym] = s
-            if sym in LEVERAGE_LIMITS:
-                self.leverage_limits[sym] = float(s.get('maxLever', LEVERAGE_LIMITS[sym]))
+        spec_map = {s['symbol']: s for s in specs}
 
-        symbols = ASSETS + [BTC_SYMBOL]
+        for sym in self.discovered_assets + [BTC_SYMBOL]:
+            s = spec_map.get(sym)
+            if s:
+                self.contract_specs[sym] = s
+                self.leverage_limits[sym] = float(s.get('maxLever', 20))
+                # Initialize structures
+                price = float(next((t['lastPr'] for t in tickers if t['symbol'] == sym), 1.0))
+                self.books[sym] = SimulatedOrderBook(sym, price)
+                self.ohlcv[sym] = {tf: [] for tf in AVAILABLE_TIMEFRAMES}
+                self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D"]}
+                self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
+                self.last_price[sym] = price
+
+        symbols = self.discovered_assets + [BTC_SYMBOL]
         semaphore = asyncio.Semaphore(10) # Respect rate limits
 
         async def fetch_symbol_data(sym):
@@ -234,7 +256,7 @@ class Simulator:
                         self.confluence_history[symbol][tf_name][-1] = price
 
     async def data_feed_task(self, engine):
-        symbols = ASSETS + [BTC_SYMBOL]
+        symbols = self.discovered_assets + [BTC_SYMBOL]
         ws_client = BitGetWSClient(symbols, self._ws_callback)
         asyncio.create_task(ws_client.run())
 
