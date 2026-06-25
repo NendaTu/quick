@@ -111,9 +111,11 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
-    def _report_entry(self, symbol: str, side: str, qty: float, entry: float):
+    def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False):
         pos_key = f"{symbol}_{side}"
-        self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry}
+        # If orig_side not passed (e.g. from simulator), default to current
+        if orig_side is None: orig_side = side
+        self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry, "orig_side": orig_side, "is_contr": is_contr}
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
@@ -276,15 +278,21 @@ class Engine:
                         tp = signal["exit_price"]
                         btc_conf = signal["btc_confluence"]
                         drt = signal.get("drt", 0.5)
+                        orig_side = signal.get("original_side", side)
+                        is_contr = signal.get("is_contrarian", False)
 
                         # Immediate local registration to prevent race condition
                         pos_key = f"{sym}_{side}"
                         if ENTRY_ORDER_TYPE == "market":
-                            self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry}
+                            self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry, "orig_side": orig_side, "is_contr": is_contr}
                         else:
                             self.pending_entries.add(pos_key)
 
-                        signal_msg = (f"SIGNAL: {sym} {side.upper()} qty={qty:.3f} "
+                        side_str = side.upper()
+                        if is_contr:
+                            side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
+
+                        signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
                                       f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
                                       f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
                                       f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
@@ -295,7 +303,7 @@ class Engine:
                         else:
                             log.debug(signal_msg)
 
-                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt)
+                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:
                             # Show signal with fill/place if LOG_SIGNALS is False
                             log.info(f"Entry Triggered | {signal_msg}")

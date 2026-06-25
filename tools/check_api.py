@@ -4,9 +4,9 @@ from bitget_client import BitGetClient
 
 async def check():
     client = BitGetClient(
-        os.getenv("BITGET_API_KEY", "bg_001fadae900c2233fb2a3e0be1fe3a65"),
-        os.getenv("BITGET_SECRET_KEY", "0592a8b4ae5a20e83c28f83d7df0da809f2f9a95fdfc1fdcc3c32a955693efd4"),
-        os.getenv("BITGET_PASSPHRASE", "92449244")
+        os.getenv("BITGET_API_KEY"),
+        os.getenv("BITGET_SECRET_KEY"),
+        os.getenv("BITGET_PASSPHRASE")
     )
     # Check Tickers for volume
     path = "/api/v2/mix/market/tickers"

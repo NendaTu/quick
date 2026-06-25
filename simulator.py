@@ -343,14 +343,14 @@ class Simulator:
                 # If timeout, we might get a worse price. For simplicity, use current market.
                 fill_price = o["price"] if et == "entry" else self.last_price.get(o["symbol"])
 
-                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type)
+                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type, o.get("original_side"), o.get("is_contrarian", False))
 
                 # Once entry is filled, add TP/SL
                 sid = self.order_id_counter; self.order_id_counter += 1
                 tid = self.order_id_counter; self.order_id_counter += 1
                 self.pending_orders.extend([
-                    {"id": sid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "stop", "triggerPrice": o["stop_price"], "qty": o["qty"]},
-                    {"id": tid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp_price"], "qty": o["qty"]},
+                    {"id": sid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "stop", "triggerPrice": o["stop_price"], "qty": o["qty"], "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                    {"id": tid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp_price"], "qty": o["qty"], "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
                 ])
             else:
                 order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
@@ -388,7 +388,7 @@ class Simulator:
         price_place = int(spec.get('pricePlace', 2))
         return round(avg_price, price_place)
 
-    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5):
+    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5, original_side=None, is_contrarian=False):
         spec = self.contract_specs.get(symbol, {})
         min_usdt = float(spec.get('minTradeUSDT', 5.0))
         if RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
@@ -414,14 +414,14 @@ class Simulator:
                     log.debug(rej_msg) # Log as debug so it goes to DB but not console
                 return {"code": "2", "msg": "high slippage"}
 
-            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market")
+            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian)
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tid = self.order_id_counter; self.order_id_counter += 1
 
             self.pending_orders.extend([
-                {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty},
-                {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty},
+                {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty, "original_side": original_side, "is_contrarian": is_contrarian},
+                {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty, "original_side": original_side, "is_contrarian": is_contrarian},
             ])
             return {"code": "00000", "data": {"orderId": str(sid)}}
         else:
@@ -431,12 +431,16 @@ class Simulator:
                 "id": eid, "symbol": symbol, "pos_side": side, "type": "entry_limit",
                 "price": entry_price, "qty": qty, "ts": time.time(),
                 "stop_price": stop_price, "tp_price": tp_price,
-                "btc_conf": btc_conf, "drt": drt
+                "btc_conf": btc_conf, "drt": drt,
+                "original_side": original_side, "is_contrarian": is_contrarian
             })
-            log.info(f"PLACED LIMIT ENTRY {symbol} {side.upper()} {qty:.3f} @ {entry_price:.8f}")
+            side_str = side.upper()
+            if is_contrarian:
+                side_str = f"{original_side.upper()} [Flipped to {side.upper()}]"
+            log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f}")
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market"):
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False):
         fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
         fee = qty * fill_price * fee_rate
         self.equity -= fee
@@ -446,12 +450,17 @@ class Simulator:
         self.used_margin += margin
 
         self.positions[(symbol, side)] = {
-            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt
+            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
+            "original_side": original_side, "is_contrarian": is_contrarian
         }
-        log.info(f"FILLED ENTRY {symbol} {side.upper()} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
+        side_str = side.upper()
+        if is_contrarian:
+            side_str = f"{(original_side or side).upper()} [Flipped to {side.upper()}]"
+
+        log.info(f"FILLED ENTRY {symbol} {side_str} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         if self.engine:
-            self.engine._report_entry(symbol, side, qty, fill_price)
+            self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian)
 
     def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]
@@ -476,7 +485,11 @@ class Simulator:
         self.used_margin -= pos.get("margin", 0)
         self.used_margin = max(0, self.used_margin)
 
-        log.info(f"EXIT {sym} {side.upper()} {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
+        side_str = side.upper()
+        if pos.get("is_contrarian"):
+            side_str = f"{pos.get('original_side', side).upper()} [Flipped to {side.upper()}]"
+
+        log.info(f"EXIT {sym} {side_str} {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
                  f"[{pos['btc_conf']}] drt_entry={pos.get('entry_drt',0.5):.4f} drt_exit={exit_drt:.4f} | "
                  f"equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 

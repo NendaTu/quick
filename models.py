@@ -173,21 +173,28 @@ class LearningModel:
         elif imb < 0: direction = "sell"
         else: direction = "buy" if drt >= 0.5 else "sell"
 
+        # --- CONTRARIAN FILTER LOGIC ---
+        # If CONTRARIAN_FILTER is True, we flip the INTENDED direction for all hard gates
+        # This means we approval a "Buy" based on "Sell" criteria.
+        gate_direction = direction
+        if CONTRARIAN_GLOBAL and CONTRARIAN_FILTER:
+            gate_direction = "sell" if direction == "buy" else "buy"
+
         # Hard Gates for restricted indicators
         if RESTRICT_MACD:
-            if direction == "buy" and macd_hist <= 0:
-                log.debug(f"REJECT {symbol}: MACD bearish for long")
+            if gate_direction == "buy" and macd_hist <= 0:
+                log.debug(f"REJECT {symbol}: MACD bearish for {gate_direction}")
                 return None
-            if direction == "sell" and macd_hist >= 0:
-                log.debug(f"REJECT {symbol}: MACD bullish for short")
+            if gate_direction == "sell" and macd_hist >= 0:
+                log.debug(f"REJECT {symbol}: MACD bullish for {gate_direction}")
                 return None
 
         if RESTRICT_15M_TREND:
-            if direction == "buy" and asset_15m <= 0:
-                log.debug(f"REJECT {symbol}: 15m trend bearish for long")
+            if gate_direction == "buy" and asset_15m <= 0:
+                log.debug(f"REJECT {symbol}: 15m trend bearish for {gate_direction}")
                 return None
-            if direction == "sell" and asset_15m >= 0:
-                log.debug(f"REJECT {symbol}: 15m trend bullish for short")
+            if gate_direction == "sell" and asset_15m >= 0:
+                log.debug(f"REJECT {symbol}: 15m trend bullish for {gate_direction}")
                 return None
 
         # RSI Restrictions
@@ -199,59 +206,65 @@ class LearningModel:
             if USE_ADAPTIVE_RSI:
                 drt_f = features.get("drt_fast", 0.5)
                 # If momentum is not extreme (>0.6 or <0.4), use TIGHT filters
-                if direction == "buy" and drt_f < 0.6:
+                if gate_direction == "buy" and drt_f < 0.6:
                     lower_limit = RSI_TIGHT_LONG
-                elif direction == "sell" and drt_f > 0.4:
+                elif gate_direction == "sell" and drt_f > 0.4:
                     upper_limit = RSI_TIGHT_SHORT
 
-            if direction == "buy":
+            if gate_direction == "buy":
                 if rsi > lower_limit:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {lower_limit} (Adaptive)")
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {lower_limit} (Adaptive {gate_direction})")
                     return None
                 if rsi < RSI_BUY_FLOOR:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_BUY_FLOOR} (Floor)")
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_BUY_FLOOR} (Floor {gate_direction})")
                     return None
-            if direction == "sell":
+            if gate_direction == "sell":
                 if rsi < upper_limit:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive)")
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive {gate_direction})")
                     return None
                 if rsi > RSI_SHORT_CEILING:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling)")
+                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling {gate_direction})")
                     return None
 
         # DRT Velocity Check
         if USE_DRT_VELOCITY:
             drt_1m = features.get("drt", 0.5)
             drt_5m = features.get("drt_fast", 0.5)
-            if direction == "buy" and drt_1m <= drt_5m:
-                log.debug(f"REJECT {symbol}: DRT velocity negative ({drt_1m:.4f} <= {drt_5m:.4f})")
+            if gate_direction == "buy" and drt_1m <= drt_5m:
+                log.debug(f"REJECT {symbol}: DRT velocity negative for {gate_direction} ({drt_1m:.4f} <= {drt_5m:.4f})")
                 return None
-            if direction == "sell" and drt_1m >= drt_5m:
-                log.debug(f"REJECT {symbol}: DRT velocity positive ({drt_1m:.4f} >= {drt_5m:.4f})")
+            if gate_direction == "sell" and drt_1m >= drt_5m:
+                log.debug(f"REJECT {symbol}: DRT velocity positive for {gate_direction} ({drt_1m:.4f} >= {drt_5m:.4f})")
                 return None
 
         # BTC Confluence Restrictions
         if RESTRICT_BTC_CONFLUENCE:
             btc_15m = features.get("btc_15m", 0)
             btc_1h = features.get("btc_1h", 0)
-            if direction == "buy":
+            if gate_direction == "buy":
                 if btc_15m < BTC_CONF_15M_MIN or btc_1h < BTC_CONF_1H_MIN:
-                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] < {BTC_CONF_15M_MIN}")
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] < {BTC_CONF_15M_MIN} for {gate_direction}")
                     return None
             else: # sell
                 if btc_15m > -BTC_CONF_15M_MIN or btc_1h > -BTC_CONF_1H_MIN:
-                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN}")
+                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN} for {gate_direction}")
                     return None
 
         # Asset Confluence (15m alignment)
         if RESTRICT_ASSET_CONFLUENCE:
             asset_15m = features.get("asset_15m", 0)
-            if direction == "buy" and asset_15m < 0:
-                log.debug(f"REJECT {symbol}: Asset 15m negative momentum {asset_15m:.4f}")
+            if gate_direction == "buy" and asset_15m < 0:
+                log.debug(f"REJECT {symbol}: Asset 15m negative momentum {asset_15m:.4f} for {gate_direction}")
                 return None
-            if direction == "sell" and asset_15m > 0:
-                log.debug(f"REJECT {symbol}: Asset 15m positive momentum {asset_15m:.4f}")
+            if gate_direction == "sell" and asset_15m > 0:
+                log.debug(f"REJECT {symbol}: Asset 15m positive momentum {asset_15m:.4f} for {gate_direction}")
                 return None
+
+        # --- CONTRARIAN GLOBAL EXECUTION ---
+        original_direction = direction
+        if CONTRARIAN_GLOBAL:
+            # Flip the final order direction
+            direction = "sell" if original_direction == "buy" else "buy"
 
         entry = book.best_ask if direction == "buy" else book.best_bid
         max_lev = self.simulator.leverage_limits.get(symbol, 125)
@@ -289,6 +302,12 @@ class LearningModel:
             exit_price = entry * (1 - tp_move)
             stop_price = entry * (1 + sl_move)
 
+        # Re-check distances to ensure WEIGHTS are preserved in Contrarian flip
+        # If we flipped a LONG (Entry +0.6% TP, Entry -0.4% SL) to a SHORT,
+        # it must become (Entry -0.6% TP, Entry +0.4% SL).
+        # The current math above already handles this because it uses (1 + tp) for buy
+        # and (1 - tp) for sell.
+
         risk_amount = equity * RISK_PER_TRADE
         risk_per_unit = abs(entry - stop_price)
         if risk_per_unit == 0:
@@ -324,7 +343,9 @@ class LearningModel:
             "stop_price": stop_price,
             "qty": qty,
             "confidence": confidence,
-            "btc_confluence": btc_conf
+            "btc_confluence": btc_conf,
+            "original_side": original_direction,
+            "is_contrarian": CONTRARIAN_GLOBAL
         }
 
         # Tag Premium/Discount for analysis

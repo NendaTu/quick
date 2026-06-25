@@ -78,6 +78,8 @@ VOL_PCT_MIN = 0.05               # Minimum relative volume
 MAX_SPREAD_PCT = 0.002           # Max spread % (0.2%)
 
 # --- Advanced Strategy Features ---
+CONTRARIAN_GLOBAL = False        # Flip final order direction (BUY <-> SELL)
+CONTRARIAN_FILTER = False        # Flip filter logic (requires CONTRARIAN_GLOBAL=True)
 USE_BREAKEVEN_TRIGGER = True     # Move SL to entry after price moves halfway to TP
 BREAKEVEN_ROI_THRESHOLD = 0.025  # 2.5% ROE threshold for breakeven
 USE_ATR_CAPPED_TP = True         # Cap dynamic TP by 15m ATR to ensure reachability
