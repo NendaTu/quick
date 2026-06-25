@@ -336,12 +336,12 @@ class Simulator:
 
                     # Disaster Backup: If price moves TOO FAR past our limit, market fill
                     else:
-                        # Side is 'buy' (Short position): Exit if price MOONS above our limit
-                        # Side is 'sell' (Long position): Exit if price CRASHES below our limit
-                        if side == "buy": # Short
-                            distance = (price / o["triggerPrice"] - 1)
-                        else: # Long
+                        # Side is 'buy' (Long position): Exit if price CRASHES below our limit
+                        # Side is 'sell' (Short position): Exit if price MOONS above our limit
+                        if side == "buy": # Long
                             distance = (o["triggerPrice"] / price - 1)
+                        else: # Short
+                            distance = (price / o["triggerPrice"] - 1)
 
                         # Only fire if distance is positive (price bypassed limit) AND exceeds buffer
                         if distance > SL_DISASTER_BUFFER:
