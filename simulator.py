@@ -221,8 +221,8 @@ class Simulator:
 
     def _update_candles(self, symbol, price, size, ts):
         tf_map = {
-            "1min": 60, "5min": 300, "15min": 900, "30min": 1800,
-            "1h": 3600, "4h": 14400, "1day": 86400
+            "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+            "1H": 3600, "4H": 14400, "1D": 86400
         }
         for tf_name, seconds in tf_map.items():
             if tf_name not in AVAILABLE_TIMEFRAMES: continue
@@ -236,7 +236,7 @@ class Simulator:
                 if len(self.ohlcv[symbol][tf_name]) > 1000: self.ohlcv[symbol][tf_name].pop(0)
 
                 # Persistence for 1m
-                if tf_name == "1min":
+                if tf_name == "1m":
                     prev = self.ohlcv[symbol][tf_name][-2] if len(self.ohlcv[symbol][tf_name]) > 1 else None
                     if prev:
                         self.db.save_candle(symbol, "1m", prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])

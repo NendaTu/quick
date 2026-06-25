@@ -97,14 +97,14 @@ RSI_SHORT = 60.0
 TREND_15M_MIN = 0.0001
 
 # --- Timeframes ---
-AVAILABLE_TIMEFRAMES = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"]
+AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "4H", "1D"]
 INDICATOR_TIMEFRAMES = {
-    "rsi": "1min",
-    "macd": "1min",
-    "ema": "1min",
-    "atr": "1min",
-    "drt_slow": "15min",
-    "drt_fast": "5min",
+    "rsi": "1m",
+    "macd": "1m",
+    "ema": "1m",
+    "atr": "1m",
+    "drt_slow": "15m",
+    "drt_fast": "5m",
 }
 
 # --- Restriction Toggles (Naked Baseline) ---
