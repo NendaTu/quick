@@ -222,7 +222,7 @@ class LearningModel:
                 if rsi < upper_limit:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive {gate_direction})")
                     return None
-                if rsi > RSI_SHORT_CEILING:
+                if RESTRICT_RSI_SHORT_CEILING and rsi > RSI_SHORT_CEILING:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling {gate_direction})")
                     return None
 
@@ -238,6 +238,15 @@ class LearningModel:
                 return None
 
         # BTC Confluence Restrictions
+        if RESTRICT_BTC_MOMENTUM:
+            btc_15m = features.get("btc_15m", 0)
+            if gate_direction == "buy" and btc_15m < -BTC_MOMENTUM_THRESHOLD:
+                log.debug(f"REJECT {symbol}: BTC 15m bearish {btc_15m:.4f} < -{BTC_MOMENTUM_THRESHOLD}")
+                return None
+            if gate_direction == "sell" and btc_15m > BTC_MOMENTUM_THRESHOLD:
+                log.debug(f"REJECT {symbol}: BTC 15m bullish {btc_15m:.4f} > {BTC_MOMENTUM_THRESHOLD}")
+                return None
+
         if RESTRICT_BTC_CONFLUENCE:
             btc_15m = features.get("btc_15m", 0)
             btc_1h = features.get("btc_1h", 0)
@@ -277,8 +286,16 @@ class LearningModel:
 
             # Use max_lev to determine required price move for TARGET_NET_ROE
             max_lev = self.simulator.leverage_limits.get(symbol, 20)
+            # --- TP RELAXATION LOGIC ---
+            target_roe = TARGET_NET_ROE
+            if USE_TP_RELAXATION:
+                drt_offset = abs(features.get("drt", 0.5) - 0.5)
+                if drt_offset < TP_RELAXATION_THRESHOLD:
+                    target_roe = RELAXED_ROE_TARGET
+                    log.debug(f"TP RELAXED for {symbol}: using {target_roe*100}% ROE due to flat DRT ({drt_offset:.4f})")
+
             # Factor in fee overhead and EXPECTED_SLIPPAGE on the exit side
-            tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
+            tp_move = (target_roe / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
 
             # Cap TP by 15m ATR
             if USE_ATR_CAPPED_TP and features.get("atr"):
@@ -309,8 +326,25 @@ class LearningModel:
         # The current math above already handles this because it uses (1 + tp) for buy
         # and (1 - tp) for sell.
 
-        risk_amount = equity * RISK_PER_TRADE
-        risk_per_unit = abs(entry - stop_price)
+        # --- VOL-ADJUSTED RISK LOGIC ---
+        risk_fraction = RISK_PER_TRADE
+        if USE_VOL_ADJUSTED_RISK:
+            atr_pct = features.get("atr", 0) / entry if entry > 0 else 0
+            if atr_pct > ATR_VOL_THRESHOLD:
+                risk_fraction = RISK_PER_TRADE * REDUCED_RISK_FRACTION
+                log.debug(f"RISK REDUCED for {symbol}: ATR {atr_pct:.4f} > {ATR_VOL_THRESHOLD}")
+
+        risk_amount = equity * risk_fraction
+
+        # Fee-aware sizing: subtract expected round-trip fees from the per-unit risk capacity
+        if FEE_AWARE_SIZING:
+            entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+            exit_fee_rate = TAKER_FEE # Worst case for SL
+            fee_per_unit = entry * (entry_fee_rate + exit_fee_rate)
+            risk_per_unit = abs(entry - stop_price) + fee_per_unit
+        else:
+            risk_per_unit = abs(entry - stop_price)
+
         if risk_per_unit == 0:
             return None
 

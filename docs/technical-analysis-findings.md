@@ -46,6 +46,37 @@ This document serves as the standardized record for simulation results. Each run
 | REUSDT | 100% | +2.80 | TTL Save was effective. |
 | SYNUSDT | 100% | +0.01 | Breakeven Trigger Save was effective. |
 | WLDUSDT | 50% | -1.50 | Monitor spread vs target width. |
+| SLXUSDT | 100% | +0.02 | High-frequency success at 0.8/0.4. |
+
+---
+
+## Standardized Run Template (Session 2026-06-25)
+
+### Run 32: 1:2 RRR Baseline (0.8% TP / 0.4% SL)
+**Duration**: 16m
+**Total Trades**: 11
+**Win Rate**: 63.6%
+**Net PnL**: -4.76 USDT (Attrition)
+
+**Strategic Observation**:
+- **RRR Validation**: The 1:2 RRR (0.8% TP / 0.4% SL) resulted in a decent win rate (63.6%), but net PnL remains negative.
+- **Fee Attrition**: Net wins (after fees) on small wins are razor-thin (e.g., SLXUSDT net +0.01 on +0.05 gross), while losses are heavier.
+- **Soft-Stop Fix**: The disaster backup bug was fixed and verified. Long positions no longer exit prematurely.
+- **TTL Efficiency**: TTL exits continue to save capital on stagnant trades that would likely have hit SL.
+
+### Run 33-37: Feature Isolation Tests
+- **Run 33 (Optimized Breakeven)**: Win rate 78.6%, PnL +0.34. Validated profit buffer coverage.
+- **Run 34 (BTC Gate)**: Prevented Longs in bearish BTC. 100% Shorts. Win rate 35.7%.
+- **Run 35 (Fee Sizing)**: Corrected risk-per-trade logic. Qty reduced by ~10% to cover fees.
+- **Run 36 (ATR-SL)**: Dynamic SL active. Kept trades alive longer but TTL still dominates.
+- **Run 37 (Short RSI Ceiling)**: Prevented entries on parabolic overbought moves.
+
+### Run 38: Integrated Strategy (All Features)
+**Duration**: 11m
+**Total Trades**: 2
+**Win Rate**: 0%
+**Net PnL**: -2.28 USDT
+- **Observation**: High selectivity (2 trades vs 14+ in previous runs). BTC gate and RSI ceiling effectively narrowed the entry window. Need to optimize indicator thresholds for better entry timing at 0.8% TP.
 
 ---
 

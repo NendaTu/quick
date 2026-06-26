@@ -35,27 +35,38 @@ class Simulator:
         self.discovered_assets: List[str] = []
 
     async def warm_up(self):
-        log.info("Discovering top assets and starting warm-up...")
+        log.info("Starting warm-up...")
 
-        # 1. Discover Assets by Volume
-        tickers = await self.client.get_tickers()
-        # Sort by usdtVolume descending
-        sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
+        # 1. Discover Assets by Volume (with persistence)
+        last_ts, cached_assets = self.db.get_discovered_assets()
+        age_hours = (time.time() - last_ts) / 3600
 
-        discovered = []
-        for t in sorted_tickers:
-            sym = t["symbol"]
-            # Filter: only USDT futures, not omitted, not stablecoins (proxy: ends with USDT)
-            if sym.endswith("USDT") and sym not in ASSET_OMITTED:
-                # Exclude known stables if they show up in volume
-                if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
-                    continue
-                discovered.append(sym)
-                if len(discovered) >= ASSETS_COUNT:
-                    break
+        if cached_assets and age_hours < ASSET_REDISCOVERY_HOURS:
+            log.info(f"Using cached assets from DB (age: {age_hours:.1f}h)")
+            self.discovered_assets = cached_assets
+            # Still need tickers for initial price baseline
+            tickers = await self.client.get_tickers()
+        else:
+            log.info(f"Discovering top assets (cache age: {age_hours:.1f}h)...")
+            tickers = await self.client.get_tickers()
+            # Sort by usdtVolume descending
+            sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
 
-        self.discovered_assets = discovered
-        log.info(f"Top {len(discovered)} assets discovered by volume.")
+            discovered = []
+            for t in sorted_tickers:
+                sym = t["symbol"]
+                # Filter: only USDT futures, not omitted, not stablecoins (proxy: ends with USDT)
+                if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                    # Exclude known stables if they show up in volume
+                    if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
+                        continue
+                    discovered.append(sym)
+                    if len(discovered) >= ASSETS_COUNT:
+                        break
+
+            self.discovered_assets = discovered
+            self.db.save_discovered_assets(discovered)
+            log.info(f"Top {len(discovered)} assets discovered by volume.")
 
         # 2. Fetch contract specs for discovered assets
         specs = await self.client.get_symbols()
@@ -308,9 +319,20 @@ class Simulator:
                         roe = (entry / price - 1) * max_lev
 
                     if roe >= BREAKEVEN_ROI_THRESHOLD:
-                        # Move SL to Entry + small buffer (0.05%) to cover partial fees
-                        buffer = 0.0005
-                        o["triggerPrice"] = entry * (1 + buffer) if side == "buy" else entry * (1 - buffer)
+                        # Move SL to Entry + Fees + Profit Buffer
+                        # Calculate required move to cover entry fee + exit maker fee + profit buffer
+                        entry_fee_rate = pos.get("entry_fee", 0) / (pos["qty"] * pos["entry_price"])
+                        exit_fee_rate = MAKER_FEE
+
+                        # total_buffer_pct is the price move needed to cover fees and desired profit ROE
+                        total_buffer_roe = (entry_fee_rate + exit_fee_rate) * max_lev + BREAKEVEN_PROFIT_BUFFER
+                        total_buffer_pct = total_buffer_roe / max_lev
+
+                        if side == "buy": # Long: Move SL up
+                            o["triggerPrice"] = entry * (1 + total_buffer_pct)
+                        else: # Short: Move SL down
+                            o["triggerPrice"] = entry * (1 - total_buffer_pct)
+
                         o["is_breakeven"] = True
                         log.info(f"BREAKEVEN TRIGGERED for {sym} {side.upper()} @ ROE={roe*100:.2f}% | SL moved to {o['triggerPrice']:.8f}")
 
@@ -336,12 +358,12 @@ class Simulator:
 
                     # Disaster Backup: If price moves TOO FAR past our limit, market fill
                     else:
-                        # Side is 'buy' (Short position): Exit if price MOONS above our limit
-                        # Side is 'sell' (Long position): Exit if price CRASHES below our limit
-                        if side == "buy": # Short
-                            distance = (price / o["triggerPrice"] - 1)
-                        else: # Long
+                        # Side is 'buy' (Long position): Exit if price CRASHES below our limit
+                        # Side is 'sell' (Short position): Exit if price MOONS above our limit
+                        if side == "buy": # Long
                             distance = (o["triggerPrice"] / price - 1)
+                        else: # Short
+                            distance = (price / o["triggerPrice"] - 1)
 
                         # Only fire if distance is positive (price bypassed limit) AND exceeds buffer
                         if distance > SL_DISASTER_BUFFER:
@@ -498,6 +520,7 @@ class Simulator:
     def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]
         side = order["pos_side"]
+        is_be = order.get("is_breakeven", False)
         pos = self.positions.get((sym, side))
         if not pos: return
 
@@ -529,4 +552,4 @@ class Simulator:
         del self.positions[(sym, side)]
         self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
-        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl)
+        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be)
