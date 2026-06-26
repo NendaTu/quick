@@ -64,6 +64,20 @@ This document serves as the standardized record for simulation results. Each run
 - **Soft-Stop Fix**: The disaster backup bug was fixed and verified. Long positions no longer exit prematurely.
 - **TTL Efficiency**: TTL exits continue to save capital on stagnant trades that would likely have hit SL.
 
+### Run 33-37: Feature Isolation Tests
+- **Run 33 (Optimized Breakeven)**: Win rate 78.6%, PnL +0.34. Validated profit buffer coverage.
+- **Run 34 (BTC Gate)**: Prevented Longs in bearish BTC. 100% Shorts. Win rate 35.7%.
+- **Run 35 (Fee Sizing)**: Corrected risk-per-trade logic. Qty reduced by ~10% to cover fees.
+- **Run 36 (ATR-SL)**: Dynamic SL active. Kept trades alive longer but TTL still dominates.
+- **Run 37 (Short RSI Ceiling)**: Prevented entries on parabolic overbought moves.
+
+### Run 38: Integrated Strategy (All Features)
+**Duration**: 11m
+**Total Trades**: 2
+**Win Rate**: 0%
+**Net PnL**: -2.28 USDT
+- **Observation**: High selectivity (2 trades vs 14+ in previous runs). BTC gate and RSI ceiling effectively narrowed the entry window. Need to optimize indicator thresholds for better entry timing at 0.8% TP.
+
 ---
 
 ## Strategic Roadmap Progress

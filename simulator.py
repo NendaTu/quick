@@ -308,9 +308,20 @@ class Simulator:
                         roe = (entry / price - 1) * max_lev
 
                     if roe >= BREAKEVEN_ROI_THRESHOLD:
-                        # Move SL to Entry + small buffer (0.05%) to cover partial fees
-                        buffer = 0.0005
-                        o["triggerPrice"] = entry * (1 + buffer) if side == "buy" else entry * (1 - buffer)
+                        # Move SL to Entry + Fees + Profit Buffer
+                        # Calculate required move to cover entry fee + exit maker fee + profit buffer
+                        entry_fee_rate = pos.get("entry_fee", 0) / (pos["qty"] * pos["entry_price"])
+                        exit_fee_rate = MAKER_FEE
+
+                        # total_buffer_pct is the price move needed to cover fees and desired profit ROE
+                        total_buffer_roe = (entry_fee_rate + exit_fee_rate) * max_lev + BREAKEVEN_PROFIT_BUFFER
+                        total_buffer_pct = total_buffer_roe / max_lev
+
+                        if side == "buy": # Long: Move SL up
+                            o["triggerPrice"] = entry * (1 + total_buffer_pct)
+                        else: # Short: Move SL down
+                            o["triggerPrice"] = entry * (1 - total_buffer_pct)
+
                         o["is_breakeven"] = True
                         log.info(f"BREAKEVEN TRIGGERED for {sym} {side.upper()} @ ROE={roe*100:.2f}% | SL moved to {o['triggerPrice']:.8f}")
 

@@ -85,6 +85,7 @@ CONTRARIAN_GLOBAL = False        # Flip final order direction (BUY <-> SELL)
 CONTRARIAN_FILTER = False        # Flip filter logic (requires CONTRARIAN_GLOBAL=True)
 USE_BREAKEVEN_TRIGGER = True     # Move SL to entry after price moves halfway to TP
 BREAKEVEN_ROI_THRESHOLD = 0.025  # 2.5% ROE threshold for breakeven
+BREAKEVEN_PROFIT_BUFFER = 0.01   # Additional 1% ROE profit buffer on top of fees
 USE_ATR_CAPPED_TP = True         # Cap dynamic TP by 15m ATR to ensure reachability
 USE_DRT_VELOCITY = True          # Ensure pulse is accelerating in trade direction
 USE_ADAPTIVE_RSI = True          # Tighten RSI filters unless momentum is high
@@ -113,6 +114,7 @@ RESTRICT_IMBALANCE = False
 RESTRICT_CONFIDENCE = False
 RESTRICT_DIRECTIONAL_SANITY = False
 RESTRICT_RSI = True
+RESTRICT_RSI_SHORT_CEILING = True
 RESTRICT_MACD = False
 RESTRICT_15M_TREND = False
 RESTRICT_SUPERTREND = False
@@ -125,7 +127,10 @@ RESTRICT_LIQUIDITY = False
 RESTRICT_SLIPPAGE = False
 RESTRICT_MIN_VAL = False
 RESTRICT_SCORE = False
+RESTRICT_BTC_MOMENTUM = True
+FEE_AWARE_SIZING = True
 
 # --- BTC Confluence Thresholds ---
 BTC_CONF_15M_MIN = 0.0002
 BTC_CONF_1H_MIN = 0.0002
+BTC_MOMENTUM_THRESHOLD = 0.001

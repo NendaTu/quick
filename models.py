@@ -222,7 +222,7 @@ class LearningModel:
                 if rsi < upper_limit:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive {gate_direction})")
                     return None
-                if rsi > RSI_SHORT_CEILING:
+                if RESTRICT_RSI_SHORT_CEILING and rsi > RSI_SHORT_CEILING:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling {gate_direction})")
                     return None
 
@@ -238,6 +238,15 @@ class LearningModel:
                 return None
 
         # BTC Confluence Restrictions
+        if RESTRICT_BTC_MOMENTUM:
+            btc_15m = features.get("btc_15m", 0)
+            if gate_direction == "buy" and btc_15m < -BTC_MOMENTUM_THRESHOLD:
+                log.debug(f"REJECT {symbol}: BTC 15m bearish {btc_15m:.4f} < -{BTC_MOMENTUM_THRESHOLD}")
+                return None
+            if gate_direction == "sell" and btc_15m > BTC_MOMENTUM_THRESHOLD:
+                log.debug(f"REJECT {symbol}: BTC 15m bullish {btc_15m:.4f} > {BTC_MOMENTUM_THRESHOLD}")
+                return None
+
         if RESTRICT_BTC_CONFLUENCE:
             btc_15m = features.get("btc_15m", 0)
             btc_1h = features.get("btc_1h", 0)
@@ -310,7 +319,16 @@ class LearningModel:
         # and (1 - tp) for sell.
 
         risk_amount = equity * RISK_PER_TRADE
-        risk_per_unit = abs(entry - stop_price)
+
+        # Fee-aware sizing: subtract expected round-trip fees from the per-unit risk capacity
+        if FEE_AWARE_SIZING:
+            entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+            exit_fee_rate = TAKER_FEE # Worst case for SL
+            fee_per_unit = entry * (entry_fee_rate + exit_fee_rate)
+            risk_per_unit = abs(entry - stop_price) + fee_per_unit
+        else:
+            risk_per_unit = abs(entry - stop_price)
+
         if risk_per_unit == 0:
             return None
 
