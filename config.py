@@ -13,17 +13,23 @@ BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
 # --- Account ---
 # The simulated starting balance used for all PnL and risk calculations.
-INITIAL_EQUITY = 1000.0
+INITIAL_EQUITY = 15.0
 
 # The maximum fraction of your total balance you are willing to lose on a single trade.
 # Example: 0.002 means you risk 0.2% (2 USDT on a 1000 USDT balance) per trade.
-RISK_PER_TRADE = 0.002
+RISK_PER_TRADE = 0.02
 
 # If True, the console will show every trade that was rejected by the filters and why.
-LOG_REJECTIONS = False
+LOG_REJECTIONS = True
 
 # If True, the console will show every signal the bot generates before it tries to enter.
-LOG_SIGNALS = False
+LOG_SIGNALS = True
+
+# If True, the bot will print a periodic summary of performance to the console.
+SHOW_PERIODIC_SUMMARY = True
+
+# How often (in seconds) the periodic summary should be printed.
+SUMMARY_INTERVAL_SECONDS = 30
 
 # The maximum number of trades allowed to be open at the same time across all assets.
 MAX_CONCURRENT_POSITIONS = 50
@@ -35,6 +41,10 @@ DRAWDOWN_LIMIT = 0.5
 # Target goal: Stop the bot once it gains this percentage of the starting equity.
 # 0.1 means stop after a 10% total profit.
 TOTAL_ROI_LIMIT = 0.1
+
+# Minimum cumulative indicator score (from RSI, MACD, etc.) required to trigger a trade.
+# Higher values increase selectivity (quality) but reduce trade frequency.
+MIN_REQUIRED_SCORE = 1.5
 
 # Stop the bot after it has completed this many total trades (wins + losses).
 MAX_TRADES_LIMIT = 500
@@ -165,6 +175,16 @@ VOL_PCT_MIN = 0.05
 # Maximum allowed bid/ask spread %. Prevents trading assets with expensive "gaps" in the book.
 MAX_SPREAD_PCT = 0.002
 
+# Toggle for high-volatility risk reduction. If True, reduces position size during extreme noise.
+USE_VOL_ADJUSTED_RISK = True
+
+# ATR level above which the bot considers the market "too volatile" and reduces risk.
+# 0.002 means if 1m ATR is > 0.2% of price, risk is halved.
+ATR_VOL_THRESHOLD = 0.002
+
+# The multiplier applied to RISK_PER_TRADE when ATR exceeds ATR_VOL_THRESHOLD.
+REDUCED_RISK_FRACTION = 0.5
+
 # --- Advanced Strategy Features ---
 # If True, the bot flips its logic (buys when signals say sell, and vice versa).
 CONTRARIAN_GLOBAL = False
@@ -191,6 +211,16 @@ USE_DRT_VELOCITY = True
 USE_ADAPTIVE_RSI = True
 RSI_TIGHT_LONG = 25.0
 RSI_TIGHT_SHORT = 75.0
+
+# Toggle for TP relaxation. If True, the bot accepts lower ROE targets during low-volatility/flat trends.
+USE_TP_RELAXATION = True
+
+# The lower ROE target (Return on Equity) used when relaxation is active.
+RELAXED_ROE_TARGET = 0.03 # 3% instead of 5%
+
+# The DRT pulse threshold (closeness to 0.5) to trigger relaxation.
+# 0.05 means if |DRT - 0.5| < 0.05 (near flat), use the relaxed target.
+TP_RELAXATION_THRESHOLD = 0.05
 
 # --- Scoring Thresholds ---
 # Bases for indicator scoring. RSI < RSI_LONG gets +1 point for "Buy" score.
@@ -232,7 +262,7 @@ RESTRICT_ASSET_CONFLUENCE = False   # Asset 15m momentum alignment gate.
 RESTRICT_LIQUIDITY = False
 RESTRICT_SLIPPAGE = False
 RESTRICT_MIN_VAL = False            # Minimum USDT trade value enforcement.
-RESTRICT_SCORE = False              # Enforces a minimum cumulative score before trading.
+RESTRICT_SCORE = True               # Enforces a minimum cumulative score before trading.
 
 # BTC Global Momentum Gate: Blocks counter-trend trades during significant BTC flushes/moons.
 # Dependency: Works with BTC_MOMENTUM_THRESHOLD.

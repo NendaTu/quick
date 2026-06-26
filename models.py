@@ -286,8 +286,16 @@ class LearningModel:
 
             # Use max_lev to determine required price move for TARGET_NET_ROE
             max_lev = self.simulator.leverage_limits.get(symbol, 20)
+            # --- TP RELAXATION LOGIC ---
+            target_roe = TARGET_NET_ROE
+            if USE_TP_RELAXATION:
+                drt_offset = abs(features.get("drt", 0.5) - 0.5)
+                if drt_offset < TP_RELAXATION_THRESHOLD:
+                    target_roe = RELAXED_ROE_TARGET
+                    log.debug(f"TP RELAXED for {symbol}: using {target_roe*100}% ROE due to flat DRT ({drt_offset:.4f})")
+
             # Factor in fee overhead and EXPECTED_SLIPPAGE on the exit side
-            tp_move = (TARGET_NET_ROE / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
+            tp_move = (target_roe / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
 
             # Cap TP by 15m ATR
             if USE_ATR_CAPPED_TP and features.get("atr"):
@@ -318,7 +326,15 @@ class LearningModel:
         # The current math above already handles this because it uses (1 + tp) for buy
         # and (1 - tp) for sell.
 
-        risk_amount = equity * RISK_PER_TRADE
+        # --- VOL-ADJUSTED RISK LOGIC ---
+        risk_fraction = RISK_PER_TRADE
+        if USE_VOL_ADJUSTED_RISK:
+            atr_pct = features.get("atr", 0) / entry if entry > 0 else 0
+            if atr_pct > ATR_VOL_THRESHOLD:
+                risk_fraction = RISK_PER_TRADE * REDUCED_RISK_FRACTION
+                log.debug(f"RISK REDUCED for {symbol}: ATR {atr_pct:.4f} > {ATR_VOL_THRESHOLD}")
+
+        risk_amount = equity * risk_fraction
 
         # Fee-aware sizing: subtract expected round-trip fees from the per-unit risk capacity
         if FEE_AWARE_SIZING:

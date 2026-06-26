@@ -73,16 +73,15 @@ class Engine:
         asyncio.create_task(self.exchange.data_feed_task(self))
         asyncio.create_task(self._equity_monitor())
         asyncio.create_task(self._maintenance_loop())
-        asyncio.create_task(self._trading_loop())
+        trading_task = asyncio.create_task(self._trading_loop())
+        if SHOW_PERIODIC_SUMMARY:
+            asyncio.create_task(self._summary_task())
 
         await self.stop_event.wait()
         log.info("Shutdown signal received. Waiting for open positions to finalize...")
 
-        # Graceful shutdown: stop trading loop but wait for exits
-        while self.open_positions or self.pending_entries:
-            # Sync equity
-            self.equity = self.exchange.equity
-            await asyncio.sleep(1.0)
+        # Wait for the trading loop to return (it handles its own graceful exit)
+        await trading_task
 
         log.info("All positions finalized. Bot stopped.")
         self._print_final_stats()
@@ -232,18 +231,12 @@ class Engine:
 
     async def _trading_loop(self):
         await asyncio.sleep(5)
-        last_summary_time = time.time()
         log.info("Trading loop started.")
 
-        while not self.stop_event.is_set():
+        # Continue loop even after stop_event until positions clear
+        while not self.stop_event.is_set() or self.open_positions or self.pending_entries:
             try:
-                # 1. Periodic Summary
-                now = time.time()
-                if now - last_summary_time >= 30.0:
-                    self._log_periodic_summary()
-                    last_summary_time = now
-
-                # 2. Update Features and Train (Selective)
+                # 1. Update Features and Train (Selective)
                 all_features = {}
                 # Ensure each unique symbol is processed only once
                 for sym in set(self.enabled_assets + [BTC_SYMBOL]):
@@ -285,7 +278,7 @@ class Engine:
                         sym = pos_key.split("_")[0]
                         side = pos["side"]
                         # Request TTL Exit from simulator (Mid-price limit exit)
-                        if hasattr(self.exchange, "books"):
+                        if hasattr(self.exchange, "books") and not pos.get("ttl_triggered"):
                             book = self.exchange.books.get(sym)
                             if book:
                                 mid = (book.best_bid + book.best_ask) / 2
@@ -294,11 +287,11 @@ class Engine:
                                     "symbol": sym, "pos_side": side, "type": "tp",
                                     "price": mid, "qty": pos["qty"], "is_ttl": True
                                 })
-                                # Remove from local state to prevent double TTL
-                                del self.open_positions[pos_key]
+                                # Mark as triggered but keep in list until simulator reports exit
+                                pos["ttl_triggered"] = True
 
-                # 4. Check Signal and Trade
-                if len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
+                # 4. Check Signal and Trade (Skip if shutting down)
+                if not self.stop_event.is_set() and len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
                     for sym in self.enabled_assets:
                         # Re-check limit inside loop to avoid burst over-trading
                         if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
@@ -370,10 +363,20 @@ class Engine:
                 log.exception(f"Trading loop error: {e}")
                 await asyncio.sleep(1)
 
+    async def _summary_task(self):
+        while not self.stop_event.is_set():
+            try:
+                self._log_periodic_summary()
+            except Exception as e:
+                log.error(f"Summary task error: {e}")
+            await asyncio.sleep(SUMMARY_INTERVAL_SECONDS)
+
     def _log_periodic_summary(self):
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
         tp_win_pct = self.tp_wins / self.total_trades * 100 if self.total_trades > 0 else 0
         drawdown = (1 - self.equity / self.peak_equity) * 100 if self.peak_equity > 0 else 0
         roi = (self.equity / self.starting_equity - 1) * 100
+        used_margin = getattr(self.exchange, "used_margin", 0)
         log.info(f"SUMMARY | Equity: {self.equity:.2f} | ROI: {roi:.1f}% | "
-                 f"Trades: {self.total_trades} | Win%: {win_rate:.1f} (TP: {tp_win_pct:.1f}%) | Open: {len(self.open_positions)}")
+                 f"Trades: {self.total_trades} | Win%: {win_rate:.1f} (TP: {tp_win_pct:.1f}%) | "
+                 f"Open: {len(self.open_positions)} | Margin: {used_margin:.2f}")
