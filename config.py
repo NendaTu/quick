@@ -34,6 +34,7 @@ TAKER_FEE = 0.0006               # 0.06%
 
 # --- Assets ---
 ASSETS_COUNT = 100
+ASSET_REDISCOVERY_HOURS = 6.0    # Rediscover every 6 hours
 ASSET_OMITTED = ["BTCUSDT"]      # BTC used for global confluence, not trading
 BTC_SYMBOL = "BTCUSDT"
 

@@ -58,6 +58,12 @@ class Database:
                     FOREIGN KEY(session_id) REFERENCES sessions(id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS discovered_assets (
+                    timestamp REAL,
+                    assets TEXT
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time ON ticks (symbol, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time ON candles (symbol, timeframe, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session_id)")
@@ -134,6 +140,21 @@ class Database:
 
     def save_log(self, level, logger_name, message):
         self.write_queue.put(("log", (self.session_id, time.time(), level, logger_name, message)))
+
+    def save_discovered_assets(self, assets_list):
+        assets_str = ",".join(assets_list)
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            conn.execute("DELETE FROM discovered_assets")
+            conn.execute("INSERT INTO discovered_assets (timestamp, assets) VALUES (?, ?)", (time.time(), assets_str))
+            conn.commit()
+
+    def get_discovered_assets(self):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.execute("SELECT timestamp, assets FROM discovered_assets LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                return row[0], row[1].split(",")
+        return 0, []
 
     def get_recent_ticks(self, symbol, limit=1000):
         with sqlite3.connect(self.db_path, timeout=10) as conn:

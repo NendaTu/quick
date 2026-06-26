@@ -35,27 +35,38 @@ class Simulator:
         self.discovered_assets: List[str] = []
 
     async def warm_up(self):
-        log.info("Discovering top assets and starting warm-up...")
+        log.info("Starting warm-up...")
 
-        # 1. Discover Assets by Volume
-        tickers = await self.client.get_tickers()
-        # Sort by usdtVolume descending
-        sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
+        # 1. Discover Assets by Volume (with persistence)
+        last_ts, cached_assets = self.db.get_discovered_assets()
+        age_hours = (time.time() - last_ts) / 3600
 
-        discovered = []
-        for t in sorted_tickers:
-            sym = t["symbol"]
-            # Filter: only USDT futures, not omitted, not stablecoins (proxy: ends with USDT)
-            if sym.endswith("USDT") and sym not in ASSET_OMITTED:
-                # Exclude known stables if they show up in volume
-                if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
-                    continue
-                discovered.append(sym)
-                if len(discovered) >= ASSETS_COUNT:
-                    break
+        if cached_assets and age_hours < ASSET_REDISCOVERY_HOURS:
+            log.info(f"Using cached assets from DB (age: {age_hours:.1f}h)")
+            self.discovered_assets = cached_assets
+            # Still need tickers for initial price baseline
+            tickers = await self.client.get_tickers()
+        else:
+            log.info(f"Discovering top assets (cache age: {age_hours:.1f}h)...")
+            tickers = await self.client.get_tickers()
+            # Sort by usdtVolume descending
+            sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
 
-        self.discovered_assets = discovered
-        log.info(f"Top {len(discovered)} assets discovered by volume.")
+            discovered = []
+            for t in sorted_tickers:
+                sym = t["symbol"]
+                # Filter: only USDT futures, not omitted, not stablecoins (proxy: ends with USDT)
+                if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                    # Exclude known stables if they show up in volume
+                    if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
+                        continue
+                    discovered.append(sym)
+                    if len(discovered) >= ASSETS_COUNT:
+                        break
+
+            self.discovered_assets = discovered
+            self.db.save_discovered_assets(discovered)
+            log.info(f"Top {len(discovered)} assets discovered by volume.")
 
         # 2. Fetch contract specs for discovered assets
         specs = await self.client.get_symbols()
