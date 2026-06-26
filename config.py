@@ -17,7 +17,7 @@ INITIAL_EQUITY = 15.0
 
 # The maximum fraction of your total balance you are willing to lose on a single trade.
 # Example: 0.002 means you risk 0.2% (2 USDT on a 1000 USDT balance) per trade.
-RISK_PER_TRADE = 0.02
+RISK_PER_TRADE = 0.04
 
 # If True, the console will show every trade that was rejected by the filters and why.
 LOG_REJECTIONS = True
@@ -133,13 +133,13 @@ TREND_STRENGTH_MIN = 0.1
 # Works in conjunction with USE_DYNAMIC_TARGETS:
 # - If True: This acts as the absolute minimum profit "floor".
 # - If False: This is the exact fixed profit target for every trade.
-TP_MOVE = 0.008                  # 0.8%
+TP_MOVE = 0.01                  # 0.8%
 
 # The target % price move for the stop loss.
 # Works in conjunction with USE_ATR_SL:
 # - If True: This is only used as a fallback if ATR data is unavailable.
 # - If False: This is the exact fixed stop distance for every trade.
-SL_MOVE = 0.004                  # 0.4%
+SL_MOVE = 0.005                  # 0.4%
 
 # Maximum allowed difference between requested entry price and fill price for "market" entries.
 MAX_ENTRY_SLIPPAGE = 0.001
@@ -158,10 +158,10 @@ RSI_SHORT_CEILING = 80.0
 REENTRY_COOLDOWN = 60.0
 
 # Toggle for "Net ROE" logic. If True, targets scale based on leverage to hit TARGET_NET_ROE.
-USE_DYNAMIC_TARGETS = True
+USE_DYNAMIC_TARGETS = False
 
 # Toggle for volatility-aware stops. If True, SL distance widens/narrows based on market noise.
-USE_ATR_SL = True
+USE_ATR_SL = False
 
 # Multiplier for ATR stop distance. Higher = wider stops, lower position quantity.
 ATR_SL_MULT = 1.5
@@ -176,7 +176,7 @@ VOL_PCT_MIN = 0.05
 MAX_SPREAD_PCT = 0.002
 
 # Toggle for high-volatility risk reduction. If True, reduces position size during extreme noise.
-USE_VOL_ADJUSTED_RISK = True
+USE_VOL_ADJUSTED_RISK = False
 
 # ATR level above which the bot considers the market "too volatile" and reduces risk.
 # 0.002 means if 1m ATR is > 0.2% of price, risk is halved.
@@ -193,7 +193,7 @@ CONTRARIAN_GLOBAL = False
 CONTRARIAN_FILTER = False
 
 # Risk protection: Moves the Stop-Loss to entry price once the trade is significantly in profit.
-USE_BREAKEVEN_TRIGGER = True
+USE_BREAKEVEN_TRIGGER = False
 
 # ROE level required to activate the breakeven move. (0.025 = 2.5% gain)
 BREAKEVEN_ROI_THRESHOLD = 0.025
@@ -202,10 +202,10 @@ BREAKEVEN_ROI_THRESHOLD = 0.025
 BREAKEVEN_PROFIT_BUFFER = 0.01
 
 # Logic to cap Take-Profit by 15m volatility to ensure the target is "reachable".
-USE_ATR_CAPPED_TP = True
+USE_ATR_CAPPED_TP = False
 
 # Momentum acceleration check: Buy only if 1m trend is stronger than 5m trend.
-USE_DRT_VELOCITY = True
+USE_DRT_VELOCITY = False
 
 # Automatically tightens RSI entry windows unless high-timeframe momentum is present.
 USE_ADAPTIVE_RSI = True
@@ -213,7 +213,7 @@ RSI_TIGHT_LONG = 25.0
 RSI_TIGHT_SHORT = 75.0
 
 # Toggle for TP relaxation. If True, the bot accepts lower ROE targets during low-volatility/flat trends.
-USE_TP_RELAXATION = True
+USE_TP_RELAXATION = False
 
 # The lower ROE target (Return on Equity) used when relaxation is active.
 RELAXED_ROE_TARGET = 0.03 # 3% instead of 5%
@@ -249,8 +249,8 @@ RESTRICT_DRT = False
 RESTRICT_IMBALANCE = False
 RESTRICT_CONFIDENCE = False
 RESTRICT_DIRECTIONAL_SANITY = False # Forces score direction to match DRT trend pulse.
-RESTRICT_RSI = True
-RESTRICT_RSI_SHORT_CEILING = True   # Specific gate for the Short ceiling safety check.
+RESTRICT_RSI = False
+RESTRICT_RSI_SHORT_CEILING = False   # Specific gate for the Short ceiling safety check.
 RESTRICT_MACD = False
 RESTRICT_15M_TREND = False
 RESTRICT_SUPERTREND = False
@@ -262,15 +262,15 @@ RESTRICT_ASSET_CONFLUENCE = False   # Asset 15m momentum alignment gate.
 RESTRICT_LIQUIDITY = False
 RESTRICT_SLIPPAGE = False
 RESTRICT_MIN_VAL = False            # Minimum USDT trade value enforcement.
-RESTRICT_SCORE = True               # Enforces a minimum cumulative score before trading.
+RESTRICT_SCORE = False               # Enforces a minimum cumulative score before trading.
 
 # BTC Global Momentum Gate: Blocks counter-trend trades during significant BTC flushes/moons.
 # Dependency: Works with BTC_MOMENTUM_THRESHOLD.
-RESTRICT_BTC_MOMENTUM = True
+RESTRICT_BTC_MOMENTUM = False
 
 # Logic to subtract estimated fees from the risk capacity during position sizing.
 # Ensures that (Loss + Fees) stays within the RISK_PER_TRADE budget.
-FEE_AWARE_SIZING = True
+FEE_AWARE_SIZING = False
 
 # --- BTC Confluence Thresholds ---
 # Specific momentum thresholds (decimal %) for macro trend alignment filters.
