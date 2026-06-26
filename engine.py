@@ -21,7 +21,9 @@ class Engine:
         self.enabled_assets: List[str] = []
 
         self.total_trades = 0
-        self.winning_trades = 0
+        self.winning_trades = 0 # Cumulative Wins (TP + BE)
+        self.tp_wins = 0        # Direct TP hits
+        self.be_wins = 0        # Breakeven protected wins
         self.losing_trades = 0
         self.cumulative_pnl = 0.0
 
@@ -47,6 +49,15 @@ class Engine:
     async def start(self):
         self.start_time = time.time()
 
+        # Handle signals for graceful manual shutdown
+        try:
+            import signal
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, lambda: self.stop_event.set())
+        except Exception as e:
+            log.debug(f"Signal handlers not supported: {e}")
+
         if MODE == "paper":
             await self.exchange.warm_up()
             self.leverage_limits = self.exchange.get_leverage_limits()
@@ -65,7 +76,15 @@ class Engine:
         asyncio.create_task(self._trading_loop())
 
         await self.stop_event.wait()
-        log.info("Bot stopped.")
+        log.info("Shutdown signal received. Waiting for open positions to finalize...")
+
+        # Graceful shutdown: stop trading loop but wait for exits
+        while self.open_positions or self.pending_entries:
+            # Sync equity
+            self.equity = self.exchange.equity
+            await asyncio.sleep(1.0)
+
+        log.info("All positions finalized. Bot stopped.")
         self._print_final_stats()
 
     async def _equity_monitor(self):
@@ -123,7 +142,7 @@ class Engine:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float):
+    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False):
         # Local registration cleanup
         pos_key = f"{symbol}_{side}"
         if pos_key in self.open_positions:
@@ -140,12 +159,19 @@ class Engine:
 
         # Asset-specific stats
         if symbol not in self.asset_stats:
-            self.asset_stats[symbol] = {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0}
+            self.asset_stats[symbol] = {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0, "tp_wins": 0, "be_wins": 0}
 
         self.asset_stats[symbol]["pnl"] += round_trip_pnl
 
         if round_trip_pnl > 0:
             self.winning_trades += 1
+            if exit_type == "tp":
+                self.tp_wins += 1
+                self.asset_stats[symbol]["tp_wins"] += 1
+            elif is_be:
+                self.be_wins += 1
+                self.asset_stats[symbol]["be_wins"] += 1
+
             if side == "buy": self.asset_stats[symbol]["buy_wins"] += 1
             else: self.asset_stats[symbol]["sell_wins"] += 1
         else:
@@ -158,12 +184,14 @@ class Engine:
         hours, rem = divmod(elapsed, 3600)
         minutes, seconds = divmod(rem, 60)
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
+        tp_win_pct = self.tp_wins / self.total_trades * 100 if self.total_trades > 0 else 0
+        be_win_pct = self.be_wins / self.total_trades * 100 if self.total_trades > 0 else 0
 
         log.info(f"===== FINAL STATS =====")
         log.info(f"Session duration: {int(hours)}h {int(minutes)}m {int(seconds)}s")
         log.info(f"Total trades: {self.total_trades}")
-        log.info(f"Wins: {self.winning_trades}, Losses: {self.losing_trades}")
-        log.info(f"Win rate: {win_rate:.1f}%")
+        log.info(f"Total Wins: {self.winning_trades} ({win_rate:.1f}%) | TP Hits: {self.tp_wins} ({tp_win_pct:.1f}%) | BE Wins: {self.be_wins} ({be_win_pct:.1f}%)")
+        log.info(f"Losses: {self.losing_trades}")
         log.info(f"Cumulative PnL: {self.cumulative_pnl:.2f} USDT")
         log.info(f"Final equity: {self.equity:.2f} USDT")
         log.info(f"Peak equity: {self.peak_equity:.2f} USDT")
@@ -180,7 +208,8 @@ class Engine:
 
                 log.info(f"{sym:10} | PnL: {stats['pnl']:7.2f} | "
                          f"Long: {stats['buy_wins']}/{b_total} ({b_winrate:5.1f}%) | "
-                         f"Short: {stats['sell_wins']}/{s_total} ({s_winrate:5.1f}%)")
+                         f"Short: {stats['sell_wins']}/{s_total} ({s_winrate:5.1f}%) | "
+                         f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
     def _asset_is_tradable(self, symbol: str, side: str) -> bool:
         # Check volume
@@ -343,8 +372,8 @@ class Engine:
 
     def _log_periodic_summary(self):
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
+        tp_win_pct = self.tp_wins / self.total_trades * 100 if self.total_trades > 0 else 0
         drawdown = (1 - self.equity / self.peak_equity) * 100 if self.peak_equity > 0 else 0
         roi = (self.equity / self.starting_equity - 1) * 100
-        log.info(f"SUMMARY | Equity: {self.equity:.2f} | ROI: {roi:.1f}% | Peak: {self.peak_equity:.2f} | "
-                 f"Drawdown: {drawdown:.1f}% | Trades: {self.total_trades} | "
-                 f"Win%: {win_rate:.1f} | Open: {len(self.open_positions)}")
+        log.info(f"SUMMARY | Equity: {self.equity:.2f} | ROI: {roi:.1f}% | "
+                 f"Trades: {self.total_trades} | Win%: {win_rate:.1f} (TP: {tp_win_pct:.1f}%) | Open: {len(self.open_positions)}")

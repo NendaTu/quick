@@ -520,6 +520,7 @@ class Simulator:
     def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]
         side = order["pos_side"]
+        is_be = order.get("is_breakeven", False)
         pos = self.positions.get((sym, side))
         if not pos: return
 
@@ -551,4 +552,4 @@ class Simulator:
         del self.positions[(sym, side)]
         self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
-        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl)
+        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be)
