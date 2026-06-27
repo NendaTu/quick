@@ -107,6 +107,14 @@ EMA_LONG = 21
 SUPERTREND_PERIOD = 10
 SUPERTREND_MULTIPLIER = 3.0
 
+# --- Timeframes & Pattern Settings ---
+# Primary timeframe used for trading signals and entry analysis.
+ACTIVE_TIMEFRAME = "1m"
+
+# Fair Value Gap (FVG) detection settings.
+FVG_TIMEFRAME = "5m"
+FVG_HISTORY_DEPTH = 50
+
 # --- Confluence Timeframes ---
 # Time duration of a single simulation update loop.
 TICK_SECONDS = 0.2
@@ -230,14 +238,15 @@ TREND_15M_MIN = 0.0001
 
 # --- Timeframes ---
 # List of timeframes used for Multi-Timeframe (MTF) analysis.
-AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "4H", "1D"]
+AVAILABLE_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H", "4H", "1D"]
 
 # Assignment of specific indicators to their respective analysis timeframes.
+# Dynamic: rsi, macd, ema, and atr track the ACTIVE_TIMEFRAME.
 INDICATOR_TIMEFRAMES = {
-    "rsi": "1m",
-    "macd": "1m",
-    "ema": "1m",
-    "atr": "1m",
+    "rsi": ACTIVE_TIMEFRAME,
+    "macd": ACTIVE_TIMEFRAME,
+    "ema": ACTIVE_TIMEFRAME,
+    "atr": ACTIVE_TIMEFRAME,
     "drt_slow": "15m",
     "drt_fast": "5m",
 }

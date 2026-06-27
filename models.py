@@ -228,13 +228,13 @@ class LearningModel:
 
         # DRT Velocity Check
         if USE_DRT_VELOCITY:
-            drt_1m = features.get("drt", 0.5)
-            drt_5m = features.get("drt_fast", 0.5)
-            if gate_direction == "buy" and drt_1m <= drt_5m:
-                log.debug(f"REJECT {symbol}: DRT velocity negative for {gate_direction} ({drt_1m:.4f} <= {drt_5m:.4f})")
+            drt_active = features.get("drt", 0.5)
+            drt_fast = features.get("drt_fast", 0.5)
+            if gate_direction == "buy" and drt_active <= drt_fast:
+                log.debug(f"REJECT {symbol}: DRT velocity negative for {gate_direction} ({drt_active:.4f} <= {drt_fast:.4f})")
                 return None
-            if gate_direction == "sell" and drt_1m >= drt_5m:
-                log.debug(f"REJECT {symbol}: DRT velocity positive for {gate_direction} ({drt_1m:.4f} >= {drt_5m:.4f})")
+            if gate_direction == "sell" and drt_active >= drt_fast:
+                log.debug(f"REJECT {symbol}: DRT velocity positive for {gate_direction} ({drt_active:.4f} >= {drt_fast:.4f})")
                 return None
 
         # BTC Confluence Restrictions
@@ -315,10 +315,15 @@ class LearningModel:
             sl_move = max(sl_move, 0.001) # Absolute floor of 0.1% to prevent immediate stops
         else:
             tp_move = TP_MOVE
+            # Tether sl_move to tp_move to preserve 1:2 RRR even on fixed config
+            # Mathematically: SL_NET * 2 = TP_NET
+            round_trip_fees = entry_fee_rate + sl_exit_fee_rate
+            sl_move_synced = (tp_move - (3 * round_trip_fees)) / 2
+
             if USE_ATR_SL and features.get("atr"):
                 sl_move = (features["atr"] * ATR_SL_MULT) / entry
             else:
-                sl_move = SL_MOVE
+                sl_move = max(sl_move_synced, 0.001)
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)
@@ -404,7 +409,11 @@ class LearningModel:
             "macd": features.get("macd", 0),
             "drt": features.get("drt", 0.5),
             "drt_f": f"{drt_fast:.4f}({premium_fast})",
-            "drt_s": f"{drt_slow:.4f}({premium_slow})"
+            "drt_s": f"{drt_slow:.4f}({premium_slow})",
+            "fvg_count": features.get("fvg_count"),
+            "nearest_fvg_type": features.get("nearest_fvg_type"),
+            "nearest_fvg_state": features.get("nearest_fvg_state"),
+            "nearest_fvg_dist": features.get("nearest_fvg_dist")
         })
         return signal
 

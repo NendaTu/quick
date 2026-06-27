@@ -339,10 +339,14 @@ class Engine:
                         if is_contr:
                             side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
 
+                        fvg_msg = ""
+                        if "fvg_count" in signal:
+                            fvg_msg = f" fvg_c={signal.get('fvg_count')} fvg_t={signal.get('nearest_fvg_type')} fvg_s={signal.get('nearest_fvg_state')}"
+
                         signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
                                       f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
                                       f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
-                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
+                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f}{fvg_msg} equity={self.equity:.2f}")
 
                         # Always log for DB, but conditionally for console
                         if LOG_SIGNALS:

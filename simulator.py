@@ -5,6 +5,7 @@ from orderbook import SimulatedOrderBook
 from indicators import (
     compute_rsi, compute_atr, compute_ema, compute_macd, compute_supertrend, compute_drt
 )
+from ta.patterns.fvg import detect_fvgs
 from database import Database
 from bitget_client import BitGetClient, BitGetWSClient
 
@@ -94,18 +95,18 @@ class Simulator:
                 await asyncio.sleep(0.1 * random.random())
                 # 1. Fetch OHLCV for all relevant timeframes
                 for tf in AVAILABLE_TIMEFRAMES:
-                    limit = 500 if tf == "1m" else 100
+                    limit = 500 if tf == ACTIVE_TIMEFRAME else 100
                     data = await self.client.get_candles(sym, tf, limit=limit)
                     if isinstance(data, list):
                         for c in reversed(data):
                             ts = float(c[0]) / 1000
                             o, h, l, cl, v = map(float, c[1:6])
-                            if tf == "1m":
-                                self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+                            if tf == ACTIVE_TIMEFRAME:
+                                self.db.save_candle(sym, ACTIVE_TIMEFRAME, ts, o, h, l, cl, v)
                             self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
                             self.last_candle_ts[sym][tf] = ts
 
-                        if tf == "1m" and data:
+                        if tf == ACTIVE_TIMEFRAME and data:
                             price = float(data[0][4])
                             self.books[sym].mid_price = price
                             self.last_price[sym] = price
@@ -171,6 +172,12 @@ class Simulator:
         # Legacy DRT for backwards compatibility in logs
         drt = compute_drt(c1, 20) if len(c1) >= 20 else 0.5
 
+        # Pattern Recognition (FVG)
+        fvg_data = {}
+        h_fvg = self.ohlcv.get(symbol, {}).get(FVG_TIMEFRAME, [])
+        if h_fvg:
+            fvg_data = detect_fvgs(h_fvg, depth=FVG_HISTORY_DEPTH)
+
         # BTC confluence cache (global per tick)
         now = time.time()
         if now - self._last_confluence_update > 0.1: # Update cache every 100ms
@@ -204,6 +211,7 @@ class Simulator:
             "drt": drt,
             "drt_slow": drt_slow,
             "drt_fast": drt_fast,
+            **fvg_data,
             **self._btc_confluence_cache,
             **asset_changes,
         }
@@ -248,11 +256,11 @@ class Simulator:
                 self.ohlcv[symbol][tf_name].append({"ts": candle_start, "o": price, "h": price, "l": price, "c": price, "v": size})
                 if len(self.ohlcv[symbol][tf_name]) > 1000: self.ohlcv[symbol][tf_name].pop(0)
 
-                # Persistence for 1m
-                if tf_name == "1m":
+                # Persistence for ACTIVE_TIMEFRAME
+                if tf_name == ACTIVE_TIMEFRAME:
                     prev = self.ohlcv[symbol][tf_name][-2] if len(self.ohlcv[symbol][tf_name]) > 1 else None
                     if prev:
-                        self.db.save_candle(symbol, "1m", prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
+                        self.db.save_candle(symbol, ACTIVE_TIMEFRAME, prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
 
                 # Update confluence history if it's a tracking timeframe
                 if tf_name in self.confluence_history[symbol]:
@@ -459,6 +467,11 @@ class Simulator:
 
         available_balance = self.equity - self.used_margin
         if available_balance < required_margin:
+            rej_msg = f"REJECTED {symbol} {side.upper()}: Insufficient margin (Required: {required_margin:.2f}, Avail: {available_balance:.2f}, Equity: {self.equity:.2f}, Used: {self.used_margin:.2f})"
+            if LOG_REJECTIONS:
+                log.warning(rej_msg)
+            else:
+                log.debug(rej_msg)
             return {"code": "1", "msg": "insufficient balance"}
 
         if ENTRY_ORDER_TYPE == "market":
