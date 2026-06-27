@@ -160,7 +160,7 @@ MAX_ENTRY_SLIPPAGE = 0.001
 # --- Strategy Hardening ---
 # The compounding goal for each trade (Return on Equity).
 # Works with USE_DYNAMIC_TARGETS to widen the TP move enough to cover fees and hit this net % gain.
-TARGET_NET_ROE = 0.05            # 5% Net ROE target
+TARGET_NET_ROE = 0.20            # 20% Net ROE target
 
 # Protective floors/ceilings for RSI. Prevents buying "falling knives" or shorting "moons".
 # Dependency: Works only if RESTRICT_RSI = True.
@@ -209,7 +209,7 @@ CONTRARIAN_FILTER = False
 USE_BREAKEVEN_TRIGGER = True
 
 # ROE level required to activate the breakeven move. (0.025 = 2.5% gain)
-BREAKEVEN_ROI_THRESHOLD = 0.05
+BREAKEVEN_ROI_THRESHOLD = 0.20
 
 # Extra profit buffer added to the breakeven move (covers fees + this ROE profit).
 BREAKEVEN_PROFIT_BUFFER = 0.05

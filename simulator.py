@@ -440,6 +440,20 @@ class Simulator:
                 # If timeout, we might get a worse price. For simplicity, use current market.
                 fill_price = o["price"] if et == "entry" else self.last_price.get(o["symbol"])
 
+                # SLIPPAGE PROTECTION FOR TIMEOUTS
+                if et == "entry_timeout" and RESTRICT_SLIPPAGE:
+                    entry_price = o["price"]
+                    side = o["pos_side"]
+                    slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
+                    if slippage > MAX_ENTRY_SLIPPAGE:
+                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
+                        if o in self.pending_orders: self.pending_orders.remove(o)
+                        if self.engine:
+                            pos_key = f"{o['symbol']}_{side}"
+                            if pos_key in self.engine.pending_entries:
+                                self.engine.pending_entries.remove(pos_key)
+                        continue
+
                 self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type, o.get("original_side"), o.get("is_contrarian", False))
 
                 # Once entry is filled, add TP/SL

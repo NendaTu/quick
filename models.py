@@ -287,45 +287,50 @@ class LearningModel:
         tp_exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
         sl_exit_fee_rate = MAKER_FEE if SL_ORDER_TYPE == "limit" else TAKER_FEE
 
-        if USE_DYNAMIC_TARGETS:
-            # Use max_lev to determine required price move for TARGET_NET_ROE
-            max_lev = self.simulator.leverage_limits.get(symbol, 20)
+        # Leverage and Fee rates for RRR synchronization
+        max_lev = self.simulator.leverage_limits.get(symbol, 20)
+        entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+        tp_exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+        sl_exit_fee_rate = MAKER_FEE if SL_ORDER_TYPE == "limit" else TAKER_FEE
 
-            # --- TP RELAXATION LOGIC ---
-            target_roe = TARGET_NET_ROE
-            if USE_TP_RELAXATION:
-                drt_offset = abs(features.get("drt", 0.5) - 0.5)
-                if drt_offset < TP_RELAXATION_THRESHOLD:
-                    target_roe = RELAXED_ROE_TARGET
-                    log.debug(f"TP RELAXED for {symbol}: using {target_roe*100}% ROE due to flat DRT ({drt_offset:.4f})")
-
-            # TP_MOVE calculation (Net ROE target + round-trip fees + slippage)
-            tp_move = (target_roe / max_lev) + (entry_fee_rate + tp_exit_fee_rate) + EXPECTED_SLIPPAGE
-
-            # Cap TP by 15m ATR
-            if USE_ATR_CAPPED_TP and features.get("atr"):
-                # Use a rough 15m ATR proxy (since atr is 1m in features, multiply by sqrt(15) ~3.8)
-                atr_15m_move = (features["atr"] * 3.8) / entry
-                tp_move = min(tp_move, atr_15m_move)
-
-            # Safety: ensure tp_move is at least a minimum threshold or the config baseline
-            tp_move = max(tp_move, TP_MOVE)
-
-            # SYNC SL_MOVE: Maintain the intended 1:2 RRR based on the dynamic TP_MOVE
-            # Mathematically: SL_NET * 2 = TP_NET (accounting for Taker SL worst case)
-            # sl_move = (tp_move - 4*MakerFee - 2*TakerFee) / 2
-            sl_move = (tp_move - (4 * MAKER_FEE) - (2 * TAKER_FEE)) / 2
-            sl_move = max(sl_move, 0.001) # Absolute floor of 0.1% to prevent immediate stops
+        # 1. Calculate Base SL_MOVE (Volatility-aware or config fallback)
+        if USE_ATR_SL and features.get("atr"):
+            sl_move = (features["atr"] * ATR_SL_MULT) / entry
         else:
-            tp_move = TP_MOVE
-            # Tether sl_move to tp_move to preserve 1:2 RRR even on fixed config
-            # Mathematically: SL_NET * 2 = TP_NET (accounting for Taker SL worst case)
-            sl_move_synced = (tp_move - (4 * MAKER_FEE) - (2 * TAKER_FEE)) / 2
+            sl_move = SL_MOVE
 
-            if USE_ATR_SL and features.get("atr"):
-                sl_move = (features["atr"] * ATR_SL_MULT) / entry
-            else:
-                sl_move = max(sl_move_synced, 0.001)
+        sl_move = max(sl_move, 0.001)
+
+        # 2. Synchronize TP_MOVE to maintain the 1:2 Net RRR
+        # To secure the RRR, Net_TP must be 2x Net_SL.
+        # Net_TP = (tp_move - entry_fee - tp_exit_fee - slippage)
+        # Net_SL = (sl_move + entry_fee + sl_exit_fee)  <- Total lost on stop
+        net_sl_cost = sl_move + entry_fee_rate + sl_exit_fee_rate
+
+        # Calculate target TP_MOVE based on desired ROE vs current SL cost
+        tp_move_from_roe = (TARGET_NET_ROE / max_lev) + entry_fee_rate + tp_exit_fee_rate + EXPECTED_SLIPPAGE
+
+        # Use the larger of (2x SL) or (Target ROE) to ensure we don't compress RRR
+        tp_move = max(tp_move_from_roe, (net_sl_cost * 2) + entry_fee_rate + tp_exit_fee_rate + EXPECTED_SLIPPAGE)
+
+        # 3. Apply TP Relaxation if needed (reduces RRR to 1.5:1 if flat)
+        if USE_TP_RELAXATION:
+            drt_offset = abs(features.get("drt", 0.5) - 0.5)
+            if drt_offset < TP_RELAXATION_THRESHOLD:
+                tp_move = (net_sl_cost * 1.5) + entry_fee_rate + tp_exit_fee_rate + EXPECTED_SLIPPAGE
+                log.debug(f"TP RELAXED for {symbol}: using 1.5:1 RRR due to flat DRT ({drt_offset:.4f})")
+
+        # 4. Final Caps and Floors
+        if USE_ATR_CAPPED_TP and features.get("atr"):
+            atr_15m_move = (features["atr"] * 3.8) / entry
+            tp_move = min(tp_move, atr_15m_move)
+
+        tp_move = max(tp_move, TP_MOVE)
+
+        # 5. Final SL Recalibration: If TP_MOVE was capped or floored, we MUST adjust SL to keep RRR
+        net_tp_win = tp_move - entry_fee_rate - tp_exit_fee_rate - EXPECTED_SLIPPAGE
+        sl_move = (net_tp_win / 2) - entry_fee_rate - sl_exit_fee_rate
+        sl_move = max(sl_move, 0.001)
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)
@@ -399,7 +404,8 @@ class LearningModel:
             tp1_qty = math.floor(qty * TP1_QTY_RATIO * (10 ** vol_place)) / (10 ** vol_place)
             tp2_qty = round(qty - tp1_qty, vol_place)
 
-        max_lev = self.simulator.leverage_limits.get(symbol, 125)
+        # Final leverage check
+        max_lev = self.simulator.leverage_limits.get(symbol, 20)
         required_margin = (qty * entry) / max_lev
         if equity < required_margin:
             return None
