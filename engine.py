@@ -136,14 +136,14 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
-    def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False):
+    def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False, ts: float = None):
         pos_key = f"{symbol}_{side}"
         # If orig_side not passed (e.g. from simulator), default to current
         if orig_side is None: orig_side = side
         self.open_positions[pos_key] = {
             "side": side, "qty": qty, "entry": entry,
             "orig_side": orig_side, "is_contr": is_contr,
-            "ts": time.time()
+            "ts": ts if ts is not None else time.time()
         }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
@@ -362,14 +362,19 @@ class Engine:
                         if is_contr:
                             side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
 
-                        fvg_msg = ""
-                        if "fvg_count" in signal:
-                            fvg_msg = f" fvg_c={signal.get('fvg_count')} fvg_t={signal.get('nearest_fvg_type')} fvg_s={signal.get('nearest_fvg_state')}"
+                        # Extract all feature keys (excluding common ones handled manually in log)
+                        exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct']
+                        extra_features = {k: v for k, v in signal.items() if k not in exclude and v is not None}
+                        feat_msg = " ".join([f"{k}={v}" for k, v in extra_features.items()])
 
                         signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
                                       f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
                                       f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
-                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f}{fvg_msg} equity={self.equity:.2f}")
+                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")
+
+                        # Save to database
+                        if hasattr(self.exchange, "db"):
+                            self.exchange.db.save_signal(sym, side, entry, signal)
 
                         # Always log for DB, but conditionally for console
                         if LOG_SIGNALS:

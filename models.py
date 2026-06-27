@@ -404,18 +404,14 @@ class LearningModel:
         premium_fast = "PREM" if drt_fast > 0.5 else "DISC"
         premium_slow = "PREM" if drt_slow > 0.5 else "DISC"
 
+        # Include all features and patterns in the signal for recording
+        signal.update(features)
+
+        # Override with formatted values for logging if needed
         signal.update({
-            "vol_pct": features.get("vol_pct", 0),
             "rsi": rsi,
-            "atr": features.get("atr", 0),
-            "macd": features.get("macd", 0),
-            "drt": features.get("drt", 0.5),
             "drt_f": f"{drt_fast:.4f}({premium_fast})",
             "drt_s": f"{drt_slow:.4f}({premium_slow})",
-            "fvg_count": features.get("fvg_count"),
-            "nearest_fvg_type": features.get("nearest_fvg_type"),
-            "nearest_fvg_state": features.get("nearest_fvg_state"),
-            "nearest_fvg_dist": features.get("nearest_fvg_dist")
         })
         return signal
 

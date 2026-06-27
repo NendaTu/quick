@@ -559,6 +559,7 @@ class Simulator:
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False):
+        now = time.time()
         fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
         fee = qty * fill_price * fee_rate
         self.equity -= fee
@@ -569,7 +570,7 @@ class Simulator:
 
         self.positions[(symbol, side)] = {
             "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
-            "original_side": original_side, "is_contrarian": is_contrarian
+            "original_side": original_side, "is_contrarian": is_contrarian, "ts": now
         }
         side_str = side.upper()
         if is_contrarian:
@@ -578,7 +579,7 @@ class Simulator:
         log.info(f"FILLED ENTRY {symbol} {side_str} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         if self.engine:
-            self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian)
+            self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian, ts=now)
 
     def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]

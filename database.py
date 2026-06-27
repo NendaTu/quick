@@ -64,6 +64,17 @@ class Database:
                     assets TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS signals (
+                    session_id INTEGER,
+                    timestamp REAL,
+                    symbol TEXT,
+                    side TEXT,
+                    price REAL,
+                    data TEXT,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id)
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time ON ticks (symbol, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time ON candles (symbol, timeframe, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session_id)")
@@ -109,6 +120,11 @@ class Database:
                             "INSERT INTO logs (session_id, timestamp, level, logger, message) VALUES (?, ?, ?, ?, ?)",
                             data
                         )
+                    elif type == "signal":
+                        cursor.execute(
+                            "INSERT INTO signals (session_id, timestamp, symbol, side, price, data) VALUES (?, ?, ?, ?, ?, ?)",
+                            data
+                        )
                     elif type == "purge":
                         tick_retention_seconds, candle_retention_days = data
                         now = time.time()
@@ -140,6 +156,10 @@ class Database:
 
     def save_log(self, level, logger_name, message):
         self.write_queue.put(("log", (self.session_id, time.time(), level, logger_name, message)))
+
+    def save_signal(self, symbol, side, price, data_dict):
+        import json
+        self.write_queue.put(("signal", (self.session_id, time.time(), symbol, side, price, json.dumps(data_dict))))
 
     def save_discovered_assets(self, assets_list):
         assets_str = ",".join(assets_list)
