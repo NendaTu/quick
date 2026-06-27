@@ -299,17 +299,17 @@ class Engine:
                             sym = pos_key.split("_")[0]
                             side = pos["side"]
                             # Request TTL Exit from simulator (Mid-price limit exit)
-                        if hasattr(self.exchange, "books") and not pos.get("ttl_triggered"):
-                            book = self.exchange.books.get(sym)
-                            if book:
-                                mid = (book.best_bid + book.best_ask) / 2
-                                log.info(f"TTL EXPIRED for {pos_key} ({time.time() - pos['ts']:.0f}s) | Triggering Limit Exit @ {mid:.8f}")
-                                self.exchange.pending_orders.append({
-                                    "symbol": sym, "pos_side": side, "type": "ttl",
-                                    "price": mid, "qty": pos["qty"], "is_ttl": True
-                                })
-                                # Mark as triggered but keep in list until simulator reports exit
-                                pos["ttl_triggered"] = True
+                            if hasattr(self.exchange, "books") and not pos.get("ttl_triggered"):
+                                book = self.exchange.books.get(sym)
+                                if book:
+                                    mid = (book.best_bid + book.best_ask) / 2
+                                    log.info(f"TTL EXPIRED for {pos_key} ({time.time() - pos['ts']:.0f}s) | Triggering Limit Exit @ {mid:.8f}")
+                                    self.exchange.pending_orders.append({
+                                        "symbol": sym, "pos_side": side, "type": "ttl",
+                                        "price": mid, "qty": pos["qty"], "is_ttl": True
+                                    })
+                                    # Mark as triggered but keep in list until simulator reports exit
+                                    pos["ttl_triggered"] = True
 
                 # 4. Check Signal and Trade (Skip if shutting down)
                 if not self.stop_event.is_set() and len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
@@ -350,7 +350,11 @@ class Engine:
                         # Immediate local registration to prevent race condition
                         pos_key = f"{sym}_{side}"
                         if ENTRY_ORDER_TYPE == "market":
-                            self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry, "orig_side": orig_side, "is_contr": is_contr}
+                            self.open_positions[pos_key] = {
+                                "side": side, "qty": qty, "entry": entry,
+                                "orig_side": orig_side, "is_contr": is_contr,
+                                "ts": time.time()
+                            }
                         else:
                             self.pending_entries.add(pos_key)
 

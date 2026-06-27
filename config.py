@@ -17,7 +17,7 @@ INITIAL_EQUITY = 15.0
 
 # The maximum fraction of your total balance you are willing to lose on a single trade.
 # Example: 0.002 means you risk 0.2% (2 USDT on a 1000 USDT balance) per trade.
-RISK_PER_TRADE = 0.05
+RISK_PER_TRADE = 0.04
 
 # If True, the console will show every trade that was rejected by the filters and why.
 LOG_REJECTIONS = False
@@ -36,7 +36,7 @@ MAX_CONCURRENT_POSITIONS = 50
 
 # Safety trigger: Stop the bot entirely if balance drops to this percentage of its all-time high.
 # 0.5 means stop at 50% drawdown.
-DRAWDOWN_LIMIT = 0.9
+DRAWDOWN_LIMIT = 0.8
 
 # Target goal: Stop the bot once it gains this percentage of the starting equity.
 # 0.1 means stop after a 10% total profit.
@@ -72,7 +72,7 @@ USE_TTL = True
 
 # The number of candles of the ACTIVE_TIMEFRAME to wait before force-exiting.
 # Example: 3 on a 1m timeframe = 180s. 3 on a 5m timeframe = 900s.
-TTL_CANDLE_MULTIPLIER = 3
+TTL_CANDLE_MULTIPLIER = 15
 
 # Estimated cost of price movement against us during execution. Factored into fee/target math.
 EXPECTED_SLIPPAGE = 0.0005
@@ -284,7 +284,7 @@ RESTRICT_BTC_MOMENTUM = False
 
 # Logic to subtract estimated fees from the risk capacity during position sizing.
 # Ensures that (Loss + Fees) stays within the RISK_PER_TRADE budget.
-FEE_AWARE_SIZING = False
+FEE_AWARE_SIZING = True
 
 # --- BTC Confluence Thresholds ---
 # Specific momentum thresholds (decimal %) for macro trend alignment filters.

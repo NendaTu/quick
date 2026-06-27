@@ -308,17 +308,15 @@ class LearningModel:
             tp_move = max(tp_move, TP_MOVE)
 
             # SYNC SL_MOVE: Maintain the intended 1:2 RRR based on the dynamic TP_MOVE
-            # Mathematically: SL_NET * 2 = TP_NET
-            # sl_move = (tp_move - (3 * round_trip_fees)) / 2
-            round_trip_fees = entry_fee_rate + sl_exit_fee_rate
-            sl_move = (tp_move - (3 * round_trip_fees)) / 2
+            # Mathematically: SL_NET * 2 = TP_NET (accounting for Taker SL worst case)
+            # sl_move = (tp_move - 4*MakerFee - 2*TakerFee) / 2
+            sl_move = (tp_move - (4 * MAKER_FEE) - (2 * TAKER_FEE)) / 2
             sl_move = max(sl_move, 0.001) # Absolute floor of 0.1% to prevent immediate stops
         else:
             tp_move = TP_MOVE
             # Tether sl_move to tp_move to preserve 1:2 RRR even on fixed config
-            # Mathematically: SL_NET * 2 = TP_NET
-            round_trip_fees = entry_fee_rate + sl_exit_fee_rate
-            sl_move_synced = (tp_move - (3 * round_trip_fees)) / 2
+            # Mathematically: SL_NET * 2 = TP_NET (accounting for Taker SL worst case)
+            sl_move_synced = (tp_move - (4 * MAKER_FEE) - (2 * TAKER_FEE)) / 2
 
             if USE_ATR_SL and features.get("atr"):
                 sl_move = (features["atr"] * ATR_SL_MULT) / entry
