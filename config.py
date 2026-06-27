@@ -13,11 +13,11 @@ BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
 # --- Account ---
 # The simulated starting balance used for all PnL and risk calculations.
-INITIAL_EQUITY = 15.0
+INITIAL_EQUITY = 1000.0
 
 # The maximum fraction of your total balance you are willing to lose on a single trade.
 # Example: 0.002 means you risk 0.2% (2 USDT on a 1000 USDT balance) per trade.
-RISK_PER_TRADE = 0.05
+RISK_PER_TRADE = 0.01
 
 # If True, the console will show every trade that was rejected by the filters and why.
 LOG_REJECTIONS = False
@@ -36,11 +36,11 @@ MAX_CONCURRENT_POSITIONS = 50
 
 # Safety trigger: Stop the bot entirely if balance drops to this percentage of its all-time high.
 # 0.5 means stop at 50% drawdown.
-DRAWDOWN_LIMIT = 0.8
+DRAWDOWN_LIMIT = 0.5
 
 # Target goal: Stop the bot once it gains this percentage of the starting equity.
 # 0.1 means stop after a 10% total profit.
-TOTAL_ROI_LIMIT = 1
+TOTAL_ROI_LIMIT = 100.0 # High enough to let it run
 
 # Minimum cumulative indicator score (from RSI, MACD, etc.) required to trigger a trade.
 # Higher values increase selectivity (quality) but reduce trade frequency.
@@ -50,7 +50,7 @@ MIN_REQUIRED_SCORE = 1.5
 MAX_TRADES_LIMIT = 5000
 
 # Time limit: Stop the bot after this many seconds have elapsed. (14400s = 4 hours)
-MAX_DURATION = 14400
+MAX_DURATION = 86400
 
 # --- Execution ---
 # Order type for entries: "limit" to earn Maker fees (may not fill), "market" to fill instantly.
@@ -277,6 +277,7 @@ RESTRICT_LIQUIDITY = True
 RESTRICT_SLIPPAGE = True
 RESTRICT_MIN_VAL = True            # Minimum USDT trade value enforcement.
 RESTRICT_SCORE = False               # Enforces a minimum cumulative score before trading.
+RESTRICT_HTF_BIAS = True             # Enforces alignment with daily/4H bias.
 
 # BTC Global Momentum Gate: Blocks counter-trend trades during significant BTC flushes/moons.
 # Dependency: Works with BTC_MOMENTUM_THRESHOLD.

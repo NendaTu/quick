@@ -32,3 +32,14 @@ The system in `models.py` uses a master synchronization formula:
 3. **If TP is capped** (e.g. by ATR or Config), it **re-calculates the SL backwards** to ensure the 1:2 ratio is never compromised.
 
 **Golden Rule**: The system prioritizes the 1:2 ratio over reaching a specific price target. If the market doesn't allow for a safe RRR, the trade targets will contract until it's mathematically sound or rejected.
+
+## 5. HTF Bias Alignment
+**The Pitfall**: Trading against the Higher Timeframe (4H/1D) trend.
+- **Effect**: Counter-trend trades have a significantly higher failure rate as they often fight against macro momentum.
+- **The Safeguard**: `RESTRICT_HTF_BIAS = True` enforces that Longs are only taken in Bullish HTF environments, and Shorts in Bearish ones.
+- **Neutral Handling**: By default, a 'neutral' bias allows trades in both directions (configurable via `NEUTRAL_ALLOWS_TRADES` in `ta/patterns/trend.py`).
+
+## 6. Multi-Stage Exit Logic (BE+TP1+TP2)
+- **TP1**: Positioned at a buffered distance between the Breakeven price and the final target.
+- **SL Move @ TP1**: The remaining position's Stop Loss is moved to a level halfway between the Breakeven price and the TP1 price. This locks in a net profit for the entire trade even if the second half is stopped out.
+- **Reporting**: Win rate in simulation stats reflects the "Exit Success Rate." Each partial or full exit counts as a trade completion to maintain mathematical consistency in the Win/Loss ratio.

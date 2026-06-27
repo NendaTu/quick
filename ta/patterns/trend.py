@@ -19,6 +19,7 @@ from ta.utils import calculate_sma
 ENABLED = True
 SMA_FAST = 50
 SMA_SLOW = 200
+NEUTRAL_ALLOWS_TRADES = True  # If True, 'neutral' bias does not block entries.
 
 def identify_trend(ohlcv: List[dict], htf_ohlcv: Optional[List[dict]] = None) -> Dict:
     """

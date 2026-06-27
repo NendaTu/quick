@@ -263,6 +263,18 @@ class LearningModel:
                     log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN} for {gate_direction}")
                     return None
 
+        # HTF Bias Alignment Gate
+        if RESTRICT_HTF_BIAS:
+            from ta.patterns.trend import NEUTRAL_ALLOWS_TRADES
+            bias = features.get("bias", "neutral")
+            if bias != "neutral" or not NEUTRAL_ALLOWS_TRADES:
+                if gate_direction == "buy" and bias == "bearish":
+                    log.debug(f"REJECT {symbol}: Long entry against BEARISH HTF bias")
+                    return None
+                if gate_direction == "sell" and bias == "bullish":
+                    log.debug(f"REJECT {symbol}: Short entry against BULLISH HTF bias")
+                    return None
+
         # Asset Confluence (15m alignment)
         if RESTRICT_ASSET_CONFLUENCE:
             asset_15m = features.get("asset_15m", 0)

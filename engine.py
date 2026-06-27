@@ -160,7 +160,9 @@ class Engine:
                 self.pending_entries.remove(pos_key)
 
             self.last_exit_time[symbol] = time.time()
-            self.total_trades += 1
+
+        # Increment total trades on every exit (partial or full) to keep win-rate math accurate
+        self.total_trades += 1
         self.cumulative_pnl += round_trip_pnl
 
         # Asset-specific stats
