@@ -281,12 +281,24 @@ class Engine:
                         log.error(f"Feature calculation error for {sym}: {e}")
 
                 # 3. TTL (Time-to-Live) Exit Check
-                for pos_key in list(self.open_positions.keys()):
-                    pos = self.open_positions[pos_key]
-                    if time.time() - pos.get("ts", 0) > TRADE_TTL_SECONDS:
-                        sym = pos_key.split("_")[0]
-                        side = pos["side"]
-                        # Request TTL Exit from simulator (Mid-price limit exit)
+                if USE_TTL:
+                    # Convert ACTIVE_TIMEFRAME string (e.g., '5m') to seconds
+                    unit = ACTIVE_TIMEFRAME[-1]
+                    val = int(ACTIVE_TIMEFRAME[:-1])
+                    multiplier_map = {'m': 60, 'H': 3600, 'D': 86400}
+                    tf_seconds = val * multiplier_map.get(unit, 60)
+                    ttl_limit = tf_seconds * TTL_CANDLE_MULTIPLIER
+
+                    if not hasattr(self, "_ttl_logged") or self._ttl_logged != ACTIVE_TIMEFRAME:
+                        log.info(f"Dynamic TTL initialized: {ttl_limit}s ({TTL_CANDLE_MULTIPLIER} candles of {ACTIVE_TIMEFRAME})")
+                        self._ttl_logged = ACTIVE_TIMEFRAME
+
+                    for pos_key in list(self.open_positions.keys()):
+                        pos = self.open_positions[pos_key]
+                        if time.time() - pos.get("ts", 0) > ttl_limit:
+                            sym = pos_key.split("_")[0]
+                            side = pos["side"]
+                            # Request TTL Exit from simulator (Mid-price limit exit)
                         if hasattr(self.exchange, "books") and not pos.get("ttl_triggered"):
                             book = self.exchange.books.get(sym)
                             if book:

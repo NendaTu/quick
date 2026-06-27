@@ -66,8 +66,13 @@ SL_ORDER_TYPE = "limit"
 # without filling, the bot fires a Market order to exit immediately. (0.001 = 0.1%)
 SL_DISASTER_BUFFER = 0.001
 
-# Time-to-Live: If a trade is stagnant for this many seconds, the bot exits at the current mid-price.
-TRADE_TTL_SECONDS = 180
+# --- TTL (Time-to-Live) Settings ---
+# Toggle for force-exiting stagnant trades after a certain duration.
+USE_TTL = True
+
+# The number of candles of the ACTIVE_TIMEFRAME to wait before force-exiting.
+# Example: 3 on a 1m timeframe = 180s. 3 on a 5m timeframe = 900s.
+TTL_CANDLE_MULTIPLIER = 3
 
 # Estimated cost of price movement against us during execution. Factored into fee/target math.
 EXPECTED_SLIPPAGE = 0.0005
