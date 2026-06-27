@@ -51,10 +51,17 @@ class Engine:
 
         # Handle signals for graceful manual shutdown
         try:
-            import signal
+            import signal, os
             loop = asyncio.get_running_loop()
+            def handle_shutdown():
+                if self.stop_event.is_set():
+                    log.critical("Force shutdown requested. Exiting immediately.")
+                    os._exit(1)
+                log.info("Shutdown signal received. Starting graceful exit...")
+                self.stop_event.set()
+
             for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, lambda: self.stop_event.set())
+                loop.add_signal_handler(sig, handle_shutdown)
         except Exception as e:
             log.debug(f"Signal handlers not supported: {e}")
 
@@ -174,8 +181,8 @@ class Engine:
             if side == "buy": self.asset_stats[symbol]["buy_wins"] += 1
             else: self.asset_stats[symbol]["sell_wins"] += 1
         else:
-            if exit_type == "tp":
-                log.warning(f"GROSS WIN / NET LOSS on {symbol}: PnL={round_trip_pnl:.4f} (fees consumed profit)")
+            if exit_type in ["tp", "ttl"]:
+                log.warning(f"GROSS WIN / NET LOSS on {symbol} [{exit_type.upper()}]: PnL={round_trip_pnl:.4f} (fees consumed profit)")
             self.losing_trades += 1
             if side == "buy": self.asset_stats[symbol]["buy_losses"] += 1
             else: self.asset_stats[symbol]["sell_losses"] += 1
@@ -286,7 +293,7 @@ class Engine:
                                 mid = (book.best_bid + book.best_ask) / 2
                                 log.info(f"TTL EXPIRED for {pos_key} ({time.time() - pos['ts']:.0f}s) | Triggering Limit Exit @ {mid:.8f}")
                                 self.exchange.pending_orders.append({
-                                    "symbol": sym, "pos_side": side, "type": "tp",
+                                    "symbol": sym, "pos_side": side, "type": "ttl",
                                     "price": mid, "qty": pos["qty"], "is_ttl": True
                                 })
                                 # Mark as triggered but keep in list until simulator reports exit

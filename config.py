@@ -17,30 +17,30 @@ INITIAL_EQUITY = 15.0
 
 # The maximum fraction of your total balance you are willing to lose on a single trade.
 # Example: 0.002 means you risk 0.2% (2 USDT on a 1000 USDT balance) per trade.
-RISK_PER_TRADE = 0.04
+RISK_PER_TRADE = 0.05
 
 # If True, the console will show every trade that was rejected by the filters and why.
-LOG_REJECTIONS = True
+LOG_REJECTIONS = False
 
 # If True, the console will show every signal the bot generates before it tries to enter.
-LOG_SIGNALS = True
+LOG_SIGNALS = False
 
 # If True, the bot will print a periodic summary of performance to the console.
 SHOW_PERIODIC_SUMMARY = True
 
 # How often (in seconds) the periodic summary should be printed.
-SUMMARY_INTERVAL_SECONDS = 30
+SUMMARY_INTERVAL_SECONDS = 15
 
 # The maximum number of trades allowed to be open at the same time across all assets.
 MAX_CONCURRENT_POSITIONS = 50
 
 # Safety trigger: Stop the bot entirely if balance drops to this percentage of its all-time high.
 # 0.5 means stop at 50% drawdown.
-DRAWDOWN_LIMIT = 0.5
+DRAWDOWN_LIMIT = 0.9
 
 # Target goal: Stop the bot once it gains this percentage of the starting equity.
 # 0.1 means stop after a 10% total profit.
-TOTAL_ROI_LIMIT = 0.1
+TOTAL_ROI_LIMIT = 1
 
 # Minimum cumulative indicator score (from RSI, MACD, etc.) required to trigger a trade.
 # Higher values increase selectivity (quality) but reduce trade frequency.
@@ -109,10 +109,10 @@ SUPERTREND_MULTIPLIER = 3.0
 
 # --- Timeframes & Pattern Settings ---
 # Primary timeframe used for trading signals and entry analysis.
-ACTIVE_TIMEFRAME = "1m"
+ACTIVE_TIMEFRAME = "5m"
 
 # Fair Value Gap (FVG) detection settings.
-FVG_TIMEFRAME = "5m"
+FVG_TIMEFRAME = "15m"
 FVG_HISTORY_DEPTH = 50
 
 # --- Confluence Timeframes ---
@@ -141,7 +141,7 @@ TREND_STRENGTH_MIN = 0.1
 # Works in conjunction with USE_DYNAMIC_TARGETS:
 # - If True: This acts as the absolute minimum profit "floor".
 # - If False: This is the exact fixed profit target for every trade.
-TP_MOVE = 0.01                  # 0.8%
+TP_MOVE = 0.015                  # 0.8%
 
 # The target % price move for the stop loss.
 # Works in conjunction with USE_ATR_SL:
@@ -166,7 +166,7 @@ RSI_SHORT_CEILING = 80.0
 REENTRY_COOLDOWN = 60.0
 
 # Toggle for "Net ROE" logic. If True, targets scale based on leverage to hit TARGET_NET_ROE.
-USE_DYNAMIC_TARGETS = False
+USE_DYNAMIC_TARGETS = True
 
 # Toggle for volatility-aware stops. If True, SL distance widens/narrows based on market noise.
 USE_ATR_SL = False

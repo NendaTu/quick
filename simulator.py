@@ -413,6 +413,9 @@ class Simulator:
                 if et == "stop_disaster":
                     order_type = "market"
                     exit_type = "stop_backup"
+                elif o.get("is_ttl"):
+                    order_type = "limit"
+                    exit_type = "ttl"
                 else:
                     order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
                     exit_type = et
