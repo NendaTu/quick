@@ -279,13 +279,14 @@ class LearningModel:
         max_lev = self.simulator.leverage_limits.get(symbol, 125)
 
         # Dynamic TP/SL calculation
-        if USE_DYNAMIC_TARGETS:
-            # TP = Net ROE target + fees (entry + exit)
-            entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
-            exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+        entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+        tp_exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+        sl_exit_fee_rate = MAKER_FEE if SL_ORDER_TYPE == "limit" else TAKER_FEE
 
+        if USE_DYNAMIC_TARGETS:
             # Use max_lev to determine required price move for TARGET_NET_ROE
             max_lev = self.simulator.leverage_limits.get(symbol, 20)
+
             # --- TP RELAXATION LOGIC ---
             target_roe = TARGET_NET_ROE
             if USE_TP_RELAXATION:
@@ -294,8 +295,8 @@ class LearningModel:
                     target_roe = RELAXED_ROE_TARGET
                     log.debug(f"TP RELAXED for {symbol}: using {target_roe*100}% ROE due to flat DRT ({drt_offset:.4f})")
 
-            # Factor in fee overhead and EXPECTED_SLIPPAGE on the exit side
-            tp_move = (target_roe / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
+            # TP_MOVE calculation (Net ROE target + round-trip fees + slippage)
+            tp_move = (target_roe / max_lev) + (entry_fee_rate + tp_exit_fee_rate) + EXPECTED_SLIPPAGE
 
             # Cap TP by 15m ATR
             if USE_ATR_CAPPED_TP and features.get("atr"):
@@ -305,13 +306,19 @@ class LearningModel:
 
             # Safety: ensure tp_move is at least a minimum threshold or the config baseline
             tp_move = max(tp_move, TP_MOVE)
+
+            # SYNC SL_MOVE: Maintain the intended 1:2 RRR based on the dynamic TP_MOVE
+            # Mathematically: SL_NET * 2 = TP_NET
+            # sl_move = (tp_move - (3 * round_trip_fees)) / 2
+            round_trip_fees = entry_fee_rate + sl_exit_fee_rate
+            sl_move = (tp_move - (3 * round_trip_fees)) / 2
+            sl_move = max(sl_move, 0.001) # Absolute floor of 0.1% to prevent immediate stops
         else:
             tp_move = TP_MOVE
-
-        if USE_ATR_SL and features.get("atr"):
-            sl_move = (features["atr"] * ATR_SL_MULT) / entry
-        else:
-            sl_move = SL_MOVE
+            if USE_ATR_SL and features.get("atr"):
+                sl_move = (features["atr"] * ATR_SL_MULT) / entry
+            else:
+                sl_move = SL_MOVE
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)
