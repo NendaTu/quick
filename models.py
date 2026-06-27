@@ -1,7 +1,11 @@
 import math
 import logging
 from config import *
-from indicators import compute_drt, compute_rsi, compute_macd, compute_ema, compute_supertrend
+from ta.indicators.rsi import compute_rsi
+from ta.indicators.macd import compute_macd
+from ta.indicators.ema import compute_ema
+from ta.indicators.supertrend import compute_supertrend
+from ta.patterns.drt import compute_drt
 
 log = logging.getLogger("scalper.models")
 

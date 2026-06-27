@@ -2,10 +2,24 @@ import asyncio, time, logging, math, random
 from typing import Dict, List, Tuple, Optional
 from config import *
 from orderbook import SimulatedOrderBook
-from indicators import (
-    compute_rsi, compute_atr, compute_ema, compute_macd, compute_supertrend, compute_drt
-)
+from ta.indicators.rsi import compute_rsi
+from ta.indicators.atr import compute_atr
+from ta.indicators.ema import compute_ema
+from ta.indicators.macd import compute_macd
+from ta.indicators.supertrend import compute_supertrend
+from ta.patterns.drt import compute_drt
 from ta.patterns.fvg import detect_fvgs
+from ta.patterns.liquidity import identify_liquidity
+from ta.patterns.sweep import detect_sweeps
+from ta.patterns.structure import identify_structure
+from ta.patterns.ob import detect_order_blocks
+from ta.patterns.idm import detect_idm
+from ta.patterns.momentum import identify_momentum
+from ta.patterns.sessions import identify_sessions
+from ta.patterns.phases import identify_phases
+from ta.patterns.sr import identify_sr
+from ta.patterns.trend import identify_trend
+from ta.patterns.poi import identify_pois
 from database import Database
 from bitget_client import BitGetClient, BitGetWSClient
 
@@ -82,7 +96,7 @@ class Simulator:
                 price = float(next((t['lastPr'] for t in tickers if t['symbol'] == sym), 1.0))
                 self.books[sym] = SimulatedOrderBook(sym, price)
                 self.ohlcv[sym] = {tf: [] for tf in AVAILABLE_TIMEFRAMES}
-                self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D"]}
+                self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D", "1W"]}
                 self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
                 self.last_price[sym] = price
 
@@ -115,7 +129,7 @@ class Simulator:
                         log.warning(f"Failed to fetch {tf} candles for {sym}")
 
                 # 2. Fetch confluence history (closes only)
-                for tf in ["15m", "1H", "4H", "1D"]:
+                for tf in ["15m", "1H", "4H", "1D", "1W"]:
                     c_data = await self.client.get_candles(sym, tf, limit=100)
                     if isinstance(c_data, list):
                         for c in reversed(c_data):
@@ -172,11 +186,26 @@ class Simulator:
         # Legacy DRT for backwards compatibility in logs
         drt = compute_drt(c1, 20) if len(c1) >= 20 else 0.5
 
-        # Pattern Recognition (FVG)
-        fvg_data = {}
+        # --- Pattern Recognition (Modular TA Suite) ---
+        h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
         h_fvg = self.ohlcv.get(symbol, {}).get(FVG_TIMEFRAME, [])
-        if h_fvg:
-            fvg_data = detect_fvgs(h_fvg, depth=FVG_HISTORY_DEPTH)
+        h_15m = self.ohlcv.get(symbol, {}).get("15m", [])
+        h_1D = self.ohlcv.get(symbol, {}).get("1D", [])
+
+        fvg_data = detect_fvgs(h_fvg, depth=FVG_HISTORY_DEPTH) if h_fvg else {}
+        liq_data = identify_liquidity(h_active) if h_active else {}
+        sweep_data = detect_sweeps(h_active) if h_active else {}
+        struct_data = identify_structure(h_active) if h_active else {}
+        ob_data = detect_order_blocks(h_active) if h_active else {}
+        idm_data = detect_idm(h_active) if h_active else {}
+        mom_data = identify_momentum(h_active) if h_active else {}
+        sess_data = identify_sessions(h_active) if h_active else {}
+        phase_data = identify_phases(h_active) if h_active else {}
+        sr_data = identify_sr(h_active) if h_active else {}
+        trend_data = identify_trend(h_active, htf_ohlcv=h_1D) if h_active else {}
+
+        # Coordinate POIs
+        poi_data = identify_pois(h_active, ob_data, fvg_data, liq_data, sess_data) if h_active else {}
 
         # BTC confluence cache (global per tick)
         now = time.time()
@@ -212,6 +241,17 @@ class Simulator:
             "drt_slow": drt_slow,
             "drt_fast": drt_fast,
             **fvg_data,
+            **liq_data,
+            **sweep_data,
+            **struct_data,
+            **ob_data,
+            **idm_data,
+            **mom_data,
+            **sess_data,
+            **phase_data,
+            **sr_data,
+            **trend_data,
+            **poi_data,
             **self._btc_confluence_cache,
             **asset_changes,
         }
