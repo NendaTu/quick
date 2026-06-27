@@ -378,6 +378,27 @@ class LearningModel:
         exit_price = round(exit_price, price_place)
         stop_price = round(stop_price, price_place)
 
+        # Multi-Stage TP Calculation
+        tp1_price = None
+        tp1_qty = 0
+        tp2_qty = qty
+        if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2":
+            # Estimate BE price to calculate TP1 distance
+            # be_move = (entry_fee_rate + MAKER_FEE) + (BREAKEVEN_PROFIT_BUFFER / max_lev)
+            be_move = (entry_fee_rate + MAKER_FEE) + (BREAKEVEN_PROFIT_BUFFER / max_lev)
+            if direction == "buy":
+                be_price = entry * (1 + be_move)
+                distance = exit_price - be_price
+                tp1_price = be_price + (distance * TP1_BUFFER_PCT)
+            else:
+                be_price = entry * (1 - be_move)
+                distance = be_price - exit_price
+                tp1_price = be_price - (distance * TP1_BUFFER_PCT)
+
+            tp1_price = round(tp1_price, price_place)
+            tp1_qty = math.floor(qty * TP1_QTY_RATIO * (10 ** vol_place)) / (10 ** vol_place)
+            tp2_qty = round(qty - tp1_qty, vol_place)
+
         max_lev = self.simulator.leverage_limits.get(symbol, 125)
         required_margin = (qty * entry) / max_lev
         if equity < required_margin:
@@ -391,6 +412,10 @@ class LearningModel:
             "exit_price": exit_price,
             "stop_price": stop_price,
             "qty": qty,
+            "tp1_price": tp1_price,
+            "tp2_price": exit_price,
+            "tp1_qty": tp1_qty,
+            "tp2_qty": tp2_qty,
             "confidence": confidence,
             "btc_confluence": btc_conf,
             "original_side": original_direction,

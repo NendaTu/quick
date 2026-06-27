@@ -148,19 +148,19 @@ class Engine:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False):
+    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False):
         # Local registration cleanup
         pos_key = f"{symbol}_{side}"
-        if pos_key in self.open_positions:
-            del self.open_positions[pos_key]
+        if not is_partial:
+            if pos_key in self.open_positions:
+                del self.open_positions[pos_key]
 
-        # Also ensure it's cleared from pending if it was an entry failure
-        if pos_key in self.pending_entries:
-            self.pending_entries.remove(pos_key)
+            # Also ensure it's cleared from pending if it was an entry failure
+            if pos_key in self.pending_entries:
+                self.pending_entries.remove(pos_key)
 
-        self.last_exit_time[symbol] = time.time()
-
-        self.total_trades += 1
+            self.last_exit_time[symbol] = time.time()
+            self.total_trades += 1
         self.cumulative_pnl += round_trip_pnl
 
         # Asset-specific stats
@@ -382,7 +382,16 @@ class Engine:
                         else:
                             log.debug(signal_msg)
 
-                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr)
+                        kwargs = {}
+                        if EXIT_STRATEGY == "BE+TP1+TP2":
+                            kwargs.update({
+                                "tp1_price": signal.get("tp1_price"),
+                                "tp2_price": signal.get("tp2_price"),
+                                "tp1_qty": signal.get("tp1_qty"),
+                                "tp2_qty": signal.get("tp2_qty")
+                            })
+
+                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr, **kwargs)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:
                             # Show signal with fill/place if LOG_SIGNALS is False
                             log.info(f"Entry Triggered | {signal_msg}")
