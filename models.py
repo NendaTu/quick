@@ -263,6 +263,14 @@ class LearningModel:
                     log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN} for {gate_direction}")
                     return None
 
+        # Volume Influx Confirmation Gate
+        if RESTRICT_VOLUME_INFLUX:
+            vol_influx = features.get("volume_influx", False)
+            vol_spike = features.get("volume_spike", False)
+            if not vol_influx and not vol_spike:
+                log.debug(f"REJECT {symbol}: No volume influx or spike confirmed")
+                return None
+
         # HTF Bias Alignment Gate
         if RESTRICT_HTF_BIAS:
             from ta.patterns.trend import NEUTRAL_ALLOWS_TRADES
