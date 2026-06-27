@@ -95,16 +95,6 @@ class LearningModel:
             log.debug(f"REJECT {symbol}: ATR {atr:.8f} < {ATR_MIN}")
             return None
 
-        # 6. Supertrend filter
-        supertrend_dir = features.get("supertrend_dir", 0)
-        if RESTRICT_SUPERTREND and supertrend_dir != 0:
-            if direction == "buy" and supertrend_dir != 1:
-                log.debug(f"REJECT {symbol}: Supertrend bearish for long")
-                return None
-            if direction == "sell" and supertrend_dir != -1:
-                log.debug(f"REJECT {symbol}: Supertrend bullish for short")
-                return None
-
         # --- SCORING WITH LEARNED WEIGHTS ---
         score = 0
 
@@ -181,6 +171,16 @@ class LearningModel:
             gate_direction = "sell" if direction == "buy" else "buy"
 
         # Hard Gates for restricted indicators
+        # Supertrend filter
+        supertrend_dir = features.get("supertrend_dir", 0)
+        if RESTRICT_SUPERTREND and supertrend_dir != 0:
+            if gate_direction == "buy" and supertrend_dir != 1:
+                log.debug(f"REJECT {symbol}: Supertrend bearish for {gate_direction}")
+                return None
+            if gate_direction == "sell" and supertrend_dir != -1:
+                log.debug(f"REJECT {symbol}: Supertrend bullish for {gate_direction}")
+                return None
+
         if RESTRICT_MACD:
             if gate_direction == "buy" and macd_hist <= 0:
                 log.debug(f"REJECT {symbol}: MACD bearish for {gate_direction}")

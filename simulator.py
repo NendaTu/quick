@@ -382,6 +382,11 @@ class Simulator:
             await asyncio.sleep(max(0.01, min(0.3, latency)))
 
             if et in ["entry", "entry_timeout"]:
+                # Release reserved margin from the pending limit order
+                if "reserved_margin" in o:
+                    self.used_margin -= o["reserved_margin"]
+                    self.used_margin = max(0, self.used_margin)
+
                 # Maker fill if et == "entry", else Taker
                 order_type = "limit" if et == "entry" else "market"
                 # If timeout, we might get a worse price. For simplicity, use current market.
@@ -482,17 +487,19 @@ class Simulator:
         else:
             # Limit Entry
             eid = self.order_id_counter; self.order_id_counter += 1
+            self.used_margin += required_margin
             self.pending_orders.append({
                 "id": eid, "symbol": symbol, "pos_side": side, "type": "entry_limit",
                 "price": entry_price, "qty": qty, "ts": time.time(),
                 "stop_price": stop_price, "tp_price": tp_price,
                 "btc_conf": btc_conf, "drt": drt,
-                "original_side": original_side, "is_contrarian": is_contrarian
+                "original_side": original_side, "is_contrarian": is_contrarian,
+                "reserved_margin": required_margin
             })
             side_str = side.upper()
             if is_contrarian:
                 side_str = f"{original_side.upper()} [Flipped to {side.upper()}]"
-            log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f}")
+            log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f} | Margin Reserved: {required_margin:.2f}")
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False):

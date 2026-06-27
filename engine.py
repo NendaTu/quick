@@ -174,6 +174,8 @@ class Engine:
             if side == "buy": self.asset_stats[symbol]["buy_wins"] += 1
             else: self.asset_stats[symbol]["sell_wins"] += 1
         else:
+            if exit_type == "tp":
+                log.warning(f"GROSS WIN / NET LOSS on {symbol}: PnL={round_trip_pnl:.4f} (fees consumed profit)")
             self.losing_trades += 1
             if side == "buy": self.asset_stats[symbol]["buy_losses"] += 1
             else: self.asset_stats[symbol]["sell_losses"] += 1
