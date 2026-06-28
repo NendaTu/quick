@@ -4,5 +4,6 @@
 *.db-wal
 *.log
 *.txt
+!requirements.txt
 __pycache__/
 *.pyc
