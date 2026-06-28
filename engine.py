@@ -129,7 +129,7 @@ class Engine:
     async def _maintenance_loop(self):
         while not self.stop_event.is_set():
             try:
-                if hasattr(self.exchange, "db"):
+                if getattr(self.exchange, "db", None):
                     self.exchange.db.purge_old_data()
                 await asyncio.sleep(3600)
             except Exception as e:
@@ -375,7 +375,7 @@ class Engine:
                                       f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")
 
                         # Save to database
-                        if hasattr(self.exchange, "db"):
+                        if getattr(self.exchange, "db", None):
                             self.exchange.db.save_signal(sym, side, entry, signal)
 
                         # Always log for DB, but conditionally for console

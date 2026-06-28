@@ -97,8 +97,16 @@ class DataCoordinator:
         log.info("Coordinator: Global warm-up complete.")
 
     async def _ws_callback(self, msg):
+        # Filter out meta-messages like 'subscribe' events to reduce queue noise
+        if "data" not in msg and msg.get("action") != "snapshot":
+            return
+
         for q in self.queues:
-            q.put(msg)
+            # Non-blocking put to avoid coordinator stalling
+            try:
+                q.put_nowait(msg)
+            except:
+                pass
 
     async def run(self):
         ws_client = BitGetWSClient(self.preloaded_data["discovered_assets"] + [BTC_SYMBOL], self._ws_callback)
@@ -188,7 +196,7 @@ def parse_args() -> List[Variant]:
     # Pre-parse overrides for global settings like ASSETS_COUNT
     for arg in sys.argv[1:]:
         if "=" in arg:
-            k, v = arg.split("=", 1)
+            k, v = [x.strip() for x in arg.split("=", 1)]
             if k == "ASSETS_COUNT":
                 # Apply globally to Baseline
                 try:
@@ -216,9 +224,11 @@ def parse_args() -> List[Variant]:
                     variants.append(Variant(id=f.replace(".py", ""), overrides=overrides, config_file=f))
         else:
             # Parse VAR=VAL args
+            # To handle spaces in "VAR = VAL", we can join all args and then re-split
+            # but that's messy. Let's just strip what we find.
             for arg in sys.argv[1:]:
                 if "=" in arg:
-                    k, v = arg.split("=", 1)
+                    k, v = [x.strip() for x in arg.split("=", 1)]
                     # Support multiple variants of same key if they come in sequence?
                     # "SL_MOVE=0.01 SL_MOVE=0.02" -> Variant 1: {SL_MOVE:0.01}, Variant 2: {SL_MOVE:0.02}
                     # Check if last variant already has this key
@@ -240,6 +250,10 @@ def parse_args() -> List[Variant]:
 async def main():
     variants = parse_args()
     log.info(f"Starting comparison with {len(variants)} variants: {[v.id for v in variants]}")
+
+    # Ensure required directories exist
+    os.makedirs("compare/configs", exist_ok=True)
+    os.makedirs("compare/logs", exist_ok=True)
 
     queues = [multiprocessing.Queue() for _ in variants]
     stats_queue = multiprocessing.Queue()
@@ -271,9 +285,16 @@ async def main():
     log.info("All variants started. Press CTRL+C to stop and see results.")
 
     latest_stats = {v.id: {} for v in variants}
+    start_time = time.time()
 
     def print_table():
+        elapsed = time.time() - start_time
+        hh, rem = divmod(elapsed, 3600)
+        mm, ss = divmod(rem, 60)
+
         print("\n" + "="*110)
+        print(f"A/B TEST STATUS | Duration: {int(hh):02d}:{int(mm):02d}:{int(ss):02d}")
+        print("-" * 110)
         print(f"{'Variant':<20} | {'PnL (USDT)':>12} | {'ROI%':>8} | {'Win% (TP)':>12} | {'Trades':>8} | {'Open':>5} | {'Equity':>12}")
         print("-" * 110)
 
