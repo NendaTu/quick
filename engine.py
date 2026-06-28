@@ -229,6 +229,17 @@ class Engine:
                          f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
     def _asset_is_tradable(self, symbol: str, side: str) -> bool:
+        # 1. Statistical Arbitrage Filter (Correlation)
+        if hasattr(self.exchange, "asset_correlations"):
+            corrs = self.exchange.asset_correlations.get(symbol, {})
+            for other_sym, score in corrs.items():
+                if score > 0.9: # High correlation
+                    if f"{other_sym}_buy" in self.open_positions or f"{other_sym}_sell" in self.open_positions:
+                         # Already exposed to a highly correlated asset
+                         # Only proceed if current asset has higher POI score (contextual priority)
+                         # For now, simpler: block to reduce systemic risk
+                         return False
+
         # Check volume
         book = self.books[symbol]
         bid_vol, ask_vol = book.top_bid_ask_qty()

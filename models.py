@@ -139,9 +139,42 @@ class LearningModel:
         if RESTRICT_15M_TREND or not RESTRICT_SCORE:
             score += trend_score * self.weights["trend"]
 
+        # Supertrend contribution (Scoring instead of Hard Gate)
+        supertrend_dir = features.get("supertrend_dir", 0)
+        st_score = 0
+        if supertrend_dir == 1: st_score = 1
+        elif supertrend_dir == -1: st_score = -1
+
+        if not RESTRICT_SUPERTREND or not RESTRICT_SCORE:
+            score += st_score * self.weights.get("trend", 1.0)
+
+        # 6. POI Confluence contribution
+        if features.get("poi_active"):
+            poi_score = features.get("poi_confluence_score", 0)
+            score += (poi_score / 20.0) # Scale 40 points -> +2 score
+            log.debug(f"POI Confluence active for {symbol}: +{poi_score/20.0:.1f} score")
+
+        # 7. Trade Delta (Order Flow) contribution
+        trade_delta = features.get("trade_delta", 0.0)
+        if trade_delta != 0:
+            score += trade_delta * 1.5 # High weight for aggressive flow
+            log.debug(f"Trade Delta (Order Flow) for {symbol}: {trade_delta:.2f} (added to score)")
+
+        # 8. Market Structure (BOS vs MSS) contribution
+        struct = features.get("structure_signal")
+        if struct:
+            if "bos" in struct: score += 1.5
+            elif "mss" in struct: score += 0.5
+            log.debug(f"Market Structure signal {struct} for {symbol}: added bonus score")
+
         # Check for trade signal
-        if RESTRICT_SCORE and abs(score) < 1:
-            log.debug(f"REJECT {symbol}: Score {score:.1f} < 1")
+        required_min_score = 1.0
+        if not features.get("poi_active"):
+            # Require higher score if not at a POI
+            required_min_score = 2.0
+
+        if RESTRICT_SCORE and abs(score) < required_min_score:
+            log.debug(f"REJECT {symbol}: Score {score:.1f} < {required_min_score}")
             return None
 
         # Confidence calculation
@@ -175,8 +208,7 @@ class LearningModel:
             gate_direction = "sell" if direction == "buy" else "buy"
 
         # Hard Gates for restricted indicators
-        # Supertrend filter
-        supertrend_dir = features.get("supertrend_dir", 0)
+        # Supertrend filter (Conditional Hard Gate)
         if RESTRICT_SUPERTREND and supertrend_dir != 0:
             if gate_direction == "buy" and supertrend_dir != 1:
                 log.debug(f"REJECT {symbol}: Supertrend bearish for {gate_direction}")
@@ -201,7 +233,8 @@ class LearningModel:
                 log.debug(f"REJECT {symbol}: 15m trend bullish for {gate_direction}")
                 return None
 
-        # RSI Restrictions
+        # RSI Restrictions and Momentum Rider Logic
+        is_momentum_rider = False
         if RESTRICT_RSI:
             # 1. Adaptive RSI Logic
             upper_limit = RSI_SHORT
@@ -220,15 +253,17 @@ class LearningModel:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {lower_limit} (Adaptive {gate_direction})")
                     return None
                 if rsi < RSI_BUY_FLOOR:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {RSI_BUY_FLOOR} (Floor {gate_direction})")
-                    return None
+                    # Instead of blocking, trigger Momentum Rider
+                    is_momentum_rider = True
+                    log.debug(f"MOMENTUM RIDER ACTIVE for {symbol} (Long): RSI {rsi:.1f} < {RSI_BUY_FLOOR}")
             if gate_direction == "sell":
                 if rsi < upper_limit:
                     log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive {gate_direction})")
                     return None
                 if RESTRICT_RSI_SHORT_CEILING and rsi > RSI_SHORT_CEILING:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {RSI_SHORT_CEILING} (Ceiling {gate_direction})")
-                    return None
+                    # Instead of blocking, trigger Momentum Rider
+                    is_momentum_rider = True
+                    log.debug(f"MOMENTUM RIDER ACTIVE for {symbol} (Short): RSI {rsi:.1f} > {RSI_SHORT_CEILING}")
 
         # DRT Velocity Check
         if USE_DRT_VELOCITY:
@@ -314,10 +349,22 @@ class LearningModel:
         sl_exit_fee_rate = MAKER_FEE if SL_ORDER_TYPE == "limit" else TAKER_FEE
 
         # 1. Calculate Base SL_MOVE (Volatility-aware or config fallback)
+        sl_mult = ATR_SL_MULT
+
+        # Volatility Regime Adjustments
+        regime = features.get("vol_regime", "Stable")
+        if regime == "Expansion":
+            sl_mult *= 1.25 # Widen for expansion
+        elif regime == "Contraction":
+            sl_mult *= 0.75 # Tighten for contraction
+
+        if is_momentum_rider:
+            sl_mult *= 0.5 # Tighten stops by 50% for momentum riding
+
         if USE_ATR_SL and features.get("atr"):
-            sl_move = (features["atr"] * ATR_SL_MULT) / entry
+            sl_move = (features["atr"] * sl_mult) / entry
         else:
-            sl_move = SL_MOVE
+            sl_move = SL_MOVE * (0.5 if is_momentum_rider else 1.0)
 
         sl_move = max(sl_move, 0.001)
 
@@ -372,6 +419,12 @@ class LearningModel:
             if atr_pct > ATR_VOL_THRESHOLD:
                 risk_fraction = RISK_PER_TRADE * REDUCED_RISK_FRACTION
                 log.debug(f"RISK REDUCED for {symbol}: ATR {atr_pct:.4f} > {ATR_VOL_THRESHOLD}")
+
+        # Apply Session Multiplier for high-volume Killzones
+        kz = features.get("killzone")
+        if kz in ["london", "ny_am"]:
+            risk_fraction *= SESSION_MULTIPLIER
+            log.debug(f"SESSION RISK SCALE: {SESSION_MULTIPLIER}x multiplier active for {kz} Killzone")
 
         risk_amount = equity * risk_fraction
 

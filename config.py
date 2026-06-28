@@ -102,6 +102,7 @@ BTC_SYMBOL = "BTCUSDT"
 INDICATOR_PRICE_HISTORY = 500
 
 # Standard periods for calculating technical indicators (RSI, ATR, MACD, EMA).
+SESSION_MULTIPLIER = 1.5         # Risk multiplier during high-volume sessions
 RSI_PERIOD = 14
 ATR_PERIOD = 14
 MACD_FAST = 12
