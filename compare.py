@@ -121,6 +121,11 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
     config.LOG_SIGNALS = True
     config.LOG_REJECTIONS = True
 
+    # Ensure comparisons don't stop prematurely due to session limits
+    config.MAX_TRADES_LIMIT = 999999
+    config.MAX_DURATION = 9999999
+    config.TOTAL_ROI_LIMIT = 100.0
+
     # 3. Setup Logging to File
     log_file = f"compare/logs/{variant.id}.log"
     file_handler = logging.FileHandler(log_file)
