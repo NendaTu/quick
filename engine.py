@@ -51,10 +51,17 @@ class Engine:
 
         # Handle signals for graceful manual shutdown
         try:
-            import signal
+            import signal, os
             loop = asyncio.get_running_loop()
+            def handle_shutdown():
+                if self.stop_event.is_set():
+                    log.critical("Force shutdown requested. Exiting immediately.")
+                    os._exit(1)
+                log.info("Shutdown signal received. Starting graceful exit...")
+                self.stop_event.set()
+
             for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, lambda: self.stop_event.set())
+                loop.add_signal_handler(sig, handle_shutdown)
         except Exception as e:
             log.debug(f"Signal handlers not supported: {e}")
 
@@ -129,30 +136,32 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
-    def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False):
+    def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False, ts: float = None):
         pos_key = f"{symbol}_{side}"
         # If orig_side not passed (e.g. from simulator), default to current
         if orig_side is None: orig_side = side
         self.open_positions[pos_key] = {
             "side": side, "qty": qty, "entry": entry,
             "orig_side": orig_side, "is_contr": is_contr,
-            "ts": time.time()
+            "ts": ts if ts is not None else time.time()
         }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False):
+    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False):
         # Local registration cleanup
         pos_key = f"{symbol}_{side}"
-        if pos_key in self.open_positions:
-            del self.open_positions[pos_key]
+        if not is_partial:
+            if pos_key in self.open_positions:
+                del self.open_positions[pos_key]
 
-        # Also ensure it's cleared from pending if it was an entry failure
-        if pos_key in self.pending_entries:
-            self.pending_entries.remove(pos_key)
+            # Also ensure it's cleared from pending if it was an entry failure
+            if pos_key in self.pending_entries:
+                self.pending_entries.remove(pos_key)
 
-        self.last_exit_time[symbol] = time.time()
+            self.last_exit_time[symbol] = time.time()
 
+        # Increment total trades on every exit (partial or full) to keep win-rate math accurate
         self.total_trades += 1
         self.cumulative_pnl += round_trip_pnl
 
@@ -174,6 +183,8 @@ class Engine:
             if side == "buy": self.asset_stats[symbol]["buy_wins"] += 1
             else: self.asset_stats[symbol]["sell_wins"] += 1
         else:
+            if exit_type in ["tp", "ttl"]:
+                log.warning(f"GROSS WIN / NET LOSS on {symbol} [{exit_type.upper()}]: PnL={round_trip_pnl:.4f} (fees consumed profit)")
             self.losing_trades += 1
             if side == "buy": self.asset_stats[symbol]["buy_losses"] += 1
             else: self.asset_stats[symbol]["sell_losses"] += 1
@@ -272,23 +283,35 @@ class Engine:
                         log.error(f"Feature calculation error for {sym}: {e}")
 
                 # 3. TTL (Time-to-Live) Exit Check
-                for pos_key in list(self.open_positions.keys()):
-                    pos = self.open_positions[pos_key]
-                    if time.time() - pos.get("ts", 0) > TRADE_TTL_SECONDS:
-                        sym = pos_key.split("_")[0]
-                        side = pos["side"]
-                        # Request TTL Exit from simulator (Mid-price limit exit)
-                        if hasattr(self.exchange, "books") and not pos.get("ttl_triggered"):
-                            book = self.exchange.books.get(sym)
-                            if book:
-                                mid = (book.best_bid + book.best_ask) / 2
-                                log.info(f"TTL EXPIRED for {pos_key} ({time.time() - pos['ts']:.0f}s) | Triggering Limit Exit @ {mid:.8f}")
-                                self.exchange.pending_orders.append({
-                                    "symbol": sym, "pos_side": side, "type": "tp",
-                                    "price": mid, "qty": pos["qty"], "is_ttl": True
-                                })
-                                # Mark as triggered but keep in list until simulator reports exit
-                                pos["ttl_triggered"] = True
+                if USE_TTL:
+                    # Convert ACTIVE_TIMEFRAME string (e.g., '5m') to seconds
+                    unit = ACTIVE_TIMEFRAME[-1]
+                    val = int(ACTIVE_TIMEFRAME[:-1])
+                    multiplier_map = {'m': 60, 'H': 3600, 'D': 86400}
+                    tf_seconds = val * multiplier_map.get(unit, 60)
+                    ttl_limit = tf_seconds * TTL_CANDLE_MULTIPLIER
+
+                    if not hasattr(self, "_ttl_logged") or self._ttl_logged != ACTIVE_TIMEFRAME:
+                        log.info(f"Dynamic TTL initialized: {ttl_limit}s ({TTL_CANDLE_MULTIPLIER} candles of {ACTIVE_TIMEFRAME})")
+                        self._ttl_logged = ACTIVE_TIMEFRAME
+
+                    for pos_key in list(self.open_positions.keys()):
+                        pos = self.open_positions[pos_key]
+                        if time.time() - pos.get("ts", 0) > ttl_limit:
+                            sym = pos_key.split("_")[0]
+                            side = pos["side"]
+                            # Request TTL Exit from simulator (Mid-price limit exit)
+                            if hasattr(self.exchange, "books") and not pos.get("ttl_triggered"):
+                                book = self.exchange.books.get(sym)
+                                if book:
+                                    mid = (book.best_bid + book.best_ask) / 2
+                                    log.info(f"TTL EXPIRED for {pos_key} ({time.time() - pos['ts']:.0f}s) | Triggering Limit Exit @ {mid:.8f}")
+                                    self.exchange.pending_orders.append({
+                                        "symbol": sym, "pos_side": side, "type": "ttl",
+                                        "price": mid, "qty": pos["qty"], "is_ttl": True
+                                    })
+                                    # Mark as triggered but keep in list until simulator reports exit
+                                    pos["ttl_triggered"] = True
 
                 # 4. Check Signal and Trade (Skip if shutting down)
                 if not self.stop_event.is_set() and len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
@@ -329,7 +352,11 @@ class Engine:
                         # Immediate local registration to prevent race condition
                         pos_key = f"{sym}_{side}"
                         if ENTRY_ORDER_TYPE == "market":
-                            self.open_positions[pos_key] = {"side": side, "qty": qty, "entry": entry, "orig_side": orig_side, "is_contr": is_contr}
+                            self.open_positions[pos_key] = {
+                                "side": side, "qty": qty, "entry": entry,
+                                "orig_side": orig_side, "is_contr": is_contr,
+                                "ts": time.time()
+                            }
                         else:
                             self.pending_entries.add(pos_key)
 
@@ -337,10 +364,19 @@ class Engine:
                         if is_contr:
                             side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
 
+                        # Extract all feature keys (excluding common ones handled manually in log)
+                        exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct']
+                        extra_features = {k: v for k, v in signal.items() if k not in exclude and v is not None}
+                        feat_msg = " ".join([f"{k}={v}" for k, v in extra_features.items()])
+
                         signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
                                       f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
                                       f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
-                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} equity={self.equity:.2f}")
+                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")
+
+                        # Save to database
+                        if hasattr(self.exchange, "db"):
+                            self.exchange.db.save_signal(sym, side, entry, signal)
 
                         # Always log for DB, but conditionally for console
                         if LOG_SIGNALS:
@@ -348,7 +384,16 @@ class Engine:
                         else:
                             log.debug(signal_msg)
 
-                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr)
+                        kwargs = {}
+                        if EXIT_STRATEGY == "BE+TP1+TP2":
+                            kwargs.update({
+                                "tp1_price": signal.get("tp1_price"),
+                                "tp2_price": signal.get("tp2_price"),
+                                "tp1_qty": signal.get("tp1_qty"),
+                                "tp2_qty": signal.get("tp2_qty")
+                            })
+
+                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr, **kwargs)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:
                             # Show signal with fill/place if LOG_SIGNALS is False
                             log.info(f"Entry Triggered | {signal_msg}")

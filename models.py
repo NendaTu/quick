@@ -1,7 +1,11 @@
 import math
 import logging
 from config import *
-from indicators import compute_drt, compute_rsi, compute_macd, compute_ema, compute_supertrend
+from ta.indicators.rsi import compute_rsi
+from ta.indicators.macd import compute_macd
+from ta.indicators.ema import compute_ema
+from ta.indicators.supertrend import compute_supertrend
+from ta.patterns.drt import compute_drt
 
 log = logging.getLogger("scalper.models")
 
@@ -95,16 +99,6 @@ class LearningModel:
             log.debug(f"REJECT {symbol}: ATR {atr:.8f} < {ATR_MIN}")
             return None
 
-        # 6. Supertrend filter
-        supertrend_dir = features.get("supertrend_dir", 0)
-        if RESTRICT_SUPERTREND and supertrend_dir != 0:
-            if direction == "buy" and supertrend_dir != 1:
-                log.debug(f"REJECT {symbol}: Supertrend bearish for long")
-                return None
-            if direction == "sell" and supertrend_dir != -1:
-                log.debug(f"REJECT {symbol}: Supertrend bullish for short")
-                return None
-
         # --- SCORING WITH LEARNED WEIGHTS ---
         score = 0
 
@@ -181,6 +175,16 @@ class LearningModel:
             gate_direction = "sell" if direction == "buy" else "buy"
 
         # Hard Gates for restricted indicators
+        # Supertrend filter
+        supertrend_dir = features.get("supertrend_dir", 0)
+        if RESTRICT_SUPERTREND and supertrend_dir != 0:
+            if gate_direction == "buy" and supertrend_dir != 1:
+                log.debug(f"REJECT {symbol}: Supertrend bearish for {gate_direction}")
+                return None
+            if gate_direction == "sell" and supertrend_dir != -1:
+                log.debug(f"REJECT {symbol}: Supertrend bullish for {gate_direction}")
+                return None
+
         if RESTRICT_MACD:
             if gate_direction == "buy" and macd_hist <= 0:
                 log.debug(f"REJECT {symbol}: MACD bearish for {gate_direction}")
@@ -228,13 +232,13 @@ class LearningModel:
 
         # DRT Velocity Check
         if USE_DRT_VELOCITY:
-            drt_1m = features.get("drt", 0.5)
-            drt_5m = features.get("drt_fast", 0.5)
-            if gate_direction == "buy" and drt_1m <= drt_5m:
-                log.debug(f"REJECT {symbol}: DRT velocity negative for {gate_direction} ({drt_1m:.4f} <= {drt_5m:.4f})")
+            drt_active = features.get("drt", 0.5)
+            drt_fast = features.get("drt_fast", 0.5)
+            if gate_direction == "buy" and drt_active <= drt_fast:
+                log.debug(f"REJECT {symbol}: DRT velocity negative for {gate_direction} ({drt_active:.4f} <= {drt_fast:.4f})")
                 return None
-            if gate_direction == "sell" and drt_1m >= drt_5m:
-                log.debug(f"REJECT {symbol}: DRT velocity positive for {gate_direction} ({drt_1m:.4f} >= {drt_5m:.4f})")
+            if gate_direction == "sell" and drt_active >= drt_fast:
+                log.debug(f"REJECT {symbol}: DRT velocity positive for {gate_direction} ({drt_active:.4f} >= {drt_fast:.4f})")
                 return None
 
         # BTC Confluence Restrictions
@@ -259,6 +263,26 @@ class LearningModel:
                     log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-BTC_CONF_15M_MIN} for {gate_direction}")
                     return None
 
+        # Volume Influx Confirmation Gate
+        if RESTRICT_VOLUME_INFLUX:
+            vol_influx = features.get("volume_influx", False)
+            vol_spike = features.get("volume_spike", False)
+            if not vol_influx and not vol_spike:
+                log.debug(f"REJECT {symbol}: No volume influx or spike confirmed")
+                return None
+
+        # HTF Bias Alignment Gate
+        if RESTRICT_HTF_BIAS:
+            from ta.patterns.trend import NEUTRAL_ALLOWS_TRADES
+            bias = features.get("bias", "neutral")
+            if bias != "neutral" or not NEUTRAL_ALLOWS_TRADES:
+                if gate_direction == "buy" and bias == "bearish":
+                    log.debug(f"REJECT {symbol}: Long entry against BEARISH HTF bias")
+                    return None
+                if gate_direction == "sell" and bias == "bullish":
+                    log.debug(f"REJECT {symbol}: Short entry against BULLISH HTF bias")
+                    return None
+
         # Asset Confluence (15m alignment)
         if RESTRICT_ASSET_CONFLUENCE:
             asset_15m = features.get("asset_15m", 0)
@@ -279,39 +303,54 @@ class LearningModel:
         max_lev = self.simulator.leverage_limits.get(symbol, 125)
 
         # Dynamic TP/SL calculation
-        if USE_DYNAMIC_TARGETS:
-            # TP = Net ROE target + fees (entry + exit)
-            entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
-            exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+        entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+        tp_exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+        sl_exit_fee_rate = MAKER_FEE if SL_ORDER_TYPE == "limit" else TAKER_FEE
 
-            # Use max_lev to determine required price move for TARGET_NET_ROE
-            max_lev = self.simulator.leverage_limits.get(symbol, 20)
-            # --- TP RELAXATION LOGIC ---
-            target_roe = TARGET_NET_ROE
-            if USE_TP_RELAXATION:
-                drt_offset = abs(features.get("drt", 0.5) - 0.5)
-                if drt_offset < TP_RELAXATION_THRESHOLD:
-                    target_roe = RELAXED_ROE_TARGET
-                    log.debug(f"TP RELAXED for {symbol}: using {target_roe*100}% ROE due to flat DRT ({drt_offset:.4f})")
+        # Leverage and Fee rates for RRR synchronization
+        max_lev = self.simulator.leverage_limits.get(symbol, 20)
+        entry_fee_rate = MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE
+        tp_exit_fee_rate = MAKER_FEE if TP_ORDER_TYPE == "limit" else TAKER_FEE
+        sl_exit_fee_rate = MAKER_FEE if SL_ORDER_TYPE == "limit" else TAKER_FEE
 
-            # Factor in fee overhead and EXPECTED_SLIPPAGE on the exit side
-            tp_move = (target_roe / max_lev) + (entry_fee_rate + exit_fee_rate) + EXPECTED_SLIPPAGE
-
-            # Cap TP by 15m ATR
-            if USE_ATR_CAPPED_TP and features.get("atr"):
-                # Use a rough 15m ATR proxy (since atr is 1m in features, multiply by sqrt(15) ~3.8)
-                atr_15m_move = (features["atr"] * 3.8) / entry
-                tp_move = min(tp_move, atr_15m_move)
-
-            # Safety: ensure tp_move is at least a minimum threshold or the config baseline
-            tp_move = max(tp_move, TP_MOVE)
-        else:
-            tp_move = TP_MOVE
-
+        # 1. Calculate Base SL_MOVE (Volatility-aware or config fallback)
         if USE_ATR_SL and features.get("atr"):
             sl_move = (features["atr"] * ATR_SL_MULT) / entry
         else:
             sl_move = SL_MOVE
+
+        sl_move = max(sl_move, 0.001)
+
+        # 2. Synchronize TP_MOVE to maintain the 1:2 Net RRR
+        # To secure the RRR, Net_TP must be 2x Net_SL.
+        # Net_TP = (tp_move - entry_fee - tp_exit_fee - slippage)
+        # Net_SL = (sl_move + entry_fee + sl_exit_fee)  <- Total lost on stop
+        net_sl_cost = sl_move + entry_fee_rate + sl_exit_fee_rate
+
+        # Calculate target TP_MOVE based on desired ROE vs current SL cost
+        tp_move_from_roe = (TARGET_NET_ROE / max_lev) + entry_fee_rate + tp_exit_fee_rate + EXPECTED_SLIPPAGE
+
+        # Use the larger of (2x SL) or (Target ROE) to ensure we don't compress RRR
+        tp_move = max(tp_move_from_roe, (net_sl_cost * 2) + entry_fee_rate + tp_exit_fee_rate + EXPECTED_SLIPPAGE)
+
+        # 3. Apply TP Relaxation if needed (reduces RRR to 1.5:1 if flat)
+        if USE_TP_RELAXATION:
+            drt_offset = abs(features.get("drt", 0.5) - 0.5)
+            if drt_offset < TP_RELAXATION_THRESHOLD:
+                tp_move = (net_sl_cost * 1.5) + entry_fee_rate + tp_exit_fee_rate + EXPECTED_SLIPPAGE
+                log.debug(f"TP RELAXED for {symbol}: using 1.5:1 RRR due to flat DRT ({drt_offset:.4f})")
+
+        # 4. Final Caps and Floors
+        if USE_ATR_CAPPED_TP and features.get("atr"):
+            atr_15m_move = (features["atr"] * 3.8) / entry
+            tp_move = min(tp_move, atr_15m_move)
+
+        tp_move = max(tp_move, TP_MOVE)
+
+        # 5. Final SL Recalibration: If TP_MOVE was capped or floored, we MUST adjust SL to keep RRR
+        net_tp_win = tp_move - entry_fee_rate - tp_exit_fee_rate - EXPECTED_SLIPPAGE
+        sl_move = (net_tp_win / 2) - entry_fee_rate - sl_exit_fee_rate
+        sl_move = max(sl_move, 0.001)
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)
@@ -364,7 +403,29 @@ class LearningModel:
         exit_price = round(exit_price, price_place)
         stop_price = round(stop_price, price_place)
 
-        max_lev = self.simulator.leverage_limits.get(symbol, 125)
+        # Multi-Stage TP Calculation
+        tp1_price = None
+        tp1_qty = 0
+        tp2_qty = qty
+        if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2":
+            # Estimate BE price to calculate TP1 distance
+            # be_move = (entry_fee_rate + MAKER_FEE) + (BREAKEVEN_PROFIT_BUFFER / max_lev)
+            be_move = (entry_fee_rate + MAKER_FEE) + (BREAKEVEN_PROFIT_BUFFER / max_lev)
+            if direction == "buy":
+                be_price = entry * (1 + be_move)
+                distance = exit_price - be_price
+                tp1_price = be_price + (distance * TP1_BUFFER_PCT)
+            else:
+                be_price = entry * (1 - be_move)
+                distance = be_price - exit_price
+                tp1_price = be_price - (distance * TP1_BUFFER_PCT)
+
+            tp1_price = round(tp1_price, price_place)
+            tp1_qty = math.floor(qty * TP1_QTY_RATIO * (10 ** vol_place)) / (10 ** vol_place)
+            tp2_qty = round(qty - tp1_qty, vol_place)
+
+        # Final leverage check
+        max_lev = self.simulator.leverage_limits.get(symbol, 20)
         required_margin = (qty * entry) / max_lev
         if equity < required_margin:
             return None
@@ -377,6 +438,10 @@ class LearningModel:
             "exit_price": exit_price,
             "stop_price": stop_price,
             "qty": qty,
+            "tp1_price": tp1_price,
+            "tp2_price": exit_price,
+            "tp1_qty": tp1_qty,
+            "tp2_qty": tp2_qty,
             "confidence": confidence,
             "btc_confluence": btc_conf,
             "original_side": original_direction,
@@ -390,14 +455,14 @@ class LearningModel:
         premium_fast = "PREM" if drt_fast > 0.5 else "DISC"
         premium_slow = "PREM" if drt_slow > 0.5 else "DISC"
 
+        # Include all features and patterns in the signal for recording
+        signal.update(features)
+
+        # Override with formatted values for logging if needed
         signal.update({
-            "vol_pct": features.get("vol_pct", 0),
             "rsi": rsi,
-            "atr": features.get("atr", 0),
-            "macd": features.get("macd", 0),
-            "drt": features.get("drt", 0.5),
             "drt_f": f"{drt_fast:.4f}({premium_fast})",
-            "drt_s": f"{drt_slow:.4f}({premium_slow})"
+            "drt_s": f"{drt_slow:.4f}({premium_slow})",
         })
         return signal
 

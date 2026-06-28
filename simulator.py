@@ -2,9 +2,24 @@ import asyncio, time, logging, math, random
 from typing import Dict, List, Tuple, Optional
 from config import *
 from orderbook import SimulatedOrderBook
-from indicators import (
-    compute_rsi, compute_atr, compute_ema, compute_macd, compute_supertrend, compute_drt
-)
+from ta.indicators.rsi import compute_rsi
+from ta.indicators.atr import compute_atr
+from ta.indicators.ema import compute_ema
+from ta.indicators.macd import compute_macd
+from ta.indicators.supertrend import compute_supertrend
+from ta.patterns.drt import compute_drt
+from ta.patterns.fvg import detect_fvgs
+from ta.patterns.liquidity import identify_liquidity
+from ta.patterns.sweep import detect_sweeps
+from ta.patterns.structure import identify_structure
+from ta.patterns.ob import detect_order_blocks
+from ta.patterns.idm import detect_idm
+from ta.patterns.momentum import identify_momentum
+from ta.patterns.sessions import identify_sessions
+from ta.patterns.phases import identify_phases
+from ta.patterns.sr import identify_sr
+from ta.patterns.trend import identify_trend
+from ta.patterns.poi import identify_pois
 from database import Database
 from bitget_client import BitGetClient, BitGetWSClient
 
@@ -81,7 +96,7 @@ class Simulator:
                 price = float(next((t['lastPr'] for t in tickers if t['symbol'] == sym), 1.0))
                 self.books[sym] = SimulatedOrderBook(sym, price)
                 self.ohlcv[sym] = {tf: [] for tf in AVAILABLE_TIMEFRAMES}
-                self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D"]}
+                self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D", "1W"]}
                 self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
                 self.last_price[sym] = price
 
@@ -94,18 +109,18 @@ class Simulator:
                 await asyncio.sleep(0.1 * random.random())
                 # 1. Fetch OHLCV for all relevant timeframes
                 for tf in AVAILABLE_TIMEFRAMES:
-                    limit = 500 if tf == "1m" else 100
+                    limit = 500 if tf == ACTIVE_TIMEFRAME else 100
                     data = await self.client.get_candles(sym, tf, limit=limit)
                     if isinstance(data, list):
                         for c in reversed(data):
                             ts = float(c[0]) / 1000
                             o, h, l, cl, v = map(float, c[1:6])
-                            if tf == "1m":
-                                self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+                            if tf == ACTIVE_TIMEFRAME:
+                                self.db.save_candle(sym, ACTIVE_TIMEFRAME, ts, o, h, l, cl, v)
                             self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
                             self.last_candle_ts[sym][tf] = ts
 
-                        if tf == "1m" and data:
+                        if tf == ACTIVE_TIMEFRAME and data:
                             price = float(data[0][4])
                             self.books[sym].mid_price = price
                             self.last_price[sym] = price
@@ -114,7 +129,7 @@ class Simulator:
                         log.warning(f"Failed to fetch {tf} candles for {sym}")
 
                 # 2. Fetch confluence history (closes only)
-                for tf in ["15m", "1H", "4H", "1D"]:
+                for tf in ["15m", "1H", "4H", "1D", "1W"]:
                     c_data = await self.client.get_candles(sym, tf, limit=100)
                     if isinstance(c_data, list):
                         for c in reversed(c_data):
@@ -171,6 +186,27 @@ class Simulator:
         # Legacy DRT for backwards compatibility in logs
         drt = compute_drt(c1, 20) if len(c1) >= 20 else 0.5
 
+        # --- Pattern Recognition (Modular TA Suite) ---
+        h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
+        h_fvg = self.ohlcv.get(symbol, {}).get(FVG_TIMEFRAME, [])
+        h_15m = self.ohlcv.get(symbol, {}).get("15m", [])
+        h_1D = self.ohlcv.get(symbol, {}).get("1D", [])
+
+        fvg_data = detect_fvgs(h_fvg, depth=FVG_HISTORY_DEPTH) if h_fvg else {}
+        liq_data = identify_liquidity(h_active) if h_active else {}
+        sweep_data = detect_sweeps(h_active) if h_active else {}
+        struct_data = identify_structure(h_active) if h_active else {}
+        ob_data = detect_order_blocks(h_active) if h_active else {}
+        idm_data = detect_idm(h_active) if h_active else {}
+        mom_data = identify_momentum(h_active) if h_active else {}
+        sess_data = identify_sessions(h_active) if h_active else {}
+        phase_data = identify_phases(h_active) if h_active else {}
+        sr_data = identify_sr(h_active) if h_active else {}
+        trend_data = identify_trend(h_active, htf_ohlcv=h_1D) if h_active else {}
+
+        # Coordinate POIs
+        poi_data = identify_pois(h_active, ob_data, fvg_data, liq_data, sess_data) if h_active else {}
+
         # BTC confluence cache (global per tick)
         now = time.time()
         if now - self._last_confluence_update > 0.1: # Update cache every 100ms
@@ -204,6 +240,18 @@ class Simulator:
             "drt": drt,
             "drt_slow": drt_slow,
             "drt_fast": drt_fast,
+            **fvg_data,
+            **liq_data,
+            **sweep_data,
+            **struct_data,
+            **ob_data,
+            **idm_data,
+            **mom_data,
+            **sess_data,
+            **phase_data,
+            **sr_data,
+            **trend_data,
+            **poi_data,
             **self._btc_confluence_cache,
             **asset_changes,
         }
@@ -248,11 +296,11 @@ class Simulator:
                 self.ohlcv[symbol][tf_name].append({"ts": candle_start, "o": price, "h": price, "l": price, "c": price, "v": size})
                 if len(self.ohlcv[symbol][tf_name]) > 1000: self.ohlcv[symbol][tf_name].pop(0)
 
-                # Persistence for 1m
-                if tf_name == "1m":
+                # Persistence for ACTIVE_TIMEFRAME
+                if tf_name == ACTIVE_TIMEFRAME:
                     prev = self.ohlcv[symbol][tf_name][-2] if len(self.ohlcv[symbol][tf_name]) > 1 else None
                     if prev:
-                        self.db.save_candle(symbol, "1m", prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
+                        self.db.save_candle(symbol, ACTIVE_TIMEFRAME, prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
 
                 # Update confluence history if it's a tracking timeframe
                 if tf_name in self.confluence_history[symbol]:
@@ -382,24 +430,56 @@ class Simulator:
             await asyncio.sleep(max(0.01, min(0.3, latency)))
 
             if et in ["entry", "entry_timeout"]:
+                # Release reserved margin from the pending limit order
+                if "reserved_margin" in o:
+                    self.used_margin -= o["reserved_margin"]
+                    self.used_margin = max(0, self.used_margin)
+
                 # Maker fill if et == "entry", else Taker
                 order_type = "limit" if et == "entry" else "market"
                 # If timeout, we might get a worse price. For simplicity, use current market.
                 fill_price = o["price"] if et == "entry" else self.last_price.get(o["symbol"])
 
+                # SLIPPAGE PROTECTION FOR TIMEOUTS
+                if et == "entry_timeout" and RESTRICT_SLIPPAGE:
+                    entry_price = o["price"]
+                    side = o["pos_side"]
+                    slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
+                    if slippage > MAX_ENTRY_SLIPPAGE:
+                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
+                        if o in self.pending_orders: self.pending_orders.remove(o)
+                        if self.engine:
+                            pos_key = f"{o['symbol']}_{side}"
+                            if pos_key in self.engine.pending_entries:
+                                self.engine.pending_entries.remove(pos_key)
+                        continue
+
                 self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type, o.get("original_side"), o.get("is_contrarian", False))
 
                 # Once entry is filled, add TP/SL
                 sid = self.order_id_counter; self.order_id_counter += 1
-                tid = self.order_id_counter; self.order_id_counter += 1
+                tp_orders = []
+                if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2" and o.get("tp1_price"):
+                    tid1 = self.order_id_counter; self.order_id_counter += 1
+                    tid2 = self.order_id_counter; self.order_id_counter += 1
+                    tp_orders.extend([
+                        {"id": tid1, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp1_price"], "qty": o["tp1_qty"], "is_tp1": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                        {"id": tid2, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp2_price"], "qty": o["tp2_qty"], "is_tp2": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                    ])
+                else:
+                    tid = self.order_id_counter; self.order_id_counter += 1
+                    tp_orders.append({"id": tid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o.get("tp_price") or o.get("tp2_price"), "qty": o["qty"], "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)})
+
                 self.pending_orders.extend([
                     {"id": sid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "stop", "triggerPrice": o["stop_price"], "qty": o["qty"], "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
-                    {"id": tid, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp_price"], "qty": o["qty"], "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
-                ])
+                ] + tp_orders)
             else:
                 if et == "stop_disaster":
                     order_type = "market"
                     exit_type = "stop_backup"
+                elif o.get("is_ttl"):
+                    order_type = "limit"
+                    exit_type = "ttl"
                 else:
                     order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
                     exit_type = et
@@ -415,7 +495,15 @@ class Simulator:
                 self._execute_exit(o, fill_price, exit_type, order_type)
 
             if o in self.pending_orders:
-                self.pending_orders.remove(o)
+                # If this was TP1, we don't necessarily remove other TP orders yet.
+                # However, the simulator's logic for pending_orders removal usually clears
+                # all for that symbol/side on exit.
+                # In BE+TP1+TP2, if TP1 hits, we keep TP2.
+                if o.get("is_tp1"):
+                    # TP1 hit. Keep TP2.
+                    self.pending_orders.remove(o)
+                else:
+                    self.pending_orders.remove(o)
 
     def get_leverage_limits(self):
         return self.leverage_limits
@@ -443,7 +531,7 @@ class Simulator:
         price_place = int(spec.get('pricePlace', 2))
         return round(avg_price, price_place)
 
-    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5, original_side=None, is_contrarian=False):
+    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5, original_side=None, is_contrarian=False, **kwargs):
         spec = self.contract_specs.get(symbol, {})
         min_usdt = float(spec.get('minTradeUSDT', 5.0))
         if RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
@@ -454,6 +542,11 @@ class Simulator:
 
         available_balance = self.equity - self.used_margin
         if available_balance < required_margin:
+            rej_msg = f"REJECTED {symbol} {side.upper()}: Insufficient margin (Required: {required_margin:.2f}, Avail: {available_balance:.2f}, Equity: {self.equity:.2f}, Used: {self.used_margin:.2f})"
+            if LOG_REJECTIONS:
+                log.warning(rej_msg)
+            else:
+                log.debug(rej_msg)
             return {"code": "1", "msg": "insufficient balance"}
 
         if ENTRY_ORDER_TYPE == "market":
@@ -472,30 +565,44 @@ class Simulator:
             self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian)
 
             sid = self.order_id_counter; self.order_id_counter += 1
-            tid = self.order_id_counter; self.order_id_counter += 1
+            tp_orders = []
+            if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2" and kwargs.get("tp1_price"):
+                tid1 = self.order_id_counter; self.order_id_counter += 1
+                tid2 = self.order_id_counter; self.order_id_counter += 1
+                tp_orders.extend([
+                    {"id": tid1, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp1_price"], "qty": kwargs["tp1_qty"], "is_tp1": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp2_price"], "qty": kwargs["tp2_qty"], "is_tp2": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                ])
+            else:
+                tid = self.order_id_counter; self.order_id_counter += 1
+                tp_orders.append({"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty, "original_side": original_side, "is_contrarian": is_contrarian})
 
             self.pending_orders.extend([
                 {"id": sid, "symbol": symbol, "pos_side": side, "type": "stop", "triggerPrice": stop_price, "qty": qty, "original_side": original_side, "is_contrarian": is_contrarian},
-                {"id": tid, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp_price, "qty": qty, "original_side": original_side, "is_contrarian": is_contrarian},
-            ])
+            ] + tp_orders)
             return {"code": "00000", "data": {"orderId": str(sid)}}
         else:
             # Limit Entry
             eid = self.order_id_counter; self.order_id_counter += 1
-            self.pending_orders.append({
+            self.used_margin += required_margin
+            order_data = {
                 "id": eid, "symbol": symbol, "pos_side": side, "type": "entry_limit",
                 "price": entry_price, "qty": qty, "ts": time.time(),
                 "stop_price": stop_price, "tp_price": tp_price,
                 "btc_conf": btc_conf, "drt": drt,
-                "original_side": original_side, "is_contrarian": is_contrarian
-            })
+                "original_side": original_side, "is_contrarian": is_contrarian,
+                "reserved_margin": required_margin
+            }
+            order_data.update(kwargs)
+            self.pending_orders.append(order_data)
             side_str = side.upper()
             if is_contrarian:
                 side_str = f"{original_side.upper()} [Flipped to {side.upper()}]"
-            log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f}")
+            log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f} | Margin Reserved: {required_margin:.2f}")
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False):
+        now = time.time()
         fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
         fee = qty * fill_price * fee_rate
         self.equity -= fee
@@ -506,7 +613,7 @@ class Simulator:
 
         self.positions[(symbol, side)] = {
             "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
-            "original_side": original_side, "is_contrarian": is_contrarian
+            "original_side": original_side, "is_contrarian": is_contrarian, "ts": now
         }
         side_str = side.upper()
         if is_contrarian:
@@ -515,12 +622,13 @@ class Simulator:
         log.info(f"FILLED ENTRY {symbol} {side_str} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         if self.engine:
-            self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian)
+            self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian, ts=now)
 
     def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]
         side = order["pos_side"]
         is_be = order.get("is_breakeven", False)
+        is_tp1 = order.get("is_tp1", False)
         pos = self.positions.get((sym, side))
         if not pos: return
 
@@ -529,6 +637,8 @@ class Simulator:
         exit_drt = exit_features.get("drt", 0.5)
 
         qty = min(order["qty"], pos["qty"])
+        is_partial = qty < pos["qty"]
+
         if side == "buy":
             pnl = (fill_price - pos["entry_price"]) * qty
         else:
@@ -536,20 +646,53 @@ class Simulator:
 
         fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
         fee = qty * fill_price * fee_rate
-        round_trip_pnl = pnl - fee - pos["entry_fee"]
+
+        # entry_fee proportional to qty exited
+        proportional_entry_fee = pos["entry_fee"] * (qty / (pos["qty"] if not pos.get("initial_qty") else pos["initial_qty"]))
+
+        round_trip_pnl = pnl - fee - proportional_entry_fee
         self.equity += (pnl - fee)
-        self.used_margin -= pos.get("margin", 0)
+
+        # Partial margin release
+        margin_release = pos.get("margin", 0) * (qty / pos["qty"])
+        self.used_margin -= margin_release
         self.used_margin = max(0, self.used_margin)
+        pos["margin"] -= margin_release
 
         side_str = side.upper()
         if pos.get("is_contrarian"):
             side_str = f"{pos.get('original_side', side).upper()} [Flipped to {side.upper()}]"
 
-        log.info(f"EXIT {sym} {side_str} {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
+        log.info(f"EXIT {'PARTIAL' if is_partial else 'FULL'} {sym} {side_str} {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
                  f"[{pos['btc_conf']}] drt_entry={pos.get('entry_drt',0.5):.4f} drt_exit={exit_drt:.4f} | "
                  f"equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
-        del self.positions[(sym, side)]
-        self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
+        if is_partial:
+            # Update position
+            if not pos.get("initial_qty"): pos["initial_qty"] = pos["qty"]
+            pos["qty"] -= qty
 
-        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be)
+            # If TP1 hit, move Stop Loss to halfway between BE and TP1
+            if is_tp1:
+                # Find the existing STOP order
+                for o in self.pending_orders:
+                    if o["symbol"] == sym and o["pos_side"] == side and o["type"] == "stop":
+                        # Update quantity to remaining
+                        o["qty"] = pos["qty"]
+
+                        # Move SL price
+                        be_price = o.get("triggerPrice") # It was already at BE because TP1 only activates after BE
+                        new_sl = (be_price + fill_price) / 2
+
+                        # Respect precision
+                        spec = self.contract_specs.get(sym, {})
+                        price_place = int(spec.get('pricePlace', 2))
+                        o["triggerPrice"] = round(new_sl, price_place)
+
+                        log.info(f"TP1 HIT: SL for {sym} {side.upper()} moved to {o['triggerPrice']:.8f} (Halfway BE/TP1)")
+                        break
+        else:
+            del self.positions[(sym, side)]
+            self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
+
+        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial)

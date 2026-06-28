@@ -13,26 +13,26 @@ BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
 # --- Account ---
 # The simulated starting balance used for all PnL and risk calculations.
-INITIAL_EQUITY = 15.0
+INITIAL_EQUITY = 1000.0
 
 # The maximum fraction of your total balance you are willing to lose on a single trade.
 # Example: 0.002 means you risk 0.2% (2 USDT on a 1000 USDT balance) per trade.
-RISK_PER_TRADE = 0.04
+RISK_PER_TRADE = 0.005
 
 # If True, the console will show every trade that was rejected by the filters and why.
-LOG_REJECTIONS = True
+LOG_REJECTIONS = False
 
 # If True, the console will show every signal the bot generates before it tries to enter.
-LOG_SIGNALS = True
+LOG_SIGNALS = False
 
 # If True, the bot will print a periodic summary of performance to the console.
 SHOW_PERIODIC_SUMMARY = True
 
 # How often (in seconds) the periodic summary should be printed.
-SUMMARY_INTERVAL_SECONDS = 30
+SUMMARY_INTERVAL_SECONDS = 15
 
 # The maximum number of trades allowed to be open at the same time across all assets.
-MAX_CONCURRENT_POSITIONS = 50
+MAX_CONCURRENT_POSITIONS = 100
 
 # Safety trigger: Stop the bot entirely if balance drops to this percentage of its all-time high.
 # 0.5 means stop at 50% drawdown.
@@ -40,17 +40,17 @@ DRAWDOWN_LIMIT = 0.5
 
 # Target goal: Stop the bot once it gains this percentage of the starting equity.
 # 0.1 means stop after a 10% total profit.
-TOTAL_ROI_LIMIT = 0.1
+TOTAL_ROI_LIMIT = 1.0 # High enough to let it run
 
 # Minimum cumulative indicator score (from RSI, MACD, etc.) required to trigger a trade.
 # Higher values increase selectivity (quality) but reduce trade frequency.
 MIN_REQUIRED_SCORE = 1.5
 
 # Stop the bot after it has completed this many total trades (wins + losses).
-MAX_TRADES_LIMIT = 500
+MAX_TRADES_LIMIT = 5000
 
 # Time limit: Stop the bot after this many seconds have elapsed. (14400s = 4 hours)
-MAX_DURATION = 14400
+MAX_DURATION = 86400
 
 # --- Execution ---
 # Order type for entries: "limit" to earn Maker fees (may not fill), "market" to fill instantly.
@@ -66,11 +66,16 @@ SL_ORDER_TYPE = "limit"
 # without filling, the bot fires a Market order to exit immediately. (0.001 = 0.1%)
 SL_DISASTER_BUFFER = 0.001
 
-# Time-to-Live: If a trade is stagnant for this many seconds, the bot exits at the current mid-price.
-TRADE_TTL_SECONDS = 180
+# --- TTL (Time-to-Live) Settings ---
+# Toggle for force-exiting stagnant trades after a certain duration.
+USE_TTL = False
+
+# The number of candles of the ACTIVE_TIMEFRAME to wait before force-exiting.
+# Example: 3 on a 1m timeframe = 180s. 3 on a 5m timeframe = 900s.
+TTL_CANDLE_MULTIPLIER = 15
 
 # Estimated cost of price movement against us during execution. Factored into fee/target math.
-EXPECTED_SLIPPAGE = 0.0005
+EXPECTED_SLIPPAGE = 0.001
 
 # How long (in seconds) the bot will wait for a "limit" entry to fill before converting it to "market".
 LIMIT_CHASE_TIMEOUT = 10.0
@@ -82,7 +87,7 @@ TAKER_FEE = 0.0006               # 0.06%
 
 # --- Assets ---
 # The number of top-volume assets the bot will monitor simultaneously.
-ASSETS_COUNT = 100
+ASSETS_COUNT = 250
 
 # How often (in hours) the bot should refresh the list of top-volume assets from the exchange.
 # Assets are cached in the local database to speed up restarts.
@@ -106,6 +111,14 @@ EMA_SHORT = 9
 EMA_LONG = 21
 SUPERTREND_PERIOD = 10
 SUPERTREND_MULTIPLIER = 3.0
+
+# --- Timeframes & Pattern Settings ---
+# Primary timeframe used for trading signals and entry analysis.
+ACTIVE_TIMEFRAME = "1m"
+
+# Fair Value Gap (FVG) detection settings.
+FVG_TIMEFRAME = "5m"
+FVG_HISTORY_DEPTH = 50
 
 # --- Confluence Timeframes ---
 # Time duration of a single simulation update loop.
@@ -133,13 +146,13 @@ TREND_STRENGTH_MIN = 0.1
 # Works in conjunction with USE_DYNAMIC_TARGETS:
 # - If True: This acts as the absolute minimum profit "floor".
 # - If False: This is the exact fixed profit target for every trade.
-TP_MOVE = 0.01                  # 0.8%
+TP_MOVE = 0.008                  # 0.8%
 
 # The target % price move for the stop loss.
 # Works in conjunction with USE_ATR_SL:
 # - If True: This is only used as a fallback if ATR data is unavailable.
 # - If False: This is the exact fixed stop distance for every trade.
-SL_MOVE = 0.005                  # 0.4%
+SL_MOVE = 0.004                  # 0.4%
 
 # Maximum allowed difference between requested entry price and fill price for "market" entries.
 MAX_ENTRY_SLIPPAGE = 0.001
@@ -147,7 +160,7 @@ MAX_ENTRY_SLIPPAGE = 0.001
 # --- Strategy Hardening ---
 # The compounding goal for each trade (Return on Equity).
 # Works with USE_DYNAMIC_TARGETS to widen the TP move enough to cover fees and hit this net % gain.
-TARGET_NET_ROE = 0.05            # 5% Net ROE target
+TARGET_NET_ROE = 0.20            # 20% Net ROE target
 
 # Protective floors/ceilings for RSI. Prevents buying "falling knives" or shorting "moons".
 # Dependency: Works only if RESTRICT_RSI = True.
@@ -158,7 +171,7 @@ RSI_SHORT_CEILING = 80.0
 REENTRY_COOLDOWN = 60.0
 
 # Toggle for "Net ROE" logic. If True, targets scale based on leverage to hit TARGET_NET_ROE.
-USE_DYNAMIC_TARGETS = False
+USE_DYNAMIC_TARGETS = True
 
 # Toggle for volatility-aware stops. If True, SL distance widens/narrows based on market noise.
 USE_ATR_SL = False
@@ -196,10 +209,10 @@ CONTRARIAN_FILTER = False
 USE_BREAKEVEN_TRIGGER = False
 
 # ROE level required to activate the breakeven move. (0.025 = 2.5% gain)
-BREAKEVEN_ROI_THRESHOLD = 0.025
+BREAKEVEN_ROI_THRESHOLD = 0.20
 
 # Extra profit buffer added to the breakeven move (covers fees + this ROE profit).
-BREAKEVEN_PROFIT_BUFFER = 0.01
+BREAKEVEN_PROFIT_BUFFER = 0.05
 
 # Logic to cap Take-Profit by 15m volatility to ensure the target is "reachable".
 USE_ATR_CAPPED_TP = False
@@ -208,12 +221,12 @@ USE_ATR_CAPPED_TP = False
 USE_DRT_VELOCITY = False
 
 # Automatically tightens RSI entry windows unless high-timeframe momentum is present.
-USE_ADAPTIVE_RSI = True
+USE_ADAPTIVE_RSI = False
 RSI_TIGHT_LONG = 25.0
 RSI_TIGHT_SHORT = 75.0
 
 # Toggle for TP relaxation. If True, the bot accepts lower ROE targets during low-volatility/flat trends.
-USE_TP_RELAXATION = False
+USE_TP_RELAXATION = True
 
 # The lower ROE target (Return on Equity) used when relaxation is active.
 RELAXED_ROE_TARGET = 0.03 # 3% instead of 5%
@@ -230,14 +243,15 @@ TREND_15M_MIN = 0.0001
 
 # --- Timeframes ---
 # List of timeframes used for Multi-Timeframe (MTF) analysis.
-AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "4H", "1D"]
+AVAILABLE_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H", "4H", "1D"]
 
 # Assignment of specific indicators to their respective analysis timeframes.
+# Dynamic: rsi, macd, ema, and atr track the ACTIVE_TIMEFRAME.
 INDICATOR_TIMEFRAMES = {
-    "rsi": "1m",
-    "macd": "1m",
-    "ema": "1m",
-    "atr": "1m",
+    "rsi": ACTIVE_TIMEFRAME,
+    "macd": ACTIVE_TIMEFRAME,
+    "ema": ACTIVE_TIMEFRAME,
+    "atr": ACTIVE_TIMEFRAME,
     "drt_slow": "15m",
     "drt_fast": "5m",
 }
@@ -246,7 +260,7 @@ INDICATOR_TIMEFRAMES = {
 # Each toggle, if set to True, turns a specific filter into a "Hard Gate".
 # If the condition is not met, the signal is discarded regardless of other indicator scores.
 RESTRICT_DRT = False
-RESTRICT_IMBALANCE = False
+RESTRICT_IMBALANCE = True
 RESTRICT_CONFIDENCE = False
 RESTRICT_DIRECTIONAL_SANITY = False # Forces score direction to match DRT trend pulse.
 RESTRICT_RSI = False
@@ -261,8 +275,10 @@ RESTRICT_BTC_CONFLUENCE = False     # Multi-timeframe BTC trend alignment gate.
 RESTRICT_ASSET_CONFLUENCE = False   # Asset 15m momentum alignment gate.
 RESTRICT_LIQUIDITY = False
 RESTRICT_SLIPPAGE = False
-RESTRICT_MIN_VAL = False            # Minimum USDT trade value enforcement.
+RESTRICT_MIN_VAL = True            # Minimum USDT trade value enforcement.
 RESTRICT_SCORE = False               # Enforces a minimum cumulative score before trading.
+RESTRICT_HTF_BIAS = True             # Enforces alignment with daily/4H bias.
+RESTRICT_VOLUME_INFLUX = True        # Requires volume influx or spike for entry.
 
 # BTC Global Momentum Gate: Blocks counter-trend trades during significant BTC flushes/moons.
 # Dependency: Works with BTC_MOMENTUM_THRESHOLD.
@@ -270,10 +286,22 @@ RESTRICT_BTC_MOMENTUM = False
 
 # Logic to subtract estimated fees from the risk capacity during position sizing.
 # Ensures that (Loss + Fees) stays within the RISK_PER_TRADE budget.
-FEE_AWARE_SIZING = False
+FEE_AWARE_SIZING = True
 
 # --- BTC Confluence Thresholds ---
 # Specific momentum thresholds (decimal %) for macro trend alignment filters.
 BTC_CONF_15M_MIN = 0.0002
 BTC_CONF_1H_MIN = 0.0002
 BTC_MOMENTUM_THRESHOLD = 0.001   # Threshold for RESTRICT_BTC_MOMENTUM gate.
+
+# --- Multi-Stage Exit Strategy ---
+# Options: "BE+TP" (Standard) or "BE+TP1+TP2" (Multi-stage)
+# Only respected if USE_BREAKEVEN_TRIGGER is True.
+EXIT_STRATEGY = "BE+TP1+TP2"
+
+# Ratio of the position to close at the first Take-Profit level (TP1).
+TP1_QTY_RATIO = 0.5
+
+# Distance of TP1 from the Breakeven price, expressed as a fraction of the distance between BE and TP2.
+# 0.5 means TP1 is exactly halfway between the Breakeven price and the final Take-Profit (TP2).
+TP1_BUFFER_PCT = 0.5
