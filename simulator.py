@@ -38,6 +38,7 @@ class Simulator:
         self.order_id_counter = 1000
         self.total_realized_pnl = 0.0
         self.engine = None
+        self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
         self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
@@ -166,6 +167,23 @@ class Simulator:
         book = self.books.get(symbol)
         if not book: return {}
 
+        # 1. Check Cache (Patterns only change on new candle)
+        h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
+        if h_active:
+            last_ts = h_active[-1]['ts']
+            if symbol in self._feature_cache and self._feature_cache[symbol].get('_ts') == last_ts:
+                # Still need real-time data from OrderBook
+                cached = self._feature_cache[symbol].copy()
+                bid_vol, ask_vol = book.top_bid_ask_qty()
+                total_vol = bid_vol + ask_vol
+                cached.update({
+                    "imbalance": (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0.0,
+                    "spread_pct": (book.best_ask - book.best_bid) / ((book.best_bid + book.best_ask) / 2) if (book.best_bid + book.best_ask) > 0 else 0,
+                    "mid": (book.best_bid + book.best_ask) / 2,
+                    "vol_pct": min(1.0, total_vol / 4000.0)
+                })
+                return cached
+
         bid_vol, ask_vol = book.top_bid_ask_qty()
         total_vol = bid_vol + ask_vol
         imbalance = (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0.0
@@ -232,7 +250,13 @@ class Simulator:
             self._btc_confluence_cache = {}
             for tf in ["15m", "1H", "4H", "1D"]:
                 h = self.confluence_history.get(BTC_SYMBOL, {}).get(tf, [])
-                if len(h) >= 2:
+                if len(h) >= 3:
+                    if BTC_REALTIME_CONFLUENCE:
+                        self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
+                    else:
+                        # Use last two CLOSED candles
+                        self._btc_confluence_cache[f"btc_{tf}"] = (h[-2] / h[-3] - 1)
+                elif len(h) >= 2:
                     self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
                 else:
                     self._btc_confluence_cache[f"btc_{tf}"] = 0.0
@@ -246,7 +270,7 @@ class Simulator:
             else:
                 asset_changes[f"asset_{tf}"] = 0.0
 
-        return {
+        features = {
             "imbalance": imbalance,
             "spread_pct": spread / mid if mid > 0 else 0,
             "mid": mid,
@@ -274,6 +298,15 @@ class Simulator:
             **self._btc_confluence_cache,
             **asset_changes,
         }
+
+        # Save to cache
+        if h_active:
+            feat_to_cache = features.copy()
+            feat_to_cache['_ts'] = h_active[-1]['ts']
+            self._feature_cache[symbol] = feat_to_cache
+
+        return features
+
 
     async def _ws_callback(self, msg):
         channel = msg.get("arg", {}).get("channel")
@@ -433,6 +466,27 @@ class Simulator:
                 elif now - o.get("ts", now) > LIMIT_CHASE_TIMEOUT:
                     # In a real bot, we'd reposition. For simulation, let's just "take" it
                     # to keep the data flowing, or expire it. Let's convert to market-ish fill.
+
+                    # Re-verify margin at current price before filling timeout
+                    fill_price = self.last_price.get(o["symbol"])
+                    max_lev = self.leverage_limits.get(o["symbol"], 20)
+                    new_margin = (o["qty"] * fill_price) / max_lev
+                    estimated_fee = o["qty"] * fill_price * TAKER_FEE
+
+                    # available_balance already accounts for the 'reserved_margin' (o["reserved_margin"])
+                    # so we check if the new required total fits.
+                    current_avail = self.equity - (self.used_margin - o.get("reserved_margin", 0))
+                    if current_avail < (new_margin + estimated_fee):
+                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {o['pos_side'].upper()}: Insufficient margin at new price {fill_price:.8f}")
+                        if o in self.pending_orders:
+                            self.used_margin -= o.get("reserved_margin", 0)
+                            self.pending_orders.remove(o)
+                        if self.engine:
+                            pos_key = f"{o['symbol']}_{o['pos_side']}"
+                            if pos_key in self.engine.pending_entries:
+                                self.engine.pending_entries.remove(pos_key)
+                        continue
+
                     fills.append((o, "entry_timeout"))
 
             elif o["type"] == "stop":
@@ -578,8 +632,11 @@ class Simulator:
         max_lev = self.leverage_limits.get(symbol, 20)
         required_margin = (qty * entry_price) / max_lev
 
+        # Estimate entry fee to ensure equity can cover it immediately upon fill
+        estimated_fee = qty * entry_price * (MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE)
+
         available_balance = self.equity - self.used_margin
-        if available_balance < required_margin:
+        if available_balance < (required_margin + estimated_fee):
             rej_msg = f"REJECTED {symbol} {side.upper()}: Insufficient margin (Required: {required_margin:.2f}, Avail: {available_balance:.2f}, Equity: {self.equity:.2f}, Used: {self.used_margin:.2f})"
             if LOG_REJECTIONS:
                 log.warning(rej_msg)

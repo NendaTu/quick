@@ -110,6 +110,10 @@ def detect_fvgs(ohlcv: List[dict], depth: int = 50) -> Dict:
 
     # 3. Find the nearest active (not yet fully filled/inverted) FVG
     active_fvgs = [f for f in fvgs if f['state'] != 'inverted']
+
+    # Optimization: Filter out historic gaps that are now terminal/inverted to avoid post-processing
+    # Note: In this stateless detector, we can only filter within the current depth
+
     nearest = None
     if active_fvgs:
         # Sort by proximity to current price

@@ -1,6 +1,6 @@
 import asyncio, logging
 from engine import Engine
-from config import MODE, RISK_PER_TRADE
+from config import MODE, RISK_PER_TRADE, TARGET_NET_ROE
 
 class DBLogHandler(logging.Handler):
     def __init__(self, db):
@@ -26,6 +26,10 @@ logging.getLogger().addHandler(console_handler)
 log = logging.getLogger("scalper")
 
 async def main():
+    # Final configuration safety checks
+    if TARGET_NET_ROE >= 1.0:
+        log.warning(f"HIGH TARGET_NET_ROE DETECTED: {TARGET_NET_ROE}. This is a decimal ROE (0.05 = 5%). Please verify config.")
+
     engine = Engine()
 
     # Add DB logging

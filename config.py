@@ -284,6 +284,9 @@ RESTRICT_VOLUME_INFLUX = True        # Requires volume influx or spike for entry
 # Dependency: Works with BTC_MOMENTUM_THRESHOLD.
 RESTRICT_BTC_MOMENTUM = False
 
+# If True, BTC confluence uses real-time price vs last close. If False, uses last two closes.
+BTC_REALTIME_CONFLUENCE = True
+
 # Logic to subtract estimated fees from the risk capacity during position sizing.
 # Ensures that (Loss + Fees) stays within the RISK_PER_TRADE budget.
 FEE_AWARE_SIZING = True

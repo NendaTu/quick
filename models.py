@@ -338,7 +338,7 @@ class LearningModel:
             drt_offset = abs(features.get("drt", 0.5) - 0.5)
             if drt_offset < TP_RELAXATION_THRESHOLD:
                 tp_move = (net_sl_cost * 1.5) + entry_fee_rate + tp_exit_fee_rate + EXPECTED_SLIPPAGE
-                log.debug(f"TP RELAXED for {symbol}: using 1.5:1 RRR due to flat DRT ({drt_offset:.4f})")
+                log.debug(f"TP RELAXED for {symbol}: using 1.5:1 RRR (Target Net ROE: {RELAXED_ROE_TARGET*100:.1f}%) due to flat DRT ({drt_offset:.4f})")
 
         # 4. Final Caps and Floors
         if USE_ATR_CAPPED_TP and features.get("atr"):
