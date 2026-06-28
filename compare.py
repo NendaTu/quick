@@ -209,9 +209,6 @@ def parse_args() -> List[Variant]:
             # Look in compare/configs/
             for f in os.listdir("compare/configs"):
                 if f.endswith(".py"):
-                    # This is tricky because we need to extract variables from the file
-                    # without importing it into the main process.
-                    # Simple hack: read the file and look for VAR = VAL
                     overrides = {}
                     with open(os.path.join("compare/configs", f), "r") as cf:
                         for line in cf:
@@ -224,27 +221,43 @@ def parse_args() -> List[Variant]:
                     variants.append(Variant(id=f.replace(".py", ""), overrides=overrides, config_file=f))
         else:
             # Parse VAR=VAL args
-            # To handle spaces in "VAR = VAL", we can join all args and then re-split
-            # but that's messy. Let's just strip what we find.
             for arg in sys.argv[1:]:
                 if "=" in arg:
                     k, v = [x.strip() for x in arg.split("=", 1)]
-                    # Support multiple variants of same key if they come in sequence?
-                    # "SL_MOVE=0.01 SL_MOVE=0.02" -> Variant 1: {SL_MOVE:0.01}, Variant 2: {SL_MOVE:0.02}
-                    # Check if last variant already has this key
                     try:
                         val = ast.literal_eval(v)
                     except (ValueError, SyntaxError):
-                        val = v # Fallback to string if not a literal
+                        val = v
 
-                    if k in variants[-1].overrides:
+                    if k in variants[-1].overrides and variants[-1].id != "Baseline":
                         variants.append(Variant(id=f"Var_{len(variants)}", overrides={k: val}))
                     else:
-                        # Append to current variant if it's not "Baseline"
                         if variants[-1].id == "Baseline":
                             variants.append(Variant(id="Var_1", overrides={k: val}))
                         else:
                             variants[-1].overrides[k] = val
+
+    # Dynamic Renaming based on overrides
+    import config as root_config
+    all_overridden_keys = set()
+    for v in variants[1:]:
+        all_overridden_keys.update(v.overrides.keys())
+
+    # Remove ASSETS_COUNT from name tagging if it was global
+    all_overridden_keys.discard("ASSETS_COUNT")
+
+    for v in variants:
+        if v.id == "Baseline":
+            tag = ", ".join([f"{k}={getattr(root_config, k, 'N/A')}" for k in sorted(all_overridden_keys)])
+            v.id = f"Baseline: {tag}" if tag else "Baseline"
+        elif v.config_file:
+            # Keep filename but maybe append overrides if any?
+            pass
+        else:
+            # VAR=VAL variant
+            tag = ", ".join([f"{k}={val}" for k, val in sorted(v.overrides.items()) if k != "ASSETS_COUNT"])
+            v.id = tag
+
     return variants
 
 async def main():
