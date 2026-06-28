@@ -119,6 +119,14 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
     # Isolated process entry point
     import config
     import logging
+    import os
+
+    # Ensure log directory exists in the subprocess
+    log_dir = os.path.abspath("compare/logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except:
+        pass
 
     # 1. Apply Overrides BEFORE importing engine
     # This ensures 'from config import *' gets the patched values
@@ -201,71 +209,93 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
 def parse_args() -> List[Variant]:
     variants = [Variant(id="Baseline", overrides={})]
 
-    # Pre-parse overrides for global settings like ASSETS_COUNT
-    for arg in sys.argv[1:]:
+    raw_args = sys.argv[1:]
+    full_str = " ".join(raw_args)
+
+    import re
+    # Improved pattern to handle spaces and various value types
+    # Matches Key = Value
+    # k_v_pairs = re.findall(r"([A-Z_]+)\s*=\s*([^\s,]+)", full_str)
+
+    # Simpler approach: split by equals and try to associate
+    processed_overrides = []
+    for arg in full_str.split(" "):
         if "=" in arg:
-            k, v = [x.strip() for x in arg.split("=", 1)]
-            if k == "ASSETS_COUNT":
-                # Apply globally to Baseline
-                try:
-                    variants[0].overrides[k] = ast.literal_eval(v)
-                except:
-                    pass
+            # If it is a full pair like VAR=VAL
+            if not arg.startswith("=") and not arg.endswith("="):
+                k, v = arg.split("=", 1)
+                processed_overrides.append((k, v))
 
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "config":
-            # Look in compare/configs/
-            for f in os.listdir("compare/configs"):
-                if f.endswith(".py"):
-                    overrides = {}
-                    with open(os.path.join("compare/configs", f), "r") as cf:
-                        for line in cf:
-                            if "=" in line and not line.startswith("#"):
-                                try:
-                                    k, v = line.split("=", 1)
-                                    overrides[k.strip()] = ast.literal_eval(v.split("#")[0].strip())
-                                except:
-                                    pass
-                    variants.append(Variant(id=f.replace(".py", ""), overrides=overrides, config_file=f))
-        else:
-            # Parse VAR=VAL args
-            for arg in sys.argv[1:]:
-                if "=" in arg:
-                    k, v = [x.strip() for x in arg.split("=", 1)]
-                    try:
-                        val = ast.literal_eval(v)
-                    except (ValueError, SyntaxError):
-                        val = v
+    # Handle mangled spaces like "VAR = VAL"
+    # If we find an equals as its own token, or start/end with equals
+    tokens = [t for t in full_str.split(" ") if t]
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "=" and i > 0 and i + 1 < len(tokens):
+            processed_overrides.append((tokens[i-1], tokens[i+1]))
+            i += 1
+        elif token.endswith("=") and len(token) > 1 and i + 1 < len(tokens):
+            processed_overrides.append((token[:-1], tokens[i+1]))
+            i += 1
+        elif token.startswith("=") and len(token) > 1 and i > 0:
+            processed_overrides.append((tokens[i-1], token[1:]))
+        i += 1
 
-                    if k in variants[-1].overrides and variants[-1].id != "Baseline":
-                        variants.append(Variant(id=f"Var_{len(variants)}", overrides={k: val}))
-                    else:
-                        if variants[-1].id == "Baseline":
-                            variants.append(Variant(id="Var_1", overrides={k: val}))
-                        else:
-                            variants[-1].overrides[k] = val
+    # Deduplicate and evaluate
+    final_overrides = []
+    seen = set()
+    for k, v in processed_overrides:
+        if (k, v) not in seen:
+            try:
+                val = ast.literal_eval(v)
+            except:
+                val = v
+            final_overrides.append((k, val))
+            seen.add((k, v))
 
-    # Dynamic Renaming based on overrides
+    # Handle global ASSETS_COUNT
+    for k, v in final_overrides:
+        if k == "ASSETS_COUNT":
+            variants[0].overrides[k] = v
+
+    if "config" in raw_args:
+        config_dir = os.path.abspath("compare/configs")
+        os.makedirs(config_dir, exist_ok=True)
+        for f in os.listdir(config_dir):
+            if f.endswith(".py"):
+                overrides = {}
+                with open(os.path.join(config_dir, f), "r") as cf:
+                    for line in cf:
+                        if "=" in line and not line.startswith("#"):
+                            try:
+                                k_v = line.split("=", 1)
+                                overrides[k_v[0].strip()] = ast.literal_eval(k_v[1].split("#")[0].strip())
+                            except: pass
+                variants.append(Variant(id=f.replace(".py", ""), overrides=overrides, config_file=f))
+    else:
+        for k, v in final_overrides:
+            if k == "ASSETS_COUNT": continue
+            if k in variants[-1].overrides and variants[-1].id != "Baseline":
+                variants.append(Variant(id=f"Var_{len(variants)}", overrides={k: v}))
+            else:
+                if variants[-1].id == "Baseline":
+                    variants.append(Variant(id="Var_1", overrides={k: v}))
+                else:
+                    variants[-1].overrides[k] = v
+
     import config as root_config
-    all_overridden_keys = set()
-    for v in variants[1:]:
-        all_overridden_keys.update(v.overrides.keys())
-
-    # Remove ASSETS_COUNT from name tagging if it was global
-    all_overridden_keys.discard("ASSETS_COUNT")
+    all_keys = set()
+    for v in variants[1:]: all_keys.update(v.overrides.keys())
+    all_keys.discard("ASSETS_COUNT")
 
     for v in variants:
         if v.id == "Baseline":
-            tag = ", ".join([f"{k}={getattr(root_config, k, 'N/A')}" for k in sorted(all_overridden_keys)])
+            tag = ", ".join([f"{k}={getattr(root_config, k, 'N/A')}" for k in sorted(all_keys)])
             v.id = f"Baseline: {tag}" if tag else "Baseline"
-        elif v.config_file:
-            # Keep filename but maybe append overrides if any?
-            pass
-        else:
-            # VAR=VAL variant
+        elif not v.config_file:
             tag = ", ".join([f"{k}={val}" for k, val in sorted(v.overrides.items()) if k != "ASSETS_COUNT"])
             v.id = tag
-
     return variants
 
 async def main():
@@ -326,7 +356,8 @@ async def main():
         for vid in sorted_ids:
             s = latest_stats[vid]
             if not s:
-                print(f"   {vid:<17} | {'WAITING...':>12}")
+                display_id = vid[:32] + "..." if len(vid) > 32 else vid
+                print(f"   {display_id:<32} | {'WAITING...':>12}")
                 continue
 
             pnl = s.get("cumulative_pnl", 0)

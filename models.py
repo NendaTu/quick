@@ -140,8 +140,8 @@ class LearningModel:
             score += trend_score * self.weights["trend"]
 
         # Check for trade signal
-        if RESTRICT_SCORE and abs(score) < 1:
-            log.debug(f"REJECT {symbol}: Score {score:.1f} < 1")
+        if RESTRICT_SCORE and abs(score) < MIN_REQUIRED_SCORE:
+            log.debug(f"REJECT {symbol}: Score {score:.1f} < {MIN_REQUIRED_SCORE}")
             return None
 
         # Confidence calculation
