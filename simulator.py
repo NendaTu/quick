@@ -26,7 +26,7 @@ from bitget_client import BitGetClient, BitGetWSClient
 log = logging.getLogger("scalper.simulator")
 
 class Simulator:
-    def __init__(self):
+    def __init__(self, use_db=True):
         self.books: Dict[str, SimulatedOrderBook] = {}
         self.leverage_limits = {}
         self.contract_specs: Dict[str, dict] = {}
@@ -38,7 +38,7 @@ class Simulator:
         self.order_id_counter = 1000
         self.total_realized_pnl = 0.0
         self.engine = None
-        self.db = Database()
+        self.db = Database() if use_db else None
         self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
         self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
@@ -49,11 +49,30 @@ class Simulator:
         self._last_confluence_update = 0
         self.discovered_assets: List[str] = []
 
-    async def warm_up(self):
+    async def warm_up(self, preloaded_data=None):
+        if preloaded_data:
+            log.info("Warming up with preloaded data...")
+            self.discovered_assets = preloaded_data["discovered_assets"]
+            self.contract_specs = preloaded_data["contract_specs"]
+            self.leverage_limits = preloaded_data["leverage_limits"]
+            self.ohlcv = preloaded_data["ohlcv"]
+            self.confluence_history = preloaded_data["confluence_history"]
+            self.last_candle_ts = preloaded_data["last_candle_ts"]
+            self.last_price = preloaded_data["last_price"]
+
+            for sym in self.discovered_assets + [BTC_SYMBOL]:
+                price = self.last_price.get(sym, 1.0)
+                self.books[sym] = SimulatedOrderBook(sym, price)
+            log.info(f"Warm-up complete (preloaded {len(self.discovered_assets)} assets).")
+            return
+
         log.info("Starting warm-up...")
 
         # 1. Discover Assets by Volume (with persistence)
-        last_ts, cached_assets = self.db.get_discovered_assets()
+        if self.db:
+            last_ts, cached_assets = self.db.get_discovered_assets()
+        else:
+            last_ts, cached_assets = 0, []
         age_hours = (time.time() - last_ts) / 3600
 
         if cached_assets and age_hours < ASSET_REDISCOVERY_HOURS:
@@ -212,7 +231,7 @@ class Simulator:
         if now - self._last_confluence_update > 0.1: # Update cache every 100ms
             self._btc_confluence_cache = {}
             for tf in ["15m", "1H", "4H", "1D"]:
-                h = self.confluence_history[BTC_SYMBOL][tf]
+                h = self.confluence_history.get(BTC_SYMBOL, {}).get(tf, [])
                 if len(h) >= 2:
                     self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
                 else:
@@ -221,7 +240,7 @@ class Simulator:
 
         asset_changes = {}
         for tf in ["15m", "1H", "4H", "1D"]:
-            h = self.confluence_history[symbol][tf]
+            h = self.confluence_history.get(symbol, {}).get(tf, [])
             if len(h) >= 2:
                 asset_changes[f"asset_{tf}"] = (h[-1] / h[-2] - 1)
             else:
@@ -277,7 +296,8 @@ class Simulator:
                 side = t[3] if isinstance(t, list) else t.get("side", "buy")
 
                 self.last_price[instId] = price
-                self.db.save_tick(instId, ts, price, side, size)
+                if self.db:
+                    self.db.save_tick(instId, ts, price, side, size)
                 self._update_candles(instId, price, size, ts)
 
     def _update_candles(self, symbol, price, size, ts):
@@ -297,7 +317,7 @@ class Simulator:
                 if len(self.ohlcv[symbol][tf_name]) > 1000: self.ohlcv[symbol][tf_name].pop(0)
 
                 # Persistence for ACTIVE_TIMEFRAME
-                if tf_name == ACTIVE_TIMEFRAME:
+                if tf_name == ACTIVE_TIMEFRAME and self.db:
                     prev = self.ohlcv[symbol][tf_name][-2] if len(self.ohlcv[symbol][tf_name]) > 1 else None
                     if prev:
                         self.db.save_candle(symbol, ACTIVE_TIMEFRAME, prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
@@ -320,10 +340,24 @@ class Simulator:
                     if tf_name in self.confluence_history[symbol]:
                         self.confluence_history[symbol][tf_name][-1] = price
 
-    async def data_feed_task(self, engine):
+    async def _external_feed_loop(self, queue):
+        log.info("Starting external feed loop")
+        while True:
+            try:
+                # This queue will be a multiprocessing.Queue passed from compare.py
+                msg = await asyncio.to_thread(queue.get)
+                if msg is None: break
+                await self._ws_callback(msg)
+            except Exception as e:
+                log.error(f"External feed error: {e}")
+
+    async def data_feed_task(self, engine, external_feed=None):
         symbols = self.discovered_assets + [BTC_SYMBOL]
-        ws_client = BitGetWSClient(symbols, self._ws_callback)
-        asyncio.create_task(ws_client.run())
+        if external_feed is None:
+            ws_client = BitGetWSClient(symbols, self._ws_callback)
+            asyncio.create_task(ws_client.run())
+        else:
+            asyncio.create_task(self._external_feed_loop(external_feed))
 
         last_heartbeat = time.time()
         while True:

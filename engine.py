@@ -8,7 +8,7 @@ from models import LearningModel, DummyModel
 log = logging.getLogger("scalper.engine")
 
 class Engine:
-    def __init__(self):
+    def __init__(self, use_db=True):
         self.books: Dict[str, OrderBook] = {}
         self.leverage_limits = {}
         self.pending_entries: Set[str] = set() # key is 'SYMBOL_buy' or 'SYMBOL_sell'
@@ -38,7 +38,7 @@ class Engine:
         self.start_time = None
 
         if MODE == "paper":
-            self.exchange = Simulator()
+            self.exchange = Simulator(use_db=use_db)
             self.exchange.engine = self
             self.model = LearningModel(self.exchange)
         else:
@@ -46,7 +46,7 @@ class Engine:
             self.model = DummyModel()
             log.warning("Live/testnet mode not implemented")
 
-    async def start(self):
+    async def start(self, preloaded_data=None, external_feed=None):
         self.start_time = time.time()
 
         # Handle signals for graceful manual shutdown
@@ -66,7 +66,7 @@ class Engine:
             log.debug(f"Signal handlers not supported: {e}")
 
         if MODE == "paper":
-            await self.exchange.warm_up()
+            await self.exchange.warm_up(preloaded_data=preloaded_data)
             self.leverage_limits = self.exchange.get_leverage_limits()
             self.enabled_assets = self.exchange.discovered_assets
             # Initialize books for discovered assets
@@ -77,7 +77,7 @@ class Engine:
             log.error("Only paper mode is implemented.")
             return
 
-        asyncio.create_task(self.exchange.data_feed_task(self))
+        asyncio.create_task(self.exchange.data_feed_task(self, external_feed=external_feed))
         asyncio.create_task(self._equity_monitor())
         asyncio.create_task(self._maintenance_loop())
         trading_task = asyncio.create_task(self._trading_loop())
