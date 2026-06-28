@@ -324,27 +324,43 @@ async def main():
 
     try:
         while True:
-            # Check for stats updates
-            while not stats_queue.empty():
-                s = stats_queue.get()
-                latest_stats[s["id"]] = s
+            # Check for stats updates (use a small timeout to keep loop responsive)
+            try:
+                while not stats_queue.empty():
+                    s = stats_queue.get_nowait()
+                    latest_stats[s["id"]] = s
+            except:
+                pass
 
             # Periodic table update
             print_table()
-            await asyncio.sleep(10)
-    except KeyboardInterrupt:
+            # Sleep in small increments to be responsive to CTRL+C
+            for _ in range(100):
+                await asyncio.sleep(0.1)
+
+    except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Stopping comparison...")
+    finally:
         for q in queues:
-            q.put(None) # Signal variant runners to stop
+            try:
+                q.put_nowait(None) # Signal variant runners to stop
+            except:
+                pass
 
         for p in processes:
-            p.terminate()
-            p.join()
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=2)
+                if p.is_alive():
+                    p.kill()
 
         # Final stats grab
-        while not stats_queue.empty():
-            s = stats_queue.get()
-            latest_stats[s["id"]] = s
+        try:
+            while not stats_queue.empty():
+                s = stats_queue.get_nowait()
+                latest_stats[s["id"]] = s
+        except:
+            pass
 
         print("\nFINAL COMPARISON RESULTS")
         print_table()
