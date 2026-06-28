@@ -129,17 +129,27 @@ class BitGetWSClient:
                 async with self._session.ws_connect(self.url) as ws:
                     log.info("Connected to BitGet WebSocket")
 
-                    subscribe_msg = {"op": "subscribe", "args": []}
+                    all_args = []
                     for sym in self.symbols:
-                        # BitGet V2 instType for USDT-M Futures is 'USDT-FUTURES'
-                        # Use books15 for snapshot updates (avoiding delta merging)
-                        subscribe_msg["args"].append({"instType": "USDT-FUTURES", "channel": "books15", "instId": sym})
-                        subscribe_msg["args"].append({"instType": "USDT-FUTURES", "channel": "trade", "instId": sym})
+                        all_args.append({"instType": "USDT-FUTURES", "channel": "books15", "instId": sym})
+                        all_args.append({"instType": "USDT-FUTURES", "channel": "trade", "instId": sym})
 
-                    await ws.send_json(subscribe_msg)
+                    # Batch subscriptions to avoid exchange disconnects for large payloads
+                    batch_size = 20
+                    for i in range(0, len(all_args), batch_size):
+                        if self.stop_event.is_set(): break
+                        batch = all_args[i:i + batch_size]
+                        subscribe_msg = {"op": "subscribe", "args": batch}
+                        await ws.send_json(subscribe_msg)
+                        await asyncio.sleep(0.1) # Small delay between batches
+
+                    if self.stop_event.is_set(): break
+
                     hb_task = asyncio.create_task(self._heartbeat(ws))
 
                     async for msg in ws:
+                        if self.stop_event.is_set():
+                            break
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             if msg.data == "pong": continue
                             try:
@@ -147,7 +157,7 @@ class BitGetWSClient:
                                 if "data" in data:
                                     await self.callback(data)
                                 elif data.get("event") == "subscribe":
-                                    log.info(f"Subscribed: {data.get('arg')}")
+                                    log.debug(f"Subscribed: {data.get('arg')}")
                                 elif data.get("action") == "snapshot":
                                     await self.callback(data)
                             except Exception as e:
@@ -156,9 +166,12 @@ class BitGetWSClient:
                             break
 
                     hb_task.cancel()
+                    if self.stop_event.is_set():
+                        await ws.close()
+                        break
             except Exception as e:
-                log.error(f"WS Error: {e}")
                 if not self.stop_event.is_set():
+                    log.error(f"WS Error: {e}")
                     await asyncio.sleep(5)
 
         if not self._session.closed:

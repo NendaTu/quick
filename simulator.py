@@ -346,7 +346,11 @@ class Simulator:
             try:
                 # This queue will be a multiprocessing.Queue passed from compare.py
                 msg = await asyncio.to_thread(queue.get)
-                if msg is None: break
+                if msg is None:
+                    log.info("External feed received stop signal.")
+                    if self.engine:
+                        self.engine.stop_event.set()
+                    break
                 await self._ws_callback(msg)
             except Exception as e:
                 log.error(f"External feed error: {e}")

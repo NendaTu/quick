@@ -109,8 +109,11 @@ class DataCoordinator:
                 pass
 
     async def run(self):
-        ws_client = BitGetWSClient(self.preloaded_data["discovered_assets"] + [BTC_SYMBOL], self._ws_callback)
-        await ws_client.run()
+        self.ws_client = BitGetWSClient(self.preloaded_data["discovered_assets"] + [BTC_SYMBOL], self._ws_callback)
+        try:
+            await self.ws_client.run()
+        finally:
+            await self.client.close()
 
 def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multiprocessing.Queue, stats_queue: multiprocessing.Queue):
     # Isolated process entry point
@@ -134,8 +137,9 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
     config.MAX_DURATION = 9999999
     config.TOTAL_ROI_LIMIT = 100.0
 
-    # 3. Setup Logging to File
-    log_file = f"compare/logs/{variant.id}.log"
+    # 3. Setup Logging to File (Sanitize filename)
+    safe_id = variant.id.replace(":", "").replace("/", "_").replace(" ", "_")
+    log_file = f"compare/logs/{safe_id}.log"
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
 
@@ -170,9 +174,13 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
         asyncio.create_task(report_stats())
         await engine.start(preloaded_data=preloaded_data, external_feed=input_queue)
 
+        # Cleanup Simulator's BitGetClient session
+        if hasattr(engine.exchange, "client") and engine.exchange.client:
+            await engine.exchange.client.close()
+
     try:
         asyncio.run(run_engine())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
         # Final stats
@@ -264,7 +272,7 @@ async def main():
     variants = parse_args()
     log.info(f"Starting comparison with {len(variants)} variants: {[v.id for v in variants]}")
 
-    # Ensure required directories exist
+    # Ensure required directories exist BEFORE starting variants
     os.makedirs("compare/configs", exist_ok=True)
     os.makedirs("compare/logs", exist_ok=True)
 
@@ -335,41 +343,64 @@ async def main():
             print(f"{prefix}{vid:<17} | {pnl:>12.2f} | {roi:>7.1f}% | {win_rate:>5.1f}% ({tp_win_rate:>4.1f}%) | {trades:>8} | {open_p:>5} | {equity:>12.2f}")
         print("="*110 + "\n")
 
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, lambda: stop_event.set())
+
     try:
-        while True:
-            # Check for stats updates (use a small timeout to keep loop responsive)
+        # Initial display
+        print_table()
+
+        while not stop_event.is_set():
+            # Check for stats updates
+            updated = False
             try:
-                while not stats_queue.empty():
+                while True:
                     s = stats_queue.get_nowait()
                     latest_stats[s["id"]] = s
+                    updated = True
             except:
                 pass
 
-            # Periodic table update
-            print_table()
-            # Sleep in small increments to be responsive to CTRL+C
-            for _ in range(100):
-                await asyncio.sleep(0.1)
+            if updated:
+                print_table()
+
+            # Wait for stop signal or timeout
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
 
     except (KeyboardInterrupt, asyncio.CancelledError):
-        log.info("Stopping comparison...")
+        pass
     finally:
+        log.info("Stopping comparison and cleaning up processes...")
+
+        # 1. Stop Data Coordinator
+        if coordinator.ws_client:
+            coordinator.ws_client.stop()
+
+        # 2. Signal variants to stop
         for q in queues:
             try:
-                q.put_nowait(None) # Signal variant runners to stop
+                q.put_nowait(None)
             except:
                 pass
 
+        # 3. Terminate processes
         for p in processes:
             if p.is_alive():
                 p.terminate()
-                p.join(timeout=2)
-                if p.is_alive():
-                    p.kill()
 
-        # Final stats grab
+        # 4. Wait for them to finish
+        for p in processes:
+            p.join(timeout=1)
+            if p.is_alive():
+                p.kill()
+
+        # 5. Final stats grab
         try:
-            while not stats_queue.empty():
+            while True:
                 s = stats_queue.get_nowait()
                 latest_stats[s["id"]] = s
         except:
@@ -379,4 +410,7 @@ async def main():
         print_table()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass
