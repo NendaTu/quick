@@ -207,94 +207,92 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
         stats_queue.put(stats)
 
 def parse_args() -> List[Variant]:
-    variants = [Variant(id="Baseline", overrides={})]
+    """
+    Parses CLI arguments into variants.
 
+    Format 1 (Manual): python compare.py GLOBAL_KEY=VAL "VAR1_K1=V1, VAR1_K2=V2" "VAR2_K1=V3"
+    Format 2 (Config files): python compare.py config
+    """
+    import config as root_config
     raw_args = sys.argv[1:]
-    full_str = " ".join(raw_args)
+    global_overrides = {}
+    variant_defs = []
 
-    import re
-    # Improved pattern to handle spaces and various value types
-    # Matches Key = Value
-    # k_v_pairs = re.findall(r"([A-Z_]+)\s*=\s*([^\s,]+)", full_str)
+    # 1. Identify global overrides (must be strictly KEY=VALUE and at the start)
+    # We only treat it as global if it's one of these specifically, OR if we haven't seen a variant yet
+    # and it looks like a single assignment.
+    meta_keys = ["ASSETS_COUNT", "INITIAL_EQUITY"]
 
-    # Simpler approach: split by equals and try to associate
-    processed_overrides = []
-    for arg in full_str.split(" "):
-        if "=" in arg:
-            # If it is a full pair like VAR=VAL
-            if not arg.startswith("=") and not arg.endswith("="):
-                k, v = arg.split("=", 1)
-                processed_overrides.append((k, v))
-
-    # Handle mangled spaces like "VAR = VAL"
-    # If we find an equals as its own token, or start/end with equals
-    tokens = [t for t in full_str.split(" ") if t]
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if token == "=" and i > 0 and i + 1 < len(tokens):
-            processed_overrides.append((tokens[i-1], tokens[i+1]))
-            i += 1
-        elif token.endswith("=") and len(token) > 1 and i + 1 < len(tokens):
-            processed_overrides.append((token[:-1], tokens[i+1]))
-            i += 1
-        elif token.startswith("=") and len(token) > 1 and i > 0:
-            processed_overrides.append((tokens[i-1], token[1:]))
-        i += 1
-
-    # Deduplicate and evaluate
-    final_overrides = []
-    seen = set()
-    for k, v in processed_overrides:
-        if (k, v) not in seen:
+    parsing_globals = True
+    for arg in raw_args:
+        if parsing_globals and "=" in arg and "," not in arg:
             try:
+                k, v = [x.strip() for x in arg.split("=", 1)]
                 val = ast.literal_eval(v)
+                if k in meta_keys or (hasattr(root_config, k) and parsing_globals):
+                     global_overrides[k] = val
+                     continue
             except:
-                val = v
-            final_overrides.append((k, val))
-            seen.add((k, v))
+                pass
 
-    # Handle global ASSETS_COUNT
-    for k, v in final_overrides:
-        if k == "ASSETS_COUNT":
-            variants[0].overrides[k] = v
+        parsing_globals = False
+        variant_defs.append(arg)
 
-    if "config" in raw_args:
+    # 2. Build Variants
+    variants = []
+
+    # Baseline always exists and gets global overrides
+    baseline = Variant(id="Baseline", overrides=global_overrides.copy())
+    variants.append(baseline)
+
+    if "config" in variant_defs:
         config_dir = os.path.abspath("compare/configs")
         os.makedirs(config_dir, exist_ok=True)
-        for f in os.listdir(config_dir):
+        for f in sorted(os.listdir(config_dir)):
             if f.endswith(".py"):
-                overrides = {}
+                overrides = global_overrides.copy()
                 with open(os.path.join(config_dir, f), "r") as cf:
                     for line in cf:
                         if "=" in line and not line.startswith("#"):
                             try:
-                                k_v = line.split("=", 1)
-                                overrides[k_v[0].strip()] = ast.literal_eval(k_v[1].split("#")[0].strip())
+                                kv = line.split("=", 1)
+                                k = kv[0].strip()
+                                v = ast.literal_eval(kv[1].split("#")[0].strip())
+                                overrides[k] = v
                             except: pass
                 variants.append(Variant(id=f.replace(".py", ""), overrides=overrides, config_file=f))
     else:
-        for k, v in final_overrides:
-            if k == "ASSETS_COUNT": continue
-            if k in variants[-1].overrides and variants[-1].id != "Baseline":
-                variants.append(Variant(id=f"Var_{len(variants)}", overrides={k: v}))
+        for arg in variant_defs:
+            overrides = global_overrides.copy()
+            # Split by comma OR space if no comma exists
+            if "," in arg:
+                parts = [p.strip() for p in arg.split(",") if p.strip()]
             else:
-                if variants[-1].id == "Baseline":
-                    variants.append(Variant(id="Var_1", overrides={k: v}))
-                else:
-                    variants[-1].overrides[k] = v
+                parts = [p.strip() for p in arg.split(" ") if p.strip()]
 
-    import config as root_config
+            for p in parts:
+                if "=" in p:
+                    try:
+                        k, v = [x.strip() for x in p.split("=", 1)]
+                        overrides[k] = ast.literal_eval(v)
+                    except: pass
+            if len(overrides) > len(global_overrides):
+                variants.append(Variant(id=f"Var_{len(variants)}", overrides=overrides))
+
+    # 3. Finalize Names
     all_keys = set()
-    for v in variants[1:]: all_keys.update(v.overrides.keys())
-    all_keys.discard("ASSETS_COUNT")
+    for v in variants[1:]:
+        for k in v.overrides:
+            if k not in global_overrides:
+                all_keys.add(k)
 
     for v in variants:
         if v.id == "Baseline":
             tag = ", ".join([f"{k}={getattr(root_config, k, 'N/A')}" for k in sorted(all_keys)])
             v.id = f"Baseline: {tag}" if tag else "Baseline"
         elif not v.config_file:
-            tag = ", ".join([f"{k}={val}" for k, val in sorted(v.overrides.items()) if k != "ASSETS_COUNT"])
+            # Only show keys that differ from global or are part of the comparison
+            tag = ", ".join([f"{k}={val}" for k, val in sorted(v.overrides.items()) if k in all_keys])
             v.id = tag
     return variants
 
