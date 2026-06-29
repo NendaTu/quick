@@ -10,7 +10,11 @@ from typing import List, Dict, Optional
 from tools.trading_utils import calculate_tp_for_roe
 import config
 
-def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
+# --- Configuration ---
+TARGET_ROE = 0.01
+SL_TICK_BUFFER = 0.0001 # 0.01% proxy
+
+def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
     if len(ohlcv) < 2:
         return None
 
@@ -30,13 +34,11 @@ def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
         if curr_close >= prev_open and curr_open <= prev_close:
             # Entry at close of engulfing candle
             entry = curr_close
-            # SL: 1 tick below engulfing candle low
-            # Using 0.01% as a proxy for "1 tick" since we don't have symbol-specific tick size here easily
-            stop = curr['l'] * 0.9999
+            # SL: configurable buffer below engulfing candle low
+            stop = curr['l'] * (1 - SL_TICK_BUFFER)
 
-            # Target +1% ROE
-            # Note: We assume 20x leverage for ROE target calculation if not specified
-            tp = calculate_tp_for_roe(entry, 0.01, "buy", 20, entry_maker=False, exit_maker=True)
+            # Target ROE
+            tp = calculate_tp_for_roe(entry, TARGET_ROE, "buy", 20, entry_maker=False, exit_maker=True)
 
             return {
                 "side": "buy",
@@ -50,8 +52,8 @@ def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
     if curr_close < curr_open and prev_open < prev_close:
         if curr_close <= prev_open and curr_open >= prev_close:
             entry = curr_close
-            stop = curr['h'] * 1.0001
-            tp = calculate_tp_for_roe(entry, 0.01, "sell", 20, entry_maker=False, exit_maker=True)
+            stop = curr['h'] * (1 + SL_TICK_BUFFER)
+            tp = calculate_tp_for_roe(entry, TARGET_ROE, "sell", 20, entry_maker=False, exit_maker=True)
 
             return {
                 "side": "sell",

@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+import math
 import logging
 import time
 import importlib
@@ -195,7 +196,7 @@ def load_strategy(path: str):
         log.error(f"Strategy file {path} does not implement get_signal(ohlcv, timeframe)")
         return None
 
-async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str, tf: str):
+async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str, tf: str, params: List[str] = None):
     # Load contract specs for precision
     specs = await client.get_symbols()
     asset_spec = next((s for s in specs if s['symbol'] == asset), {})
@@ -215,6 +216,12 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
     wins = 0
     pnl = 0.0
     total_roe = 0.0
+
+    # Side-based stats
+    side_stats = {
+        "buy": {"trades": 0, "wins": 0, "pnl": 0.0},
+        "sell": {"trades": 0, "wins": 0, "pnl": 0.0}
+    }
 
     open_pos = None
 
@@ -277,15 +284,20 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
                 equity += net_pnl
                 pnl += net_pnl
                 total_trades += 1
+
+                side_stats[side]["trades"] += 1
+                side_stats[side]["pnl"] += net_pnl
+
                 if net_pnl > 0:
                     wins += 1
+                    side_stats[side]["wins"] += 1
 
                 open_pos = None
 
         else:
             # Check for entry
             if len(ohlcv_history) >= 2:
-                signal = strategy.get_signal(ohlcv_history[-window_size:], tf)
+                signal = strategy.get_signal(ohlcv_history[-window_size:], tf, params=params)
                 if signal:
                     # Execute entry
                     # Using shared calculation for consistency with Engine/Simulator
@@ -329,21 +341,57 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
         "roi": roi,
         "win_rate": win_rate,
         "trades": total_trades,
-        "equity": equity
+        "equity": equity,
+        "side_stats": side_stats
     }
 
 def print_results(results):
     date_range = f"{START_DATE.strftime('%Y-%m-%d')} to {END_DATE.strftime('%Y-%m-%d')}"
-    print("\n" + "="*145)
+    print("\n" + "="*165)
     print(f"BACKTEST RESULTS")
-    print("-" * 145)
-    print(f"{'Date Range':<25} | {'Asset':<10} | {'TF':<5} | {'ROE%':>8} | {'PnL (USDT)':>12} | {'ROI%':>8} | {'Win% (TP)':>10} | {'Trades':>8} | {'Final Equity':>12}")
-    print("-" * 145)
+    print("-" * 165)
+    print(f"{'Date Range':<22} | {'Asset':<10} | {'TF':<5} | {'Win% (L/S)':>12} | {'PnL (L/S)':>15} | {'ROE%':>8} | {'PnL':>10} | {'ROI%':>7} | {'Trades':>8} | {'Equity':>12}")
+    print("-" * 165)
+
+    total_pnl = 0
+    total_trades = 0
+    total_l_wins = 0
+    total_l_trades = 0
+    total_l_pnl = 0
+    total_s_wins = 0
+    total_s_trades = 0
+    total_s_pnl = 0
 
     for r in results:
         if not r: continue
-        print(f"{date_range:<25} | {r['asset']:<10} | {r['tf']:<5} | {r['roe']:>8.1f}% | {r['pnl']:>12.2f} | {r['roi']:>7.1f}% | {r['win_rate']:>10.1f}% | {r['trades']:>8} | {r['equity']:>12.2f}")
-    print("="*145 + "\n")
+        ss = r['side_stats']
+        win_l = (ss['buy']['wins'] / ss['buy']['trades'] * 100) if ss['buy']['trades'] > 0 else 0
+        win_s = (ss['sell']['wins'] / ss['sell']['trades'] * 100) if ss['sell']['trades'] > 0 else 0
+        win_ls = f"{win_l:.0f}%/{win_s:.0f}%"
+        pnl_ls = f"{ss['buy']['pnl']:.1f}/{ss['sell']['pnl']:.1f}"
+
+        print(f"{date_range:<22} | {r['asset']:<10} | {r['tf']:<5} | {win_ls:>12} | {pnl_ls:>15} | {r['roe']:>8.1f}% | {r['pnl']:>10.2f} | {r['roi']:>7.1f}% | {r['trades']:>8} | {r['equity']:>12.2f}")
+
+        total_pnl += r['pnl']
+        total_trades += r['trades']
+        total_l_wins += ss['buy']['wins']
+        total_l_trades += ss['buy']['trades']
+        total_l_pnl += ss['buy']['pnl']
+        total_s_wins += ss['sell']['wins']
+        total_s_trades += ss['sell']['trades']
+        total_s_pnl += ss['sell']['pnl']
+
+    if total_trades > 0:
+        print("-" * 165)
+        ov_win_l = (total_l_wins / total_l_trades * 100) if total_l_trades > 0 else 0
+        ov_win_s = (total_s_wins / total_s_trades * 100) if total_s_trades > 0 else 0
+        ov_win_ls = f"{ov_win_l:.0f}%/{ov_win_s:.0f}%"
+        ov_pnl_ls = f"{total_l_pnl:.1f}/{total_s_pnl:.1f}"
+        ov_roi = (total_pnl / (config.INITIAL_EQUITY * len([x for x in results if x]))) * 100
+
+        print(f"{'OVERALL':<22} | {'ALL':<10} | {'MIX':<5} | {ov_win_ls:>12} | {ov_pnl_ls:>15} | {'N/A':>8} | {total_pnl:>10.2f} | {ov_roi:>7.1f}% | {total_trades:>8} | {'N/A':>12}")
+
+    print("="*165 + "\n")
 
 async def main():
     global START_DATE, END_DATE
@@ -354,18 +402,17 @@ async def main():
 
     query = sys.argv[1]
 
-    # Parse optional dates
-    if len(sys.argv) > 2:
-        try:
-            START_DATE = datetime.strptime(sys.argv[2], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
-        except:
-            print(f"Invalid start date format: {sys.argv[2]}. Use YYYY-MM-DD.")
-
-    if len(sys.argv) > 3:
-        try:
-            END_DATE = datetime.strptime(sys.argv[3], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
-        except:
-            print(f"Invalid end date format: {sys.argv[3]}. Use YYYY-MM-DD.")
+    # Parse optional dates from the end of the argument list
+    for arg in sys.argv[2:]:
+        if "-" in arg and len(arg) == 10:
+            try:
+                dt = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=pytz.UTC)
+                if START_DATE == DEFAULT_START_DATE:
+                    START_DATE = dt
+                else:
+                    END_DATE = dt
+            except ValueError:
+                pass
 
     # If no dates provided and not explicitly set to full range by user,
     # we might want to default to 1 month for speed as per user suggestion,
@@ -389,9 +436,17 @@ async def main():
 
     # 2. Run backtests
     all_results = []
+    # Collect strategy parameters (if any)
+    params = sys.argv[2:]
+    # Basic check: if arguments look like dates, don't pass them as strategy params
+    strat_params = []
+    for p in params:
+        if "-" in p and len(p) == 10: break # Likely a date
+        strat_params.append(p)
+
     for asset in DEFAULT_ASSETS:
         for tf in DEFAULT_TIMEFRAMES:
-            res = await run_backtest(strategy, db, client, asset, tf)
+            res = await run_backtest(strategy, db, client, asset, tf, params=strat_params)
             all_results.append(res)
 
     # 3. Output Table

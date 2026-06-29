@@ -10,7 +10,11 @@ from typing import List, Dict, Optional
 from tools.trading_utils import calculate_tp_for_roe
 import config
 
-def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
+# --- Configuration ---
+TARGET_ROE = 0.01
+SL_TICK_BUFFER = 0.0001 # 0.01% proxy
+
+def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
     if len(ohlcv) < 2:
         return None
 
@@ -25,8 +29,8 @@ def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
     if curr['c'] > curr['o']: # Bullish candle
         if curr_body_high >= prev_full_high and curr_body_low <= prev_full_low:
             entry = curr['c']
-            stop = curr['l'] * 0.9999
-            tp = calculate_tp_for_roe(entry, 0.01, "buy", 20, entry_maker=False, exit_maker=True)
+            stop = curr['l'] * (1 - SL_TICK_BUFFER)
+            tp = calculate_tp_for_roe(entry, TARGET_ROE, "buy", 20, entry_maker=False, exit_maker=True)
 
             return {
                 "side": "buy",
@@ -40,8 +44,8 @@ def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
     if curr['c'] < curr['o']: # Bearish candle
         if curr_body_low <= prev_full_low and curr_body_high >= prev_full_high:
             entry = curr['c']
-            stop = curr['h'] * 1.0001
-            tp = calculate_tp_for_roe(entry, 0.01, "sell", 20, entry_maker=False, exit_maker=True)
+            stop = curr['h'] * (1 + SL_TICK_BUFFER)
+            tp = calculate_tp_for_roe(entry, TARGET_ROE, "sell", 20, entry_maker=False, exit_maker=True)
 
             return {
                 "side": "sell",

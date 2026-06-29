@@ -45,6 +45,9 @@ Backtest individual technical analysis conditions against historical data.
 # Backtest a specific candle pattern (recursively searches ta/)
 python backtest.py candle/engulfing
 
+# Backtest with strategy parameters
+python backtest.py sentiment 10 30
+
 # Backtest with a specific date range
 python backtest.py candle/engulfing_total 2026-05-01 2026-06-01
 ```

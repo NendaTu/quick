@@ -7,13 +7,14 @@ Files should implement the get_signal() function.
 
 from typing import List, Dict, Optional, Tuple
 
-def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
+def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
     """
     Standard interface for TA strategies.
 
     Args:
         ohlcv: List of candle dictionaries {ts, o, h, l, c, v}
         timeframe: The timeframe being analyzed (e.g., '1m', '5m')
+        params: Optional list of command-line arguments passed to the backtest
 
     Returns:
         A dictionary if a signal is found, else None:
