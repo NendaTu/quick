@@ -58,6 +58,9 @@ The system automatically detects missing data for the requested range/asset/time
 ## Math & Reporting
 - **Win% (TP)**: Calculated as the percentage of trades that yielded a positive Net PnL after all fees and slippage.
 - **ROE%**: Calculated using 20x leverage as a standard baseline for comparison across different assets.
-- **Position Sizing**: Uses `tools/trading_utils.py:calculate_position_size`, which is "fee-aware"—it accounts for entry and exit fees when calculating the maximum quantity allowed for a given risk fraction.
-- **Fees**: Accounts for Maker (Limit TP) and Taker (Market/SL) fees.
+- **Position Sizing**: Derived strictly from `config.py` settings:
+    - **Risk**: Uses `RISK_PER_TRADE` (fraction of equity).
+    - **Balance**: Starts with `INITIAL_EQUITY` and compounds based on realized PnL.
+    - **Algorithm**: Uses `tools/trading_utils.py:calculate_position_size`, which is "fee-aware"—it accounts for entry and exit fees when calculating the maximum quantity allowed for a given risk fraction.
+- **Fees**: Accounts for Maker (Limit TP) and Taker (Market/SL) fees as defined in `config.py`.
 - **Slippage**: Applies `EXPECTED_SLIPPAGE` from `config.py` to all taker-executed legs.
