@@ -13,9 +13,17 @@ Identification:
 from typing import List, Dict, Optional
 from ta.indicators.atr import compute_atr
 
-# --- Internal Configuration ---
+# --- Configuration ---
 ENABLED = True
 CONFLUENCE_TOLERANCE_ATR = 0.1 # Overlap within 0.1x ATR triggers confluence bonus
+
+# Weighting by Timeframe and Type [TA-004]
+WEIGHTS = {
+    'ob': 50,
+    'fvg': 30,
+    'liquidity': 40,
+    'session': 20
+}
 
 def identify_pois(
     ohlcv: List[dict],
@@ -26,6 +34,7 @@ def identify_pois(
 ) -> Dict:
     """
     Ranks and coordinates all technical points of interest.
+    Uses weighted scoring to prioritize high-probability zones.
     """
     if not ENABLED:
         return {}
@@ -37,37 +46,37 @@ def identify_pois(
     # 1. Register candidate levels
     candidates = []
 
-    # Order Blocks
+    # Order Blocks (Weighted)
     if obs.get('nearest_ob_type'):
-        # Note: OB data in current implementation is simplified
-        # In a full build, we'd pass the actual zone boundaries
-        pass
+        candidates.append({'type': 'ob', 'dist': 0.001, 'score': WEIGHTS['ob']})
 
     # Fair Value Gaps
     if fvgs.get('nearest_fvg_type'):
-        candidates.append({'type': 'fvg', 'dist': fvgs['nearest_fvg_dist'], 'score': 30})
+        candidates.append({'type': 'fvg', 'dist': fvgs['nearest_fvg_dist'], 'score': WEIGHTS['fvg']})
 
     # Liquidity
     if liquidity.get('bsl_level'):
         dist = (current_price / liquidity['bsl_level'] - 1)
-        candidates.append({'type': 'bsl', 'dist': dist, 'score': 40})
+        candidates.append({'type': 'bsl', 'dist': dist, 'score': WEIGHTS['liquidity']})
     if liquidity.get('ssl_level'):
         dist = (current_price / liquidity['ssl_level'] - 1)
-        candidates.append({'type': 'ssl', 'dist': dist, 'score': 40})
+        candidates.append({'type': 'ssl', 'dist': dist, 'score': WEIGHTS['liquidity']})
 
-    # 2. Confluence Check (Simplified for feature set)
-    # Check if price is near ANY high-value level
+    # 2. Confluence Check (Weighted)
     poi_active = False
-    best_poi = None
+    total_score = 0
+    primary_type = None
 
-    if candidates:
-        nearest = min(candidates, key=lambda x: abs(x['dist']))
-        if abs(nearest['dist']) < 0.002: # Within 0.2%
-            poi_active = True
-            best_poi = nearest
+    active_candidates = [c for c in candidates if abs(c['dist']) < 0.003] # Within 0.3%
+
+    if active_candidates:
+        poi_active = True
+        total_score = sum(c['score'] for c in active_candidates)
+        # Primary type is the one with highest weight
+        primary_type = max(active_candidates, key=lambda x: x['score'])['type']
 
     return {
         'poi_active': poi_active,
-        'primary_poi_type': best_poi['type'] if best_poi else None,
-        'poi_confluence_score': best_poi['score'] if best_poi else 0
+        'primary_poi_type': primary_type,
+        'poi_confluence_score': total_score
     }

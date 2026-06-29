@@ -2,6 +2,12 @@ import asyncio, time, logging, math, random
 from typing import Dict, List, Tuple, Optional
 from config import *
 from orderbook import SimulatedOrderBook
+import ta.indicators.rsi as rsi_ind
+import ta.indicators.atr as atr_ind
+import ta.indicators.macd as macd_ind
+import ta.indicators.supertrend as st_ind
+import ta.patterns.drt as drt_pat
+import ta.patterns.fvg as fvg_pat
 from ta.indicators.rsi import compute_rsi
 from ta.indicators.atr import compute_atr, detect_vol_regime
 from ta.indicators.ema import compute_ema
@@ -21,6 +27,10 @@ from ta.patterns.phases import identify_phases
 from ta.patterns.sr import identify_sr
 from ta.patterns.trend import identify_trend
 from ta.patterns.poi import identify_pois
+from ta.indicators.adx import compute_adx
+from ta.indicators.book_delta import compute_imbalance_delta
+from ta.patterns.volume_profile import identify_poc
+from ta.indicators.atr import get_volatility_forecast
 from database import Database
 from bitget_client import BitGetClient, BitGetWSClient
 
@@ -132,7 +142,9 @@ class Simulator:
                 await asyncio.sleep(0.1 * random.random())
                 # 1. Fetch OHLCV for all relevant timeframes
                 for tf in AVAILABLE_TIMEFRAMES:
-                    limit = 500 if tf == ACTIVE_TIMEFRAME else 100
+                    # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
+                    # Bitget limit is 1000 candles per request.
+                    limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 100)
                     data = await self.client.get_candles(sym, tf, limit=limit)
                     if isinstance(data, list):
                         for c in reversed(data):
@@ -186,6 +198,26 @@ class Simulator:
 
         log.info("Warm-up complete.")
 
+    async def recalculate_correlations(self):
+        """[OP-008] Updates asset correlations using the most recent data."""
+        log.info("Recalculating asset correlations...")
+        symbols = self.discovered_assets
+        for s1 in symbols:
+            self.asset_correlations[s1] = {}
+            h1 = self.confluence_history.get(s1, {}).get("1H", [])
+            if len(h1) < 20: continue
+            for s2 in symbols:
+                if s1 == s2: continue
+                h2 = self.confluence_history.get(s2, {}).get("1H", [])
+                if len(h2) < 20: continue
+
+                n = min(len(h1), len(h2))
+                x, y = h1[-n:], h2[-n:]
+                mu_x, mu_y = sum(x)/n, sum(y)/n
+                num = sum((xi - mu_x) * (yi - mu_y) for xi, yi in zip(x, y))
+                den = math.sqrt(sum((xi - mu_x)**2 for xi in x) * sum((yi - mu_y)**2 for yi in y))
+                self.asset_correlations[s1][s2] = num / den if den != 0 else 0.0
+
     def get_features(self, symbol: str) -> Dict[str, float]:
         book = self.books.get(symbol)
         if not book: return {}
@@ -194,23 +226,62 @@ class Simulator:
         trades = self.trade_history.get(symbol, [])
         trade_delta = compute_trade_delta(trades[-50:]) # Last 50 trades
 
-        # 1. Check Cache (Patterns only change on new candle)
+        # Imbalance Delta [OP-001]
+        imb_history = [f.get('imbalance', 0) for f in self._feature_cache.values() if '_ts' in f] # Simplified for POC
+        # Real implementation should track imbalance history per symbol
+        if not hasattr(self, '_imb_history'): self._imb_history = {}
+        if symbol not in self._imb_history: self._imb_history[symbol] = []
+
+        bid_vol, ask_vol = book.top_bid_ask_qty()
+        total_vol = bid_vol + ask_vol
+        current_imb = (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0.0
+        imb_delta = compute_imbalance_delta(current_imb, self._imb_history[symbol])
+        self._imb_history[symbol].append(current_imb)
+        if len(self._imb_history[symbol]) > 20: self._imb_history[symbol].pop(0)
+
+        # 1. Check Cache (Only truly stable patterns that don't depend on live price)
         h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
         if h_active:
             last_ts = h_active[-1]['ts']
             if symbol in self._feature_cache and self._feature_cache[symbol].get('_ts') == last_ts:
-                # Still need real-time data from OrderBook
-                cached = self._feature_cache[symbol].copy()
+                # Use cached stable features
+                features = self._feature_cache[symbol].copy()
+
+                # RE-CALCULATE PRICE-DEPENDENT FEATURES (These change every tick) [TA-002 Fix]
+                # 1. Real-time metrics
                 bid_vol, ask_vol = book.top_bid_ask_qty()
                 total_vol = bid_vol + ask_vol
-                cached.update({
-                    "imbalance": (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0.0,
-                    "spread_pct": (book.best_ask - book.best_bid) / ((book.best_bid + book.best_ask) / 2) if (book.best_bid + book.best_ask) > 0 else 0,
-                    "mid": (book.best_bid + book.best_ask) / 2,
+                mid = (book.best_bid + book.best_ask) / 2
+                features.update({
+                    "imbalance": current_imb,
+                    "imb_delta": imb_delta,
+                    "spread_pct": (book.best_ask - book.best_bid) / mid if mid > 0 else 0,
+                    "mid": mid,
                     "vol_pct": min(1.0, total_vol / 4000.0),
                     "trade_delta": trade_delta
                 })
-                return cached
+
+                # 2. Price-dependent patterns (Must re-check against live price)
+                # Note: We re-use stable data like fvg_data from the cache but re-evaluate reaction
+                struct_data = identify_structure(h_active)
+                sweep_data = detect_sweeps(h_active)
+                idm_data = detect_idm(h_active)
+
+                # Extract stable components for POI coordinate re-run
+                fvg_data = {k: v for k, v in features.items() if k.startswith('fvg_') or k.startswith('nearest_fvg')}
+                liq_data = {k: v for k, v in features.items() if k.endswith('_level') or k.startswith('range_')}
+                sess_data = {k: v for k, v in features.items() if k.endswith('_h') or k.endswith('_l') or k.endswith('_o')}
+                ob_data = {k: v for k, v in features.items() if k.startswith('ob_') or k.startswith('breaker_') or k == 'has_breaker'}
+
+                poi_data = identify_pois(h_active, ob_data, fvg_data, liq_data, sess_data)
+
+                features.update({
+                    **struct_data,
+                    **sweep_data,
+                    **idm_data,
+                    **poi_data
+                })
+                return features
 
         bid_vol, ask_vol = book.top_bid_ask_qty()
         total_vol = bid_vol + ask_vol
@@ -226,39 +297,44 @@ class Simulator:
             return [x["c"] for x in relevant], [x["h"] for x in relevant], [x["l"] for x in relevant]
 
         # RSI (1m)
-        c1, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["rsi"])
-        rsi = compute_rsi(c1, RSI_PERIOD) if len(c1) > 20 else 50.0
+        c1, h1, l1 = get_ohlc("1m")
+        rsi = compute_rsi(c1, rsi_ind.PERIOD) if len(c1) > 20 else 50.0
 
         # MACD (1m)
-        c1, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["macd"])
-        macd, macd_signal, macd_hist = compute_macd(c1, MACD_FAST, MACD_SLOW, MACD_SIGNAL) if len(c1) > 30 else (0,0,0)
+        macd, macd_signal, macd_hist = compute_macd(c1) if len(c1) > 30 else (0,0,0)
 
         # ATR (1m)
-        c1, h1, l1 = get_ohlc(INDICATOR_TIMEFRAMES["atr"])
-        atr = compute_atr(h1, l1, c1, ATR_PERIOD) if len(c1) > 20 else 0.0
-        vol_regime = detect_vol_regime(h1, l1, c1, ATR_PERIOD) if len(c1) > 30 else 'Stable'
+        atr = compute_atr(h1, l1, c1, atr_ind.PERIOD) if len(c1) > 20 else 0.0
+        vol_regime = detect_vol_regime(h1, l1, c1, atr_ind.PERIOD) if len(c1) > 30 else 'Stable'
+        vol_forecast = get_volatility_forecast(h1, l1, c1) if len(c1) > 51 else 'Neutral'
+
+        # ADX (Trend Strength) [OP-004]
+        adx = compute_adx(h1, l1, c1) if len(c1) > 30 else 0.0
+
+        # Volume Profile POC [OP-003]
+        poc = identify_poc(h_active) if h_active else 0.0
 
         # Supertrend (1m)
-        supertrend_val, supertrend_dir = compute_supertrend(h1, l1, c1, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER) if len(c1) > 20 else (0, 0)
+        supertrend_val, supertrend_dir = compute_supertrend(h1, l1, c1, st_ind.PERIOD, st_ind.MULTIPLIER) if len(c1) > 20 else (0, 0)
 
         # DRT SLOW (15m)
-        cs, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["drt_slow"])
-        drt_slow = compute_drt(cs, 20) if len(cs) >= 20 else 0.5
+        cs, _, _ = get_ohlc("15m")
+        drt_slow = compute_drt(cs, drt_pat.PERIOD) if len(cs) >= 20 else 0.5
 
         # DRT FAST (5m)
-        cf, _, _ = get_ohlc(INDICATOR_TIMEFRAMES["drt_fast"])
-        drt_fast = compute_drt(cf, 20) if len(cf) >= 20 else 0.5
+        cf, _, _ = get_ohlc("5m")
+        drt_fast = compute_drt(cf, drt_pat.PERIOD) if len(cf) >= 20 else 0.5
 
         # Legacy DRT for backwards compatibility in logs
         drt = compute_drt(c1, 20) if len(c1) >= 20 else 0.5
 
         # --- Pattern Recognition (Modular TA Suite) ---
         h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
-        h_fvg = self.ohlcv.get(symbol, {}).get(FVG_TIMEFRAME, [])
+        h_fvg = self.ohlcv.get(symbol, {}).get(fvg_pat.TIMEFRAME, [])
         h_15m = self.ohlcv.get(symbol, {}).get("15m", [])
         h_1D = self.ohlcv.get(symbol, {}).get("1D", [])
 
-        fvg_data = detect_fvgs(h_fvg, depth=FVG_HISTORY_DEPTH) if h_fvg else {}
+        fvg_data = detect_fvgs(h_fvg, depth=fvg_pat.HISTORY_DEPTH) if h_fvg else {}
         liq_data = identify_liquidity(h_active) if h_active else {}
         sweep_data = detect_sweeps(h_active) if h_active else {}
         struct_data = identify_structure(h_active) if h_active else {}
@@ -301,16 +377,20 @@ class Simulator:
 
         features = {
             "imbalance": imbalance,
+            "imb_delta": imb_delta,
             "spread_pct": spread / mid if mid > 0 else 0,
             "mid": mid,
             "vol_pct": vol_pct,
             "rsi": rsi,
             "atr": atr,
             "vol_regime": vol_regime,
+            "vol_forecast": vol_forecast,
             "trade_delta": trade_delta,
+            "poc": poc,
             "macd": macd,
             "macd_signal": macd_signal,
             "macd_hist": macd_hist,
+            "adx": adx,
             "drt": drt,
             "drt_slow": drt_slow,
             "drt_fast": drt_fast,

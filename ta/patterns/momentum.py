@@ -1,31 +1,31 @@
 """
 Momentum and Volume Influx Patterns
 
-1. CISD (Change in State of Delivery): A shift in momentum marked by breaking
-   linear regression slopes or trendlines.
-2. Volume Influx: Sudden surge in volume relative to recent SMA.
-
-Identification:
-- Volume Influx: CurrentVol > 1.5 * SMA(20).
-- Volume Spike: CurrentVol > 2.5 * SMA(20).
-- CISD: Slope change > 30% from 20-period average.
+Detects surges in trading activity and shifts in price delivery.
 """
 
 import math
 from typing import List, Dict, Optional
 from ta.utils import calculate_sma
 
-# --- Internal Configuration ---
+# --- Configuration ---
+# Toggle to enable/disable momentum analysis.
 ENABLED = True
+
+# Multiplier for volume surge (CurrentVol > INFLUX_THRESHOLD * SMA(20)).
 INFLUX_THRESHOLD = 1.5
+
+# Multiplier for extreme volume spike.
 SPIKE_THRESHOLD = 2.5
-SLOPE_CHANGE_THRESHOLD = 0.3 # 30% slope change for CISD
+
+# % slope change required to trigger CISD (Change in State of Delivery).
+SLOPE_CHANGE_THRESHOLD = 0.3
 
 def identify_momentum(ohlcv: List[dict]) -> Dict:
     """
     Analyzes volume and price delivery momentum.
     """
-    if not ENABLED or len(ohlcv) < 21:
+    if not ENABLED or len(ohlcv) < 26:
         return {}
 
     volumes = [c['v'] for c in ohlcv]
@@ -35,8 +35,6 @@ def identify_momentum(ohlcv: List[dict]) -> Dict:
     influx = current_vol > (INFLUX_THRESHOLD * avg_vol)
     spike = current_vol > (SPIKE_THRESHOLD * avg_vol)
 
-    # Simple CISD (Angle/Slope Change)
-    # Using last 3 and previous 20 for comparison
     def get_slope(prices):
         n = len(prices)
         if n < 2: return 0

@@ -3,28 +3,28 @@ Buy-Side Liquidity (BSL) and Sell-Side Liquidity (SSL) Recognition
 
 Identifies clusters of pending orders located above recent swing highs (BSL)
 or below recent swing lows (SSL).
-
-Identification:
-- BSL Level: Max(High) over a lookback period + a buffer.
-- SSL Level: Min(Low) over a lookback period - a buffer.
-
-Multi-tier tracking:
-- Immediate (20-50 bars lookback)
-- Session extremes (Daily/Weekly)
 """
 
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 
-# --- Internal Configuration ---
+# --- Configuration ---
+# Toggle to enable/disable liquidity detection.
 ENABLED = True
-DEFAULT_LOOKBACK = 50
-BUFFER_PCT = 0.001 # 0.1% buffer for liquidity clusters
 
-def identify_liquidity(ohlcv: List[dict], lookback: int = 50) -> Dict:
+# Standard lookback period for identifying liquidity pools.
+LOOKBACK = 50
+
+# Buffer (%) added to swing extremes to define the liquidity zone.
+BUFFER_PCT = 0.001
+
+def identify_liquidity(ohlcv: List[dict], lookback: int = None) -> Dict:
     """
     Identifies BSL and SSL levels from recent price action.
     """
+    if lookback is None:
+        lookback = LOOKBACK
+
     if not ENABLED or len(ohlcv) < lookback:
         return {}
 
@@ -35,7 +35,6 @@ def identify_liquidity(ohlcv: List[dict], lookback: int = 50) -> Dict:
     max_high = max(highs)
     min_low = min(lows)
 
-    # Use swings for more precise structural liquidity
     swings = detect_swings(relevant, strength=2)
 
     immediate_bsl = swings['highs'][-1]['price'] if swings['highs'] else max_high

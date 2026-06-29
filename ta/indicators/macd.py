@@ -5,9 +5,16 @@ from typing import List, Tuple
 
 # --- Configuration ---
 ENABLED = True
+FAST = 12
+SLOW = 26
+SIGNAL = 9
 
-def compute_macd(prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[float, float, float]:
+def compute_macd(prices: List[float], fast: int = None, slow: int = None, signal: int = None) -> Tuple[float, float, float]:
     """Optimized MACD calculation."""
+    if fast is None: fast = FAST
+    if slow is None: slow = SLOW
+    if signal is None: signal = SIGNAL
+
     if not ENABLED or len(prices) < slow:
         return 0.0, 0.0, 0.0
 
@@ -15,15 +22,11 @@ def compute_macd(prices: List[float], fast: int = 12, slow: int = 26, signal: in
     k_slow = 2.0 / (slow + 1)
     k_signal = 2.0 / (signal + 1)
 
-    # Use SMA for initial seeding of EMAs
     ema_fast = sum(prices[:fast]) / fast
     ema_slow = sum(prices[:slow]) / slow
-
-    # Adjust starting point for iteration
     start_idx = slow
 
     macd_series = []
-    # Seed the series with initial EMAs
     macd_series.append(ema_fast - ema_slow)
 
     for p in prices[start_idx:]:

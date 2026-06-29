@@ -1,5 +1,6 @@
 import asyncio, time, logging, math
 from typing import Dict, Set
+import config
 from config import *
 from orderbook import OrderBook
 from simulator import Simulator
@@ -132,7 +133,12 @@ class Engine:
             try:
                 if getattr(self.exchange, "db", None):
                     self.exchange.db.purge_old_data()
-                await asyncio.sleep(3600)
+
+                # [OP-008] Periodic Correlation Refresh
+                if hasattr(self.exchange, "recalculate_correlations"):
+                    await self.exchange.recalculate_correlations()
+
+                await asyncio.sleep(3600) # Every hour
             except Exception as e:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
@@ -301,16 +307,16 @@ class Engine:
                         log.error(f"Feature calculation error for {sym}: {e}")
 
                 # 3. TTL (Time-to-Live) Exit Check
-                if USE_TTL:
+                if getattr(config, "USE_TTL", False):
                     # Convert ACTIVE_TIMEFRAME string (e.g., '5m') to seconds
                     unit = ACTIVE_TIMEFRAME[-1]
                     val = int(ACTIVE_TIMEFRAME[:-1])
                     multiplier_map = {'m': 60, 'H': 3600, 'D': 86400}
                     tf_seconds = val * multiplier_map.get(unit, 60)
-                    ttl_limit = tf_seconds * TTL_CANDLE_MULTIPLIER
+                    ttl_limit = tf_seconds * getattr(config, "TTL_CANDLE_MULTIPLIER", 15)
 
                     if not hasattr(self, "_ttl_logged") or self._ttl_logged != ACTIVE_TIMEFRAME:
-                        log.info(f"Dynamic TTL initialized: {ttl_limit}s ({TTL_CANDLE_MULTIPLIER} candles of {ACTIVE_TIMEFRAME})")
+                        log.info(f"Dynamic TTL initialized: {ttl_limit}s ({getattr(config, 'TTL_CANDLE_MULTIPLIER', 15)} candles of {ACTIVE_TIMEFRAME})")
                         self._ttl_logged = ACTIVE_TIMEFRAME
 
                     for pos_key in list(self.open_positions.keys()):
@@ -369,14 +375,9 @@ class Engine:
 
                         # Immediate local registration to prevent race condition
                         pos_key = f"{sym}_{side}"
-                        if ENTRY_ORDER_TYPE == "market":
-                            self.open_positions[pos_key] = {
-                                "side": side, "qty": qty, "entry": entry,
-                                "orig_side": orig_side, "is_contr": is_contr,
-                                "ts": time.time()
-                            }
-                        else:
-                            self.pending_entries.add(pos_key)
+                        # [CS-002] CENTRALIZED STATE: We no longer pre-populate open_positions here.
+                        # _report_entry (triggered by Fill callback) is the only source of truth.
+                        self.pending_entries.add(pos_key)
 
                         side_str = side.upper()
                         if is_contr:
