@@ -52,5 +52,6 @@ def detect_sweeps(ohlcv: List[dict]) -> Dict:
     return {
         'sweep_detected': sweep_type is not None,
         'sweep_type': sweep_type,
-        'sweep_level': bsl if sweep_type == 'buy_side' else (ssl if sweep_type == 'sell_side' else None)
+        'sweep_level': bsl if sweep_type == 'buy_side' else (ssl if sweep_type == 'sell_side' else None),
+        'sweep_timestamp': last['ts'] if sweep_type else None
     }

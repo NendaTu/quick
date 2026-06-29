@@ -21,6 +21,7 @@ from ta.indicators.atr import compute_atr
 ENABLED = True
 IMPULSE_THRESHOLD = 1.5 # Break candle range > 1.5x ATR confirms MSS vs CHOCH
 MIN_SWING_DIST_PCT = 0.002 # 0.2% distance between swings to avoid noise
+CONFIRM_BREAK_ON_CLOSE = True # If True, requires C > High for BOS/MSS
 
 def identify_structure(ohlcv: List[dict]) -> Dict:
     """
@@ -53,21 +54,24 @@ def identify_structure(ohlcv: List[dict]) -> Dict:
 
     structure_signal = None
 
-    # --- BULLISH BREAKS ---
-    if curr['h'] > last_hh and curr['c'] > last_hh:
+    # --- BREAK DETECTION ---
+    is_breaking_hh = (curr['c'] > last_hh) if CONFIRM_BREAK_ON_CLOSE else (curr['h'] > last_hh)
+    is_breaking_lh = (curr['c'] > last_confirmed_high['price']) if CONFIRM_BREAK_ON_CLOSE else (curr['h'] > last_confirmed_high['price'])
+    is_breaking_ll = (curr['c'] < last_ll) if CONFIRM_BREAK_ON_CLOSE else (curr['l'] < last_ll)
+    is_breaking_hl = (curr['c'] < last_confirmed_low['price']) if CONFIRM_BREAK_ON_CLOSE else (curr['l'] < last_confirmed_low['price'])
+
+    if is_breaking_hh:
         structure_signal = 'bullish_bos'
-    elif curr['h'] > last_confirmed_high['price'] and curr['c'] > last_confirmed_high['price']:
+    elif is_breaking_lh:
         # Potential Bullish MSS/CHOCH (breaking a LH)
         candle_range = curr['h'] - curr['l']
         if candle_range > IMPULSE_THRESHOLD * atr:
             structure_signal = 'bullish_mss'
         else:
             structure_signal = 'bullish_choch'
-
-    # --- BEARISH BREAKS ---
-    elif curr['l'] < last_ll and curr['c'] < last_ll:
+    elif is_breaking_ll:
         structure_signal = 'bearish_bos'
-    elif curr['l'] < last_confirmed_low['price'] and curr['c'] < last_confirmed_low['price']:
+    elif is_breaking_hl:
         # Potential Bearish MSS/CHOCH (breaking a HL)
         candle_range = curr['h'] - curr['l']
         if candle_range > IMPULSE_THRESHOLD * atr:
