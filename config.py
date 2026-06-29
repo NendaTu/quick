@@ -102,6 +102,7 @@ BTC_SYMBOL = "BTCUSDT"
 INDICATOR_PRICE_HISTORY = 500
 
 # Standard periods for calculating technical indicators (RSI, ATR, MACD, EMA).
+SESSION_MULTIPLIER = 1.5         # Risk multiplier during high-volume sessions
 RSI_PERIOD = 14
 ATR_PERIOD = 14
 MACD_FAST = 12
@@ -283,6 +284,9 @@ RESTRICT_VOLUME_INFLUX = True        # Requires volume influx or spike for entry
 # BTC Global Momentum Gate: Blocks counter-trend trades during significant BTC flushes/moons.
 # Dependency: Works with BTC_MOMENTUM_THRESHOLD.
 RESTRICT_BTC_MOMENTUM = False
+
+# If True, BTC confluence uses real-time price vs last close. If False, uses last two closes.
+BTC_REALTIME_CONFLUENCE = True
 
 # Logic to subtract estimated fees from the risk capacity during position sizing.
 # Ensures that (Loss + Fees) stays within the RISK_PER_TRADE budget.

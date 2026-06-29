@@ -30,6 +30,7 @@ class Engine:
         # Performance tracking
         self.asset_stats: Dict[str, Dict[str, any]] = {}
         self.last_exit_time: Dict[str, float] = {}
+        self.pos_pnl: Dict[str, float] = {} # Cumulative PnL per symbol_side
 
         self._last_mid = {}
         self._last_features = {}
@@ -151,27 +152,33 @@ class Engine:
     def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False):
         # Local registration cleanup
         pos_key = f"{symbol}_{side}"
-        if not is_partial:
-            if pos_key in self.open_positions:
-                del self.open_positions[pos_key]
 
-            # Also ensure it's cleared from pending if it was an entry failure
-            if pos_key in self.pending_entries:
-                self.pending_entries.remove(pos_key)
-
-            self.last_exit_time[symbol] = time.time()
-
-        # Increment total trades on every exit (partial or full) to keep win-rate math accurate
-        self.total_trades += 1
+        # Track session-wide metrics (always updated)
         self.cumulative_pnl += round_trip_pnl
-
-        # Asset-specific stats
         if symbol not in self.asset_stats:
             self.asset_stats[symbol] = {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0, "tp_wins": 0, "be_wins": 0}
-
         self.asset_stats[symbol]["pnl"] += round_trip_pnl
 
-        if round_trip_pnl > 0:
+        # Track cumulative PnL for this specific trade to determine if it's a win/loss overall
+        self.pos_pnl[pos_key] = self.pos_pnl.get(pos_key, 0.0) + round_trip_pnl
+
+        if is_partial:
+            return
+
+        # Final exit processing
+        total_trade_pnl = self.pos_pnl.pop(pos_key, 0.0)
+        self.total_trades += 1
+
+        if pos_key in self.open_positions:
+            del self.open_positions[pos_key]
+
+        # Also ensure it's cleared from pending if it was an entry failure
+        if pos_key in self.pending_entries:
+            self.pending_entries.remove(pos_key)
+
+        self.last_exit_time[symbol] = time.time()
+
+        if total_trade_pnl > 0:
             self.winning_trades += 1
             if exit_type == "tp":
                 self.tp_wins += 1
@@ -184,7 +191,7 @@ class Engine:
             else: self.asset_stats[symbol]["sell_wins"] += 1
         else:
             if exit_type in ["tp", "ttl"]:
-                log.warning(f"GROSS WIN / NET LOSS on {symbol} [{exit_type.upper()}]: PnL={round_trip_pnl:.4f} (fees consumed profit)")
+                log.warning(f"GROSS WIN / NET LOSS on {symbol} [{exit_type.upper()}]: PnL={total_trade_pnl:.4f} (fees consumed profit)")
             self.losing_trades += 1
             if side == "buy": self.asset_stats[symbol]["buy_losses"] += 1
             else: self.asset_stats[symbol]["sell_losses"] += 1
@@ -222,6 +229,17 @@ class Engine:
                          f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
     def _asset_is_tradable(self, symbol: str, side: str) -> bool:
+        # 1. Statistical Arbitrage Filter (Correlation)
+        if hasattr(self.exchange, "asset_correlations"):
+            corrs = self.exchange.asset_correlations.get(symbol, {})
+            for other_sym, score in corrs.items():
+                if score > 0.9: # High correlation
+                    if f"{other_sym}_buy" in self.open_positions or f"{other_sym}_sell" in self.open_positions:
+                         # Already exposed to a highly correlated asset
+                         # Only proceed if current asset has higher POI score (contextual priority)
+                         # For now, simpler: block to reduce systemic risk
+                         return False
+
         # Check volume
         book = self.books[symbol]
         bid_vol, ask_vol = book.top_bid_ask_qty()
@@ -314,10 +332,10 @@ class Engine:
                                     pos["ttl_triggered"] = True
 
                 # 4. Check Signal and Trade (Skip if shutting down)
-                if not self.stop_event.is_set() and len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
+                if not self.stop_event.is_set() and (len(self.open_positions) + len(self.pending_entries)) < MAX_CONCURRENT_POSITIONS:
                     for sym in self.enabled_assets:
                         # Re-check limit inside loop to avoid burst over-trading
-                        if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
+                        if (len(self.open_positions) + len(self.pending_entries)) >= MAX_CONCURRENT_POSITIONS:
                             break
 
                         book = self.books[sym]
@@ -392,6 +410,12 @@ class Engine:
                                 "tp1_qty": signal.get("tp1_qty"),
                                 "tp2_qty": signal.get("tp2_qty")
                             })
+
+                        # Final collision check immediately before exchange call
+                        if not self._asset_is_tradable(sym, side):
+                            if pos_key in self.open_positions: del self.open_positions[pos_key]
+                            if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
+                            continue
 
                         resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr, **kwargs)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:

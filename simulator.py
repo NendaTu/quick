@@ -3,8 +3,9 @@ from typing import Dict, List, Tuple, Optional
 from config import *
 from orderbook import SimulatedOrderBook
 from ta.indicators.rsi import compute_rsi
-from ta.indicators.atr import compute_atr
+from ta.indicators.atr import compute_atr, detect_vol_regime
 from ta.indicators.ema import compute_ema
+from ta.indicators.flow import compute_trade_delta
 from ta.indicators.macd import compute_macd
 from ta.indicators.supertrend import compute_supertrend
 from ta.patterns.drt import compute_drt
@@ -38,16 +39,19 @@ class Simulator:
         self.order_id_counter = 1000
         self.total_realized_pnl = 0.0
         self.engine = None
+        self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
         self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
         self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
+        self.trade_history: Dict[str, List[dict]] = {}
         self.confluence_history: Dict[str, Dict[str, List[float]]] = {}
         self.last_candle_ts: Dict[str, Dict[str, float]] = {}
         self.last_price: Dict[str, float] = {}
         self._btc_confluence_cache = {}
         self._last_confluence_update = 0
         self.discovered_assets: List[str] = []
+        self.asset_correlations: Dict[str, Dict[str, float]] = {}
 
     async def warm_up(self, preloaded_data=None):
         if preloaded_data:
@@ -160,11 +164,53 @@ class Simulator:
                         log.warning(f"Failed to fetch {tf} candles for {sym}")
 
         await asyncio.gather(*(fetch_symbol_data(s) for s in symbols))
+
+        # Calculate Asset Correlations for Statistical Arbitrage Filter
+        log.info("Calculating asset correlations...")
+        for s1 in self.discovered_assets:
+            self.asset_correlations[s1] = {}
+            h1 = self.confluence_history.get(s1, {}).get("1H", [])
+            if len(h1) < 20: continue
+            for s2 in self.discovered_assets:
+                if s1 == s2: continue
+                h2 = self.confluence_history.get(s2, {}).get("1H", [])
+                if len(h2) < 20: continue
+
+                # Simple Pearson Correlation
+                n = min(len(h1), len(h2))
+                x, y = h1[-n:], h2[-n:]
+                mu_x, mu_y = sum(x)/n, sum(y)/n
+                num = sum((xi - mu_x) * (yi - mu_y) for xi, yi in zip(x, y))
+                den = math.sqrt(sum((xi - mu_x)**2 for xi in x) * sum((yi - mu_y)**2 for yi in y))
+                self.asset_correlations[s1][s2] = num / den if den != 0 else 0.0
+
         log.info("Warm-up complete.")
 
     def get_features(self, symbol: str) -> Dict[str, float]:
         book = self.books.get(symbol)
         if not book: return {}
+
+        # Trade Delta (Real-time, not cached)
+        trades = self.trade_history.get(symbol, [])
+        trade_delta = compute_trade_delta(trades[-50:]) # Last 50 trades
+
+        # 1. Check Cache (Patterns only change on new candle)
+        h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
+        if h_active:
+            last_ts = h_active[-1]['ts']
+            if symbol in self._feature_cache and self._feature_cache[symbol].get('_ts') == last_ts:
+                # Still need real-time data from OrderBook
+                cached = self._feature_cache[symbol].copy()
+                bid_vol, ask_vol = book.top_bid_ask_qty()
+                total_vol = bid_vol + ask_vol
+                cached.update({
+                    "imbalance": (bid_vol - ask_vol) / total_vol if total_vol > 0 else 0.0,
+                    "spread_pct": (book.best_ask - book.best_bid) / ((book.best_bid + book.best_ask) / 2) if (book.best_bid + book.best_ask) > 0 else 0,
+                    "mid": (book.best_bid + book.best_ask) / 2,
+                    "vol_pct": min(1.0, total_vol / 4000.0),
+                    "trade_delta": trade_delta
+                })
+                return cached
 
         bid_vol, ask_vol = book.top_bid_ask_qty()
         total_vol = bid_vol + ask_vol
@@ -190,6 +236,7 @@ class Simulator:
         # ATR (1m)
         c1, h1, l1 = get_ohlc(INDICATOR_TIMEFRAMES["atr"])
         atr = compute_atr(h1, l1, c1, ATR_PERIOD) if len(c1) > 20 else 0.0
+        vol_regime = detect_vol_regime(h1, l1, c1, ATR_PERIOD) if len(c1) > 30 else 'Stable'
 
         # Supertrend (1m)
         supertrend_val, supertrend_dir = compute_supertrend(h1, l1, c1, SUPERTREND_PERIOD, SUPERTREND_MULTIPLIER) if len(c1) > 20 else (0, 0)
@@ -232,7 +279,13 @@ class Simulator:
             self._btc_confluence_cache = {}
             for tf in ["15m", "1H", "4H", "1D"]:
                 h = self.confluence_history.get(BTC_SYMBOL, {}).get(tf, [])
-                if len(h) >= 2:
+                if len(h) >= 3:
+                    if BTC_REALTIME_CONFLUENCE:
+                        self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
+                    else:
+                        # Use last two CLOSED candles
+                        self._btc_confluence_cache[f"btc_{tf}"] = (h[-2] / h[-3] - 1)
+                elif len(h) >= 2:
                     self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
                 else:
                     self._btc_confluence_cache[f"btc_{tf}"] = 0.0
@@ -246,13 +299,15 @@ class Simulator:
             else:
                 asset_changes[f"asset_{tf}"] = 0.0
 
-        return {
+        features = {
             "imbalance": imbalance,
             "spread_pct": spread / mid if mid > 0 else 0,
             "mid": mid,
             "vol_pct": vol_pct,
             "rsi": rsi,
             "atr": atr,
+            "vol_regime": vol_regime,
+            "trade_delta": trade_delta,
             "macd": macd,
             "macd_signal": macd_signal,
             "macd_hist": macd_hist,
@@ -275,6 +330,15 @@ class Simulator:
             **asset_changes,
         }
 
+        # Save to cache
+        if h_active:
+            feat_to_cache = features.copy()
+            feat_to_cache['_ts'] = h_active[-1]['ts']
+            self._feature_cache[symbol] = feat_to_cache
+
+        return features
+
+
     async def _ws_callback(self, msg):
         channel = msg.get("arg", {}).get("channel")
         instId = msg.get("arg", {}).get("instId")
@@ -296,6 +360,12 @@ class Simulator:
                 side = t[3] if isinstance(t, list) else t.get("side", "buy")
 
                 self.last_price[instId] = price
+
+                # Update trade history
+                if instId not in self.trade_history: self.trade_history[instId] = []
+                self.trade_history[instId].append({"price": price, "size": size, "side": side, "ts": ts})
+                if len(self.trade_history[instId]) > 200: self.trade_history[instId].pop(0)
+
                 if self.db:
                     self.db.save_tick(instId, ts, price, side, size)
                 self._update_candles(instId, price, size, ts)
@@ -433,6 +503,27 @@ class Simulator:
                 elif now - o.get("ts", now) > LIMIT_CHASE_TIMEOUT:
                     # In a real bot, we'd reposition. For simulation, let's just "take" it
                     # to keep the data flowing, or expire it. Let's convert to market-ish fill.
+
+                    # Re-verify margin at current price before filling timeout
+                    fill_price = self.last_price.get(o["symbol"])
+                    max_lev = self.leverage_limits.get(o["symbol"], 20)
+                    new_margin = (o["qty"] * fill_price) / max_lev
+                    estimated_fee = o["qty"] * fill_price * TAKER_FEE
+
+                    # available_balance already accounts for the 'reserved_margin' (o["reserved_margin"])
+                    # so we check if the new required total fits.
+                    current_avail = self.equity - (self.used_margin - o.get("reserved_margin", 0))
+                    if current_avail < (new_margin + estimated_fee):
+                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {o['pos_side'].upper()}: Insufficient margin at new price {fill_price:.8f}")
+                        if o in self.pending_orders:
+                            self.used_margin -= o.get("reserved_margin", 0)
+                            self.pending_orders.remove(o)
+                        if self.engine:
+                            pos_key = f"{o['symbol']}_{o['pos_side']}"
+                            if pos_key in self.engine.pending_entries:
+                                self.engine.pending_entries.remove(pos_key)
+                        continue
+
                     fills.append((o, "entry_timeout"))
 
             elif o["type"] == "stop":
@@ -578,8 +669,11 @@ class Simulator:
         max_lev = self.leverage_limits.get(symbol, 20)
         required_margin = (qty * entry_price) / max_lev
 
+        # Estimate entry fee to ensure equity can cover it immediately upon fill
+        estimated_fee = qty * entry_price * (MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE)
+
         available_balance = self.equity - self.used_margin
-        if available_balance < required_margin:
+        if available_balance < (required_margin + estimated_fee):
             rej_msg = f"REJECTED {symbol} {side.upper()}: Insufficient margin (Required: {required_margin:.2f}, Avail: {available_balance:.2f}, Equity: {self.equity:.2f}, Used: {self.used_margin:.2f})"
             if LOG_REJECTIONS:
                 log.warning(rej_msg)

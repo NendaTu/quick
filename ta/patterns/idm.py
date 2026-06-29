@@ -14,7 +14,7 @@ Within windows, after a sweep, target opposite extreme.
 """
 
 from typing import List, Dict, Optional
-from ta.utils import is_within_time_window
+from ta.utils import is_within_time_window, convert_to_local
 from ta.patterns.sweep import detect_sweeps
 
 # --- Internal Configuration ---
@@ -46,8 +46,21 @@ def detect_idm(ohlcv: List[dict]) -> Dict:
     # Within a killzone, check if a sweep just occurred
     sweep_data = detect_sweeps(ohlcv)
 
+    # IDM Validation: Sweep must have occurred within the CURRENT killzone window
+    # to be considered Institutional Delivery.
+    is_valid_idm = False
+    if sweep_data.get('sweep_detected'):
+        sweep_ts = sweep_data.get('sweep_timestamp')
+        if sweep_ts:
+            sweep_dt = convert_to_local(sweep_ts)
+            now_dt = convert_to_local(last_ts)
+            # Ensure sweep is from today's window (same day check)
+            if sweep_dt.date() == now_dt.date():
+                if is_within_time_window(sweep_ts, KILLZONES[active_kz][0], KILLZONES[active_kz][1]):
+                    is_valid_idm = True
+
     return {
-        'idm_active': sweep_data.get('sweep_detected', False),
+        'idm_active': is_valid_idm,
         'killzone': active_kz,
         'idm_target_side': 'bullish' if sweep_data.get('sweep_type') == 'sell_side' else 'bearish' if sweep_data.get('sweep_type') == 'buy_side' else None
     }
