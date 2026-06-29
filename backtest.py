@@ -79,6 +79,28 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             progress = Progress(int(expected), label=f"Downloading {asset} {tf}")
 
             while current_end > target_start_ms:
+                # [OPT-001] Check for existing data block to avoid redundant API calls
+                import sqlite3
+                with sqlite3.connect(db.db_path) as conn:
+                    # Check if we have the candle at current_end
+                    cursor = conn.execute("""
+                        SELECT timestamp FROM candles
+                        WHERE symbol = ? AND timeframe = ? AND timestamp = ?
+                    """, (asset, tf, current_end / 1000))
+                    if cursor.fetchone():
+                        # We have this candle. Now find the earliest candle in this continuous block.
+                        # We'll use a simpler heuristic: skip back 200 candles and check again.
+                        # If we have that too, we skip.
+                        jump_ms = tf_seconds[tf] * 200 * 1000
+                        cursor = conn.execute("""
+                            SELECT timestamp FROM candles
+                            WHERE symbol = ? AND timeframe = ? AND timestamp = ?
+                        """, (asset, tf, (current_end - jump_ms) / 1000))
+                        if cursor.fetchone():
+                            current_end -= jump_ms
+                            progress.update(200)
+                            continue
+
                 candles = await client.request("GET", "/api/v2/mix/market/history-candles", params={
                     "symbol": asset,
                     "productType": "usdt-futures",

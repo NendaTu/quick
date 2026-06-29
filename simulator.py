@@ -144,15 +144,46 @@ class Simulator:
                 # 1. Fetch OHLCV for all relevant timeframes
                 for tf in AVAILABLE_TIMEFRAMES:
                     # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
-                    # Bitget limit is 1000 candles per request.
-                    limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 100)
-                    data = await self.client.get_candles(sym, tf, limit=limit)
+                    required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 100)
+
+                    # Try to load from DB first to avoid redundant API calls
+                    db_candles = []
+                    if self.db:
+                        db_candles = self.db.get_recent_candles(sym, tf, limit=required_limit)
+
+                    # Check if DB data is sufficient and recent
+                    is_recent = False
+                    if db_candles:
+                        last_ts = db_candles[-1][0]
+                        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+                        # If the gap between now and last candle is less than 2 candle durations, consider it recent
+                        if (time.time() - last_ts) < (tf_map.get(tf, 60) * 2):
+                            is_recent = True
+
+                    if len(db_candles) >= required_limit and is_recent:
+                        # [OPT-001] Use DB data exclusively
+                        log.debug(f"Using {len(db_candles)} cached {tf} candles for {sym}")
+                        for c in db_candles:
+                            ts, o, h, l, cl, v = c
+                            self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                            self.last_candle_ts[sym][tf] = ts
+
+                        if tf == ACTIVE_TIMEFRAME:
+                            price = db_candles[-1][4]
+                            self.books[sym].mid_price = price
+                            self.last_price[sym] = price
+                            self.books[sym]._regenerate()
+                        continue
+
+                    # Fallback to API if DB is insufficient or stale
+                    max_db_ts = db_candles[-1][0] if db_candles else 0
+                    data = await self.client.get_candles(sym, tf, limit=required_limit)
                     if isinstance(data, list):
                         for c in reversed(data):
                             ts = float(c[0]) / 1000
                             o, h, l, cl, v = map(float, c[1:6])
-                            if tf == ACTIVE_TIMEFRAME:
-                                self.db.save_candle(sym, ACTIVE_TIMEFRAME, ts, o, h, l, cl, v)
+                            if self.db and ts > max_db_ts:
+                                self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
                             self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
                             self.last_candle_ts[sym][tf] = ts
 
@@ -467,11 +498,11 @@ class Simulator:
                 self.ohlcv[symbol][tf_name].append({"ts": candle_start, "o": price, "h": price, "l": price, "c": price, "v": size})
                 if len(self.ohlcv[symbol][tf_name]) > 1000: self.ohlcv[symbol][tf_name].pop(0)
 
-                # Persistence for ACTIVE_TIMEFRAME
-                if tf_name == ACTIVE_TIMEFRAME and self.db:
+                # Persistence for all fetched timeframes to enable future reuse
+                if self.db:
                     prev = self.ohlcv[symbol][tf_name][-2] if len(self.ohlcv[symbol][tf_name]) > 1 else None
                     if prev:
-                        self.db.save_candle(symbol, ACTIVE_TIMEFRAME, prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
+                        self.db.save_candle(symbol, tf_name, prev["ts"], prev["o"], prev["h"], prev["l"], prev["c"], prev["v"])
 
                 # Update confluence history if it's a tracking timeframe
                 if tf_name in self.confluence_history[symbol]:

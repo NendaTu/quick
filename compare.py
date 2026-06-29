@@ -45,6 +45,9 @@ class DataCoordinator:
         specs = await self.client.get_symbols()
         spec_map = {s['symbol']: s for s in specs}
 
+        from database import Database
+        db = Database()
+
         discovered_assets = []
         limit = self.preloaded_data.get("ASSETS_COUNT", ASSETS_COUNT)
         sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
@@ -69,12 +72,33 @@ class DataCoordinator:
             async with semaphore:
                 await asyncio.sleep(0.1)
                 for tf in AVAILABLE_TIMEFRAMES:
-                    limit = 500 if tf == ACTIVE_TIMEFRAME else 100
-                    data = await self.client.get_candles(sym, tf, limit=limit)
+                    required_limit = 500 if tf == ACTIVE_TIMEFRAME else 100
+                    if tf == "1m": required_limit = 1000
+
+                    # Try DB first
+                    db_candles = db.get_recent_candles(sym, tf, limit=required_limit)
+                    is_recent = False
+                    if db_candles:
+                        last_ts = db_candles[-1][0]
+                        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+                        if (time.time() - last_ts) < (tf_map.get(tf, 60) * 2):
+                            is_recent = True
+
+                    if len(db_candles) >= required_limit and is_recent:
+                        for c in db_candles:
+                            ts, o, h, l, cl, v = c
+                            self.preloaded_data["ohlcv"][sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                            self.preloaded_data["last_candle_ts"][sym][tf] = ts
+                        continue
+
+                    max_db_ts = db_candles[-1][0] if db_candles else 0
+                    data = await self.client.get_candles(sym, tf, limit=required_limit)
                     if isinstance(data, list):
                         for c in reversed(data):
                             ts = float(c[0]) / 1000
                             o, h, l, cl, v = map(float, c[1:6])
+                            if ts > max_db_ts:
+                                db.save_candle(sym, tf, ts, o, h, l, cl, v)
                             self.preloaded_data["ohlcv"][sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
                             self.preloaded_data["last_candle_ts"][sym][tf] = ts
 
@@ -95,6 +119,7 @@ class DataCoordinator:
             log.info(f"Coordinator: Fetching batch {i//batch_size + 1}/{(len(symbols_to_fetch)-1)//batch_size + 1}...")
             await asyncio.gather(*(fetch_symbol_data(s) for s in batch))
 
+        db.stop()
         log.info("Coordinator: Global warm-up complete.")
 
     async def _ws_callback(self, msg):
