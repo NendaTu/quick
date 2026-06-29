@@ -1,6 +1,7 @@
 import math
 import logging
 import config
+from tools.trading_utils import calculate_position_size, calculate_tp_for_roe
 import ta.indicators.rsi as rsi_ind
 import ta.indicators.atr as atr_ind
 import ta.indicators.flow as flow_ind
@@ -453,19 +454,16 @@ class LearningModel:
         if kz in ["london", "ny_am"]:
             risk_fraction *= getattr(config, 'SESSION_MULTIPLIER', 1.5)
 
-        risk_amount = equity * risk_fraction
-
-        if getattr(config, 'FEE_AWARE_SIZING', True):
-            exit_fee_rate = getattr(config, 'TAKER_FEE', 0.0006)
-            fee_per_unit = entry * (entry_fee_rate + exit_fee_rate)
-            risk_per_unit = abs(entry - stop_price) + fee_per_unit
-        else:
-            risk_per_unit = abs(entry - stop_price)
-
-        if risk_per_unit == 0:
-            return None
-
-        qty = risk_amount / risk_per_unit
+        # Centralized Position Sizing
+        qty = calculate_position_size(
+            equity,
+            risk_fraction,
+            entry,
+            stop_price,
+            entry_maker=(getattr(config, 'ENTRY_ORDER_TYPE', 'limit') == "limit"),
+            exit_maker=(getattr(config, 'SL_ORDER_TYPE', 'limit') == "limit"),
+            fee_aware=getattr(config, 'FEE_AWARE_SIZING', True)
+        )
 
         spec = self.simulator.contract_specs.get(symbol, {})
         vol_place = int(spec.get('volumePlace', 3))

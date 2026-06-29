@@ -16,7 +16,7 @@ sys.path.append(os.getcwd())
 import config
 from database import Database
 from bitget_client import BitGetClient
-from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl
+from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
 # --- Backtest Settings ---
 DEFAULT_ASSETS = ["ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT"]
@@ -195,7 +195,13 @@ def load_strategy(path: str):
         log.error(f"Strategy file {path} does not implement get_signal(ohlcv, timeframe)")
         return None
 
-async def run_backtest(strategy, db: Database, asset: str, tf: str):
+async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str, tf: str):
+    # Load contract specs for precision
+    specs = await client.get_symbols()
+    asset_spec = next((s for s in specs if s['symbol'] == asset), {})
+    vol_place = int(asset_spec.get('volumePlace', 3))
+    price_place = int(asset_spec.get('pricePlace', 2))
+
     # Load candles from DB within the specified range
     candles = db.get_candles_in_range(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
     if not candles:
@@ -281,16 +287,25 @@ async def run_backtest(strategy, db: Database, asset: str, tf: str):
             if len(ohlcv_history) >= 2:
                 signal = strategy.get_signal(ohlcv_history[-window_size:], tf)
                 if signal:
-                    # Execute entry at current close
-                    # (Strategy might provide entry_price, but for backtest simplicity we take the close of the trigger candle)
-                    # Use current equity to size position (0.5% risk as per config)
-                    risk_amount = equity * config.RISK_PER_TRADE
-                    risk_per_unit = abs(signal["entry_price"] - signal["stop_price"])
+                    # Execute entry
+                    # Using shared calculation for consistency with Engine/Simulator
+                    qty = calculate_position_size(
+                        equity,
+                        config.RISK_PER_TRADE,
+                        signal["entry_price"],
+                        signal["stop_price"],
+                        entry_maker=False, # Entries in backtests are simulated as Taker (Market-ish)
+                        exit_maker=False,  # Stops are always Taker
+                        fee_aware=config.FEE_AWARE_SIZING
+                    )
 
-                    if risk_per_unit > 0:
-                        qty = risk_amount / risk_per_unit
+                    if qty > 0:
+                        # Apply precision
+                        qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
+
                         # Taker slippage on entry
                         entry_price = signal["entry_price"] * (1 + config.EXPECTED_SLIPPAGE if signal["side"] == "buy" else 1 - config.EXPECTED_SLIPPAGE)
+                        entry_price = round(entry_price, price_place)
 
                         open_pos = {
                             "side": signal["side"],
@@ -376,7 +391,7 @@ async def main():
     all_results = []
     for asset in DEFAULT_ASSETS:
         for tf in DEFAULT_TIMEFRAMES:
-            res = await run_backtest(strategy, db, asset, tf)
+            res = await run_backtest(strategy, db, client, asset, tf)
             all_results.append(res)
 
     # 3. Output Table

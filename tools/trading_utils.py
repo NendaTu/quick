@@ -73,3 +73,23 @@ def calculate_tp_for_roe(entry_price, target_roe, side, leverage, entry_maker=Tr
         return (E * (T/L + 1 + f1 + s)) / (1 - f2 - s)
     else:
         return (E * (1 - f1 - s - T/L)) / (1 + f2 + s)
+
+def calculate_position_size(equity, risk_fraction, entry_price, stop_price, entry_maker=True, exit_maker=False, fee_aware=True):
+    """
+    Calculates position size based on risk and distance to stop loss.
+    """
+    risk_amount = equity * risk_fraction
+
+    if fee_aware:
+        f1 = config.MAKER_FEE if entry_maker else config.TAKER_FEE
+        f2 = config.MAKER_FEE if exit_maker else config.TAKER_FEE
+        # Fee per unit for entry and exit
+        fee_per_unit = (entry_price * f1) + (stop_price * f2)
+        risk_per_unit = abs(entry_price - stop_price) + fee_per_unit
+    else:
+        risk_per_unit = abs(entry_price - stop_price)
+
+    if risk_per_unit <= 0:
+        return 0
+
+    return risk_amount / risk_per_unit
