@@ -10,13 +10,19 @@ A high-performance algorithmic trading system for Bitget USDT-M Futures, featuri
    cd bitget-futures-bot
    ```
 
-2. **Install dependencies:**
+2. **Set up a virtual environment:**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure environment:**
-   Create a `.env` file in the root directory:
+4. **Configure environment:**
+   Create a `.env` file in the root directory (essential for API access and mode configuration):
    ```env
    BITGET_API_KEY=your_api_key
    BITGET_SECRET_KEY=your_secret_key
