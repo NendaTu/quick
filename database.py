@@ -189,12 +189,34 @@ class Database:
         with sqlite3.connect(self.db_path, timeout=10) as conn:
             conn.execute("PRAGMA busy_timeout=10000")
             cursor = conn.execute("""
+                SELECT timestamp, open, high, l, close, volume
+                FROM (
+                    SELECT timestamp, open, high, low as l, close, volume
+                    FROM candles
+                    WHERE symbol = ? AND timeframe = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                ) ORDER BY timestamp ASC
+            """, (symbol, timeframe, limit))
+            return cursor.fetchall()
+
+    def get_candle_range_stats(self, symbol, timeframe, start_ts, end_ts):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.execute("""
+                SELECT MIN(timestamp), MAX(timestamp), COUNT(*)
+                FROM candles
+                WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+            """, (symbol, timeframe, start_ts, end_ts))
+            return cursor.fetchone()
+
+    def get_candles_in_range(self, symbol, timeframe, start_ts, end_ts):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.execute("""
                 SELECT timestamp, open, high, low, close, volume
                 FROM candles
-                WHERE symbol = ? AND timeframe = ?
-                ORDER BY timestamp DESC LIMIT ?
-            """, (symbol, timeframe, limit))
-            return cursor.fetchall()[::-1]
+                WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+            """, (symbol, timeframe, start_ts, end_ts))
+            return cursor.fetchall()
 
     def purge_old_data(self, tick_retention_seconds=3600, candle_retention_days=7):
         self.write_queue.put(("purge", (tick_retention_seconds, candle_retention_days)))

@@ -38,6 +38,19 @@ Execute the bot using the primary configuration in `config.py`:
 python main.py
 ```
 
+### Backtesting
+Backtest individual technical analysis conditions against historical data.
+
+```bash
+# Backtest a specific candle pattern (recursively searches ta/)
+python backtest.py candle/engulfing
+
+# Backtest with a specific date range
+python backtest.py candle/engulfing_total 2026-05-01 2026-06-01
+```
+
+The system will automatically download missing historical data and save it to the shared database.
+
 ### A/B Testing (Comparison)
 The `compare.py` tool allows you to run multiple strategy variants concurrently against the same real-time data feed.
 

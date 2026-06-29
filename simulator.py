@@ -8,6 +8,7 @@ import ta.indicators.macd as macd_ind
 import ta.indicators.supertrend as st_ind
 import ta.patterns.drt as drt_pat
 import ta.patterns.fvg as fvg_pat
+from tools.trading_utils import calculate_fees, calculate_pnl
 from ta.indicators.rsi import compute_rsi
 from ta.indicators.atr import compute_atr, detect_vol_regime
 from ta.indicators.ema import compute_ema
@@ -815,8 +816,7 @@ class Simulator:
 
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False):
         now = time.time()
-        fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
-        fee = qty * fill_price * fee_rate
+        fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
         self.equity -= fee
 
         max_lev = self.leverage_limits.get(symbol, 20)
@@ -851,13 +851,9 @@ class Simulator:
         qty = min(order["qty"], pos["qty"])
         is_partial = qty < pos["qty"]
 
-        if side == "buy":
-            pnl = (fill_price - pos["entry_price"]) * qty
-        else:
-            pnl = (pos["entry_price"] - fill_price) * qty
+        pnl = calculate_pnl(qty, pos["entry_price"], fill_price, side)
 
-        fee_rate = MAKER_FEE if order_type == "limit" else TAKER_FEE
-        fee = qty * fill_price * fee_rate
+        fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
 
         # entry_fee proportional to qty exited
         proportional_entry_fee = pos["entry_fee"] * (qty / (pos["qty"] if not pos.get("initial_qty") else pos["initial_qty"]))
