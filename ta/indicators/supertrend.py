@@ -6,12 +6,17 @@ from ta.indicators.atr import compute_atr
 
 # --- Configuration ---
 ENABLED = True
+PERIOD = 10
+MULTIPLIER = 3.0
 
-def compute_supertrend(highs: List[float], lows: List[float], closes: List[float], period: int = 10, multiplier: float = 3.0) -> Tuple[float, int]:
+def compute_supertrend(highs: List[float], lows: List[float], closes: List[float], period: int = None, multiplier: float = None) -> Tuple[float, int]:
     """
     Full Supertrend implementation.
     Returns (trend_value, direction) where direction is 1 for bullish, -1 for bearish.
     """
+    if period is None: period = PERIOD
+    if multiplier is None: multiplier = MULTIPLIER
+
     if not ENABLED or len(closes) < period + 1:
         return closes[-1] if closes else 0.0, 1
 

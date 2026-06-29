@@ -1,22 +1,18 @@
 """
 Liquidity Sweep Pattern Recognition
 
-Detects moves that briefly exceed known BSL/SSL levels then reverse,
-trapping breakout traders.
-
-Identification:
-- Buy-side sweep: High > BSL then Close < BSL.
-- Sell-side sweep: Low < SSL then Close > SSL.
-- Confirmation: Followed by strong reversal candle within 1-3 bars.
+Detects moves that briefly exceed known BSL/SSL levels then reverse.
 """
 
 from typing import List, Dict, Optional
 from ta.patterns.liquidity import identify_liquidity
 
-# --- Internal Configuration ---
+# --- Configuration ---
+# Toggle to enable/disable sweep detection.
 ENABLED = True
-CONFIRMATION_BARS = 3
-SWEEP_MARGIN_PCT = 0.002 # 0.2% minimum break to avoid noise
+
+# Minimum break (%) required beyond the liquidity level to consider it a sweep.
+SWEEP_MARGIN_PCT = 0.002
 
 def detect_sweeps(ohlcv: List[dict]) -> Dict:
     """
@@ -34,13 +30,10 @@ def detect_sweeps(ohlcv: List[dict]) -> Dict:
     ssl = liquidity['ssl_level']
 
     last = ohlcv[-1]
-    prev = ohlcv[-2]
-
     sweep_type = None
 
     # 1. Buy Side Sweep (Liquidity Hunt)
     if last['h'] > bsl and last['c'] < bsl:
-        # Check for reversal confirmation (bearish engulfing or similar)
         if last['c'] < last['o']: # Bearish close
             sweep_type = 'buy_side'
 

@@ -3,6 +3,16 @@ Order Flow / Trade Delta Indicator
 """
 from typing import List, Dict
 
+# --- Configuration ---
+# Minimum order book imbalance (bid vs ask pressure) required to trade.
+MIN_IMBALANCE = 0.033
+
+# Minimum relative volume required compared to recent average.
+VOL_PCT_MIN = 0.05
+
+# Threshold for HTF trend confluence (e.g., 15m trend).
+TREND_HTF_MIN = 0.0001
+
 def compute_trade_delta(trades: List[Dict]) -> float:
     """
     Calculates net volume delta from a list of recent market trades.

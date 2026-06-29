@@ -2,36 +2,37 @@
 Market Structure Module: BOS, MSS, and CHOCH
 
 Tracks structural breaks to signal trend continuation or reversal.
-
-Patterns:
-1. Break of Structure (BOS): Violates last HH (uptrend) or LL (downtrend). Confirms continuation.
-2. Market Structure Shift (MSS): Violates last HL (uptrend) or LH (downtrend). Signals potential reversal.
-3. Change of Character (CHOCH): MSS-like break but lacking impulsive follow-through. Warning signal.
-
-Distinction:
-- BOS breaks the trend-following extreme.
-- MSS/CHOCH breaks the counter-trend pivot.
 """
 
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 from ta.indicators.atr import compute_atr
 
-# --- Internal Configuration ---
+# --- Configuration ---
+# Toggle to enable/disable structural analysis.
 ENABLED = True
-IMPULSE_THRESHOLD = 1.5 # Break candle range > 1.5x ATR confirms MSS vs CHOCH
-MIN_SWING_DIST_PCT = 0.002 # 0.2% distance between swings to avoid noise
-CONFIRM_BREAK_ON_CLOSE = True # If True, requires C > High for BOS/MSS
+
+# Break candle range must be > IMPULSE_THRESHOLD * ATR to confirm MSS vs CHOCH.
+IMPULSE_THRESHOLD = 1.5
+
+# Minimum distance (%) between swings to filter out market noise.
+MIN_SWING_DIST_PCT = 0.002
+
+# If True, requires the candle to CLOSE beyond the high/low for a valid break.
+# Reduces false breakouts on wicks.
+CONFIRM_BREAK_ON_CLOSE = True
 
 def identify_structure(ohlcv: List[dict]) -> Dict:
     """
     Analyzes market structure and identifies breaks.
+    Uses closed candles for structural points to prevent repainting.
     """
-    if not ENABLED or len(ohlcv) < 50:
+    if not ENABLED or len(ohlcv) < 51:
         return {}
 
-    # 1. Get confirmed swing points
-    swings = detect_swings(ohlcv[:-1], strength=2)
+    # 1. Get confirmed swing points from CLOSED candles
+    closed_ohlcv = ohlcv[:-1]
+    swings = detect_swings(closed_ohlcv, strength=2)
     highs = swings['highs']
     lows = swings['lows']
 
@@ -42,15 +43,11 @@ def identify_structure(ohlcv: List[dict]) -> Dict:
     last_hh = highs[-1]['price']
     last_ll = lows[-1]['price']
 
-    # Last counter-trend pivots
-    # In an uptrend, we look for Higher Low (HL)
-    # In a downtrend, we look for Lower High (LH)
-    # For simplification, we check the most recent confirmed high/low.
     last_confirmed_high = highs[-1]
     last_confirmed_low = lows[-1]
 
-    curr = ohlcv[-1]
-    atr = compute_atr([c['h'] for c in ohlcv], [c['l'] for c in ohlcv], [c['c'] for c in ohlcv])
+    curr = ohlcv[-1] # Check break against live candle
+    atr = compute_atr([c['h'] for c in closed_ohlcv], [c['l'] for c in closed_ohlcv], [c['c'] for c in closed_ohlcv])
 
     structure_signal = None
 
@@ -63,7 +60,6 @@ def identify_structure(ohlcv: List[dict]) -> Dict:
     if is_breaking_hh:
         structure_signal = 'bullish_bos'
     elif is_breaking_lh:
-        # Potential Bullish MSS/CHOCH (breaking a LH)
         candle_range = curr['h'] - curr['l']
         if candle_range > IMPULSE_THRESHOLD * atr:
             structure_signal = 'bullish_mss'
@@ -72,7 +68,6 @@ def identify_structure(ohlcv: List[dict]) -> Dict:
     elif is_breaking_ll:
         structure_signal = 'bearish_bos'
     elif is_breaking_hl:
-        # Potential Bearish MSS/CHOCH (breaking a HL)
         candle_range = curr['h'] - curr['l']
         if candle_range > IMPULSE_THRESHOLD * atr:
             structure_signal = 'bearish_mss'

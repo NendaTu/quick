@@ -2,12 +2,6 @@
 Trend and Bias Recognition
 
 Classifies market direction and provides a bias for setups.
-
-Identification:
-- Swing-based Trend: HH/HL sequence (Uptrend), LH/LL sequence (Downtrend).
-- MA-based Trend: Price relative to 50/200 SMAs.
-- ADX: Measures trend strength.
-- Bias: Composite of HTF trend and LTF momentum.
 """
 
 from typing import List, Dict, Optional
@@ -15,11 +9,16 @@ from ta.patterns.swings import detect_swings
 from ta.indicators.ema import compute_ema
 from ta.utils import calculate_sma
 
-# --- Internal Configuration ---
+# --- Configuration ---
+# Toggle to enable/disable trend analysis.
 ENABLED = True
+
+# Standard periods for MA-based trend calculation.
 SMA_FAST = 50
 SMA_SLOW = 200
-NEUTRAL_ALLOWS_TRADES = True  # If True, 'neutral' bias does not block entries.
+
+# If True, 'neutral' bias does not block entries.
+NEUTRAL_ALLOWS_TRADES = True
 
 def identify_trend(ohlcv: List[dict], htf_ohlcv: Optional[List[dict]] = None) -> Dict:
     """
@@ -31,7 +30,6 @@ def identify_trend(ohlcv: List[dict], htf_ohlcv: Optional[List[dict]] = None) ->
     closes = [c['c'] for c in ohlcv]
     current_price = closes[-1]
 
-    # 1. MA-based Trend
     sma_50 = calculate_sma(closes, SMA_FAST)
     sma_200 = calculate_sma(closes, SMA_SLOW)
 
@@ -41,7 +39,6 @@ def identify_trend(ohlcv: List[dict], htf_ohlcv: Optional[List[dict]] = None) ->
     elif current_price < sma_200 and sma_50 < sma_200:
         ma_trend = 'bearish'
 
-    # 2. Swing-based Trend
     swings = detect_swings(ohlcv[-100:], strength=2)
     highs = swings['highs']
     lows = swings['lows']
@@ -53,8 +50,7 @@ def identify_trend(ohlcv: List[dict], htf_ohlcv: Optional[List[dict]] = None) ->
         elif highs[-1]['price'] < highs[-2]['price'] and lows[-1]['price'] < lows[-2]['price']:
             swing_trend = 'bearish'
 
-    # 3. Bias (HTF Trend Integration)
-    bias = 0 # 0 neutral, +1 bull, -1 bear
+    bias = 0
     if htf_ohlcv and len(htf_ohlcv) > 50:
         htf_closes = [c['c'] for c in htf_ohlcv]
         htf_ema = compute_ema(htf_closes, 20)

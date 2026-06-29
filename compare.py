@@ -56,6 +56,7 @@ class DataCoordinator:
                 if len(discovered_assets) >= limit: break
 
         self.preloaded_data["discovered_assets"] = discovered_assets
+        self.preloaded_data["INITIAL_EQUITY"] = INITIAL_EQUITY
         self.preloaded_data["contract_specs"] = {s: spec_map[s] for s in discovered_assets + [BTC_SYMBOL] if s in spec_map}
         self.preloaded_data["leverage_limits"] = {s: float(spec_map[s].get('maxLever', 20)) for s in discovered_assets + [BTC_SYMBOL] if s in spec_map}
         self.preloaded_data["ohlcv"] = {s: {tf: [] for tf in AVAILABLE_TIMEFRAMES} for s in discovered_assets + [BTC_SYMBOL]}
@@ -136,6 +137,9 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
     config.MAX_TRADES_LIMIT = 999999
     config.MAX_DURATION = 9999999
     config.TOTAL_ROI_LIMIT = 100.0
+
+    # 2.5 Ensure INITIAL_EQUITY sync [CS-004]
+    config.INITIAL_EQUITY = preloaded_data.get("INITIAL_EQUITY", INITIAL_EQUITY)
 
     # 3. Setup Logging to File (Sanitize filename)
     safe_id = variant.id.replace(":", "").replace("/", "_").replace(" ", "_")

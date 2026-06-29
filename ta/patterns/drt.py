@@ -9,11 +9,21 @@ import math
 from typing import List
 
 # --- Configuration ---
+# Toggle to enable/disable DRT calculation.
 ENABLED = True
-LOOKBACK_PERIOD = 20
 
-def compute_drt(prices: List[float], period: int = 20) -> float:
+# Number of points used for the linear regression calculation.
+PERIOD = 20
+
+# Minimum trend offset from 0.5 required to consider the market "trending".
+# Example: 0.1 means DRT must be < 0.4 or > 0.6.
+STRENGTH_MIN = 0.1
+
+def compute_drt(prices: List[float], period: int = None) -> float:
     """Directional Trend 0-1: sigmoid of the slope of linear regression."""
+    if period is None:
+        period = PERIOD
+
     if not ENABLED or len(prices) < period:
         return 0.5
 
