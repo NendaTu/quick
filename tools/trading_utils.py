@@ -74,6 +74,38 @@ def calculate_tp_for_roe(entry_price, target_roe, side, leverage, entry_maker=Tr
     else:
         return (E * (1 - f1 - s - T/L)) / (1 + f2 + s)
 
+def calculate_target_roe_for_rrr(rrr, entry_price, stop_price, leverage, entry_maker=True, exit_maker=False):
+    """
+    Calculates the target net ROE required to achieve a specific Reward-to-Risk Ratio (RRR).
+    Risk = Abs(Entry - Stop) + EntryFees + StopFees + EntrySlippage + StopSlippage
+    Reward = Risk * RRR
+    NetReward = Reward (net of all fees and slippage)
+
+    This is complex because NetReward depends on the Exit Price which we don't know yet.
+    However, we can approximate the target ROE by looking at the price distance.
+    Distance = Abs(Entry - Stop)
+    TargetPriceDistance = Distance * RRR
+
+    Actually, a more precise way is to calculate the risk in ROE terms.
+    Risk_ROE = calculate_roe(entry_price, stop_price, side, leverage, ...)
+    Target_Net_ROE = Abs(Risk_ROE) * RRR
+    """
+    # Determine side
+    side = "buy" if entry_price > stop_price else "sell"
+
+    # Use existing calculate_roe to find net loss on stop out
+    risk_roe = calculate_roe(
+        entry_price,
+        stop_price,
+        side,
+        leverage,
+        entry_maker=entry_maker,
+        exit_maker=exit_maker,
+        include_slippage=True
+    )
+
+    return abs(risk_roe) * rrr
+
 def calculate_position_size(equity, risk_fraction, entry_price, stop_price, entry_maker=True, exit_maker=False, fee_aware=True):
     """
     Calculates position size based on risk and distance to stop loss.

@@ -1,9 +1,13 @@
 """
 Total Engulfing Strategy (Full Candle)
 
-Triggers when a candle body completely engulfs the entire previous candle (wick-to-wick).
-TP is calculated to ensure +1% Net ROE.
-SL is 1 tick outside the engulfing candle's range.
+How it works:
+1. This strategy is an aggressive version of the engulfing pattern. It requires the 'body'
+   of the current candle to completely cover the 'entire' previous candle (from high wick to low wick).
+2. A Bullish signal occurs when a green body swallows the previous candle's entire range.
+3. A Bearish signal occurs when a red body swallows the previous candle's entire range.
+4. Like the standard engulfing strategy, it sets a Take Profit (TP) to ensure a net +1% profit (ROE)
+   and a Stop Loss (SL) just beyond the trigger candle's high or low.
 """
 
 from typing import List, Dict, Optional

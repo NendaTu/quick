@@ -1,11 +1,18 @@
 """
 Sentiment Candle Strategy
 
-Analyzes candle body size relative to range and position relative to High/Low.
-Example: python backtest.py sentiment 10 30
-- Body <= 10% of Range
-- Bullish: Body top within top 30% of Range
-- Bearish: Body bottom within bottom 30% of Range
+How it works:
+1. This strategy identifies "sentiment" based on where the candle's body is located
+   relative to its total high-low range.
+2. It takes two numbers as input:
+   - Body Percentage: How much of the candle is the actual rectangle (Open to Close).
+   - Offset Percentage: How close the body is to the High (for Bullish) or Low (for Bearish).
+3. Example: `python backtest.py sentiment 10 30`
+   - This looks for candles where the body is about 10% of the total size.
+   - For a Bullish signal: The top of that body must be within the top 30% of the candle's range.
+   - For a Bearish signal: The bottom of that body must be within the bottom 30% of the candle's range.
+4. Leeway: The strategy includes a small "leeway" (default 1%) so that a "10 30" search also
+   finds "9-11 29-31" matches, ensuring we don't miss close patterns.
 """
 
 from typing import List, Dict, Optional

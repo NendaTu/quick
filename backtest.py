@@ -301,13 +301,16 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
                 if signal:
                     # Execute entry
                     # Using shared calculation for consistency with Engine/Simulator
+                    entry_maker = (config.ENTRY_ORDER_TYPE == "limit")
+                    sl_maker = (config.SL_ORDER_TYPE == "limit")
+
                     qty = calculate_position_size(
                         equity,
                         config.RISK_PER_TRADE,
                         signal["entry_price"],
                         signal["stop_price"],
-                        entry_maker=False, # Entries in backtests are simulated as Taker (Market-ish)
-                        exit_maker=False,  # Stops are always Taker
+                        entry_maker=entry_maker,
+                        exit_maker=sl_maker,
                         fee_aware=config.FEE_AWARE_SIZING
                     )
 
@@ -315,8 +318,10 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
                         # Apply precision
                         qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
 
-                        # Taker slippage on entry
-                        entry_price = signal["entry_price"] * (1 + config.EXPECTED_SLIPPAGE if signal["side"] == "buy" else 1 - config.EXPECTED_SLIPPAGE)
+                        # Apply slippage on entry if taker
+                        entry_price = signal["entry_price"]
+                        if not entry_maker:
+                            entry_price *= (1 + config.EXPECTED_SLIPPAGE if signal["side"] == "buy" else 1 - config.EXPECTED_SLIPPAGE)
                         entry_price = round(entry_price, price_place)
 
                         open_pos = {

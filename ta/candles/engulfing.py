@@ -1,9 +1,14 @@
 """
 Engulfing Body Strategy
 
-Triggers when a candle body completely engulfs the previous candle's body.
-TP is calculated to ensure +1% Net ROE.
-SL is 1 tick outside the engulfing candle's range.
+How it works:
+1. This strategy looks for a "Bullish" or "Bearish" engulfing pattern where only the 'body'
+   (the rectangle part between Open and Close) is considered.
+2. A Bullish signal occurs when a green candle's body completely covers the previous red candle's body.
+3. A Bearish signal occurs when a red candle's body completely covers the previous green candle's body.
+4. The strategy calculates a Take Profit (TP) target to net a specific profit (default +1% ROE)
+   after paying all exchange fees and accounting for slippage.
+5. The Stop Loss (SL) is placed slightly outside the extreme of the engulfing candle to protect capital.
 """
 
 from typing import List, Dict, Optional

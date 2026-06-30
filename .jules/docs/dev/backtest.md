@@ -56,7 +56,8 @@ The system automatically detects missing data for the requested range/asset/time
 - **Timeframes**: Defaults to 1m, 3m, 5m, 15m.
 
 ## Math & Reporting
-- **Win% (TP)**: Calculated as the percentage of trades that yielded a positive Net PnL after all fees and slippage.
+- **Win% (L/S)**: Net win rate for Long and Short positions respectively.
+- **PnL (L/S)**: Cumulative Net PnL for Long and Short positions.
 - **ROE%**: Calculated using 20x leverage as a standard baseline for comparison across different assets.
 - **Position Sizing**: Derived strictly from `config.py` settings:
     - **Risk**: Uses `RISK_PER_TRADE` (fraction of equity).
