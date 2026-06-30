@@ -6,14 +6,31 @@ The `backtest.py` system allows for high-fidelity simulation of Technical Analys
 
 Basic command:
 ```bash
-python backtest.py [strategy_query] [start_date] [end_date]
+python backtest.py "[strategy_query]" [start_date] [end_date]
 ```
+
+> **IMPORTANT**: Always wrap your strategy query in quotes (e.g. `"A > B"`) to prevent your terminal from misinterpreting the `>` symbol as a command to overwrite a file.
 
 ### Strategy Resolution
 The system recursively searches the `ta/` directory. It includes a "singular-to-plural" mapping for convenience:
 - `candle/engulfing` resolves to `ta/candles/engulfing.py`
 - `pattern/fvg` resolves to `ta/patterns/fvg.py`
 - `engulfing` will find all matches and prompt you if ambiguous.
+
+## Confluence Chaining (Advanced)
+You can combine multiple strategies using two operators:
+1.  **Simultaneous (`+`)**: Both conditions must happen on the exact same candle.
+2.  **Sequential (`>`)**: The first condition happens, then the next must happen within **5 candles** (configurable in `backtest.py`).
+
+### Directional Rules
+- **Strict (Default)**: All items in the chain must point in the same direction (e.g., all Bullish).
+- **Ignore Direction (`~`)**: Add a tilde to an item (e.g. `fvg~`) to allow it to trigger in either direction regardless of the chain.
+- **Open (`open`)**: Add "open" to the end of the query to allow the entire chain to be direction-agnostic.
+
+### Examples
+- **Combination**: `"engulfing + sentiment 10 20"` (Must meet both on one candle).
+- **Sequence**: `"engulfing > fvg 3 25"` (Engulfing first, then FVG follows).
+- **Mixed**: `"engulfing + sentiment 10 20 > fvg 3 25 1.5"` (Combined signal followed by FVG with 1.5 RRR).
 
 ### Date Range
 - **Default**: The last 30 days (for speed).

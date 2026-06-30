@@ -20,8 +20,12 @@ from bitget_client import BitGetClient
 from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
 # --- Backtest Settings ---
+PROXIMITY_LIMIT = 5
+RESET_PROXIMITY_ON_REPEAT = True
+DIRECTION_MODE = "strict" # "strict" or "open"
+
 DEFAULT_ASSETS = ["ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT"]
-DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m"]
+DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
 # June 1, 2022 to June 1, 2026 (Global Range)
 MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
 MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
@@ -67,7 +71,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             min_ts, max_ts, count = db.get_candle_range_stats(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
 
             # Calculate expected count (approximate)
-            tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900}
+            tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
             expected = (END_DATE.timestamp() - START_DATE.timestamp()) / tf_seconds[tf]
 
             if count >= expected * 0.9: # 90% coverage is good enough to skip
@@ -181,22 +185,170 @@ def find_strategy_file(query: str) -> Optional[str]:
             pass
     return None
 
-def load_strategy(path: str):
-    module_name = path.replace("/", ".").replace("\\", ".")
-    if module_name.endswith(".py"):
-        module_name = module_name[:-3]
+class StrategyWrapper:
+    def __init__(self, path: str, params: List[str] = None, ignore_direction: bool = False):
+        self.path = path
+        self.params = params or []
+        self.ignore_direction = ignore_direction
+        self.module = self._load_module(path)
 
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    def _load_module(self, path):
+        module_name = path.replace("/", ".").replace("\\", ".")
+        if module_name.endswith(".py"):
+            module_name = module_name[:-3]
 
-    if hasattr(module, "get_signal"):
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
         return module
-    else:
-        log.error(f"Strategy file {path} does not implement get_signal(ohlcv, timeframe)")
+
+    def get_signal(self, ohlcv, tf):
+        return self.module.get_signal(ohlcv, tf, params=self.params)
+
+class ConfluenceChain:
+    def __init__(self, segments: List[List[StrategyWrapper]]):
+        """
+        segments: List of simultaneous groups.
+        Example: [[A, B], [C], [D, E]] represents (A+B) > C > (D+E)
+        """
+        self.segments = segments
+        self.current_segment_idx = 0
+        self.proximity_timer = 0
+        self.last_direction = None
+        self.chain_active = False
+
+    def reset(self):
+        self.current_segment_idx = 0
+        self.proximity_timer = 0
+        self.last_direction = None
+        self.chain_active = False
+
+    def check(self, ohlcv, tf):
+        if not self.segments:
+            return None
+
+        # 1. Evaluate current segment
+        current_segment = self.segments[self.current_segment_idx]
+        segment_results = [s.get_signal(ohlcv, tf) for s in current_segment]
+
+        # All must signal in the same direction (if not ignored)
+        direction = None
+        all_match = True
+
+        for i, res in enumerate(segment_results):
+            if res is None:
+                all_match = False
+                break
+
+            sig_dir = res["side"]
+            if not current_segment[i].ignore_direction and DIRECTION_MODE == "strict":
+                if direction is None:
+                    direction = sig_dir
+                elif direction != sig_dir:
+                    all_match = False
+                    break
+            elif direction is None:
+                direction = sig_dir
+
+        # 2. Handle Segment Result
+        if all_match:
+            # Check directional consistency with previous segments
+            if self.current_segment_idx > 0 and DIRECTION_MODE == "strict" and self.last_direction and direction != self.last_direction:
+                # If we were waiting for the next segment but got a signal in the wrong direction,
+                # we don't necessarily reset, but this signal doesn't count.
+                # However, if it's the SAME segment repeating, handle it:
+                pass
+
+            # If it's the first segment or we are strictly matching direction
+            valid_transition = True
+            if self.current_segment_idx > 0 and DIRECTION_MODE == "strict" and self.last_direction:
+                # Check if this segment's wrappers allow ignoring direction
+                # For simplicity, if ANY in segment follows direction, we check it
+                should_check = any(not s.ignore_direction for s in current_segment)
+                if should_check and direction != self.last_direction:
+                    valid_transition = False
+
+            if valid_transition:
+                # Progress the chain
+                if self.current_segment_idx == 0:
+                    self.chain_active = True
+
+                self.last_direction = direction
+                self.proximity_timer = PROXIMITY_LIMIT
+
+                # If this was the last segment, return the result
+                if self.current_segment_idx == len(self.segments) - 1:
+                    final_res = segment_results[-1] # Anchor is the last item
+                    self.reset()
+                    return final_res
+
+                self.current_segment_idx += 1
+                return None
+
+        # 3. Handle Timer / Reset
+        if self.chain_active:
+            # If the FIRST segment repeats, reset proximity timer if configured
+            if RESET_PROXIMITY_ON_REPEAT:
+                first_segment = self.segments[0]
+                first_results = [s.get_signal(ohlcv, tf) for s in first_segment]
+                if all(r is not None for r in first_results):
+                    # Check direction for repeat reset
+                    first_dir = first_results[0]["side"]
+                    if DIRECTION_MODE == "open" or first_dir == self.last_direction:
+                        self.proximity_timer = PROXIMITY_LIMIT
+                        # Also reset to waiting for segment 1 (index 1)
+                        self.current_segment_idx = 1
+
+            self.proximity_timer -= 1
+            if self.proximity_timer < 0:
+                self.reset()
+
         return None
 
-async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str, tf: str, params: List[str] = None):
+def parse_confluence_command(command: str):
+    """
+    Parses a string like "A + B > C > D + E" or "A B > C" into segments.
+    Also handles "~" and "open".
+    """
+    global DIRECTION_MODE
+    if command.endswith(" open"):
+        DIRECTION_MODE = "open"
+        command = command[:-5].strip()
+
+    # Split by ">" for sequential
+    steps = [s.strip() for s in command.split(">")]
+
+    segments = []
+    for step in steps:
+        # Split strictly by "+" for simultaneous
+        parts = [p.strip() for p in step.split("+")]
+
+        wrappers = []
+        for p in parts:
+            if not p: continue
+
+            ignore_dir = False
+            if p.endswith("~"):
+                ignore_dir = True
+                p = p[:-1].strip()
+
+            # Resolution logic
+            # Extract query and params (space separated)
+            bits = p.split()
+            query = bits[0]
+            params = bits[1:]
+
+            strat_path = find_strategy_file(query)
+            if not strat_path:
+                raise ValueError(f"Strategy {query} not found")
+
+            wrappers.append(StrategyWrapper(strat_path, params=params, ignore_direction=ignore_dir))
+
+        segments.append(wrappers)
+
+    return ConfluenceChain(segments)
+
+async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf: str):
     # Load contract specs for precision
     specs = await client.get_symbols()
     asset_spec = next((s for s in specs if s['symbol'] == asset), {})
@@ -232,6 +384,7 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
     ohlcv_history = []
 
     progress = Progress(len(candles), label=f"Backtesting {asset} {tf}")
+    chain.reset()
 
     for i in range(len(candles)):
         c = candles[i]
@@ -297,7 +450,7 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
         else:
             # Check for entry
             if len(ohlcv_history) >= 2:
-                signal = strategy.get_signal(ohlcv_history[-window_size:], tf, params=params)
+                signal = chain.check(ohlcv_history[-window_size:], tf)
                 if signal:
                     # Execute entry
                     # Using shared calculation for consistency with Engine/Simulator
@@ -407,10 +560,13 @@ async def main():
     global START_DATE, END_DATE
 
     if len(sys.argv) < 2:
-        print("Usage: python backtest.py [strategy_path] [optional: START_DATE (YYYY-MM-DD)] [optional: END_DATE (YYYY-MM-DD)]")
+        print("Usage: python backtest.py [strategy_query] [optional: START_DATE (YYYY-MM-DD)] [optional: END_DATE (YYYY-MM-DD)]")
+        print("Examples:")
+        print('  python backtest.py "engulfing + sentiment 10 20 > fvg 3 25 1"')
+        print('  python backtest.py "sentiment 10 30" 2026-05-01 2026-06-01')
         return
 
-    query = sys.argv[1]
+    query_cmd = sys.argv[1]
 
     # Parse optional dates from the end of the argument list
     for arg in sys.argv[2:]:
@@ -428,14 +584,10 @@ async def main():
     # we might want to default to 1 month for speed as per user suggestion,
     # but the instructions said "defaults range is the June 1, 2022 to June 1, 2026".
     # I will stick to the 4-year default but allow easy override.
-    strat_path = find_strategy_file(query)
-
-    if not strat_path:
-        print(f"Error: Strategy '{query}' not found.")
-        return
-
-    strategy = load_strategy(strat_path)
-    if not strategy:
+    try:
+        chain = parse_confluence_command(query_cmd)
+    except Exception as e:
+        print(f"Error parsing command: {e}")
         return
 
     db = Database()
@@ -446,17 +598,10 @@ async def main():
 
     # 2. Run backtests
     all_results = []
-    # Collect strategy parameters (if any)
-    params = sys.argv[2:]
-    # Basic check: if arguments look like dates, don't pass them as strategy params
-    strat_params = []
-    for p in params:
-        if "-" in p and len(p) == 10: break # Likely a date
-        strat_params.append(p)
 
     for asset in DEFAULT_ASSETS:
         for tf in DEFAULT_TIMEFRAMES:
-            res = await run_backtest(strategy, db, client, asset, tf, params=strat_params)
+            res = await run_backtest(chain, db, client, asset, tf)
             all_results.append(res)
 
     # 3. Output Table
