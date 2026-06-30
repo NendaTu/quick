@@ -335,6 +335,15 @@ def parse_confluence_command(command: str):
 
     segments = []
     for step in steps:
+        step = step.strip()
+        if not step: continue
+
+        # Check if the entire segment is flipped: (A + B)
+        seg_flipped = False
+        if step.startswith("(") and step.endswith(")"):
+            seg_flipped = True
+            step = step[1:-1].strip()
+
         # Split strictly by "+" for simultaneous
         parts = [p.strip() for p in step.split("+")]
 
@@ -347,7 +356,7 @@ def parse_confluence_command(command: str):
                 ignore_dir = True
                 p = p[:-1].strip()
 
-            is_flipped = False
+            is_flipped = seg_flipped
             if p.startswith("(") and p.endswith(")"):
                 is_flipped = True
                 p = p[1:-1].strip()

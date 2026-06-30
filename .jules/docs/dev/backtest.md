@@ -6,10 +6,10 @@ The `backtest.py` system allows for high-fidelity simulation of Technical Analys
 
 Basic command:
 ```bash
-python backtest.py "[strategy_query]" [start_date] [end_date]
+python backtest.py "[step_1]" "[step_2]" ... [start_date] [end_date]
 ```
 
-> **IMPORTANT**: Always wrap your strategy query in quotes. While the system now uses `->` for sequences to minimize risk, shell environments may still misinterpret certain characters.
+> **IMPORTANT**: Always wrap your strategy steps in quotes. Separate sequential steps with spaces.
 
 ### Strategy Resolution
 The system recursively searches the `ta/` directory. It includes a "singular-to-plural" mapping for convenience:
@@ -18,9 +18,9 @@ The system recursively searches the `ta/` directory. It includes a "singular-to-
 - `engulfing` will find all matches and prompt you if ambiguous.
 
 ## Confluence Chaining (Advanced)
-You can combine multiple strategies using two operators:
-1.  **Simultaneous (`+`)**: Both conditions must happen on the exact same candle.
-2.  **Sequential (`->`)**: The first condition happens, then the next must happen within **5 candles** (configurable in `backtest.py`).
+You can combine multiple strategies using two methods:
+1.  **Simultaneous (`+`)**: Both conditions must happen on the exact same candle. Put these in the same quoted argument.
+2.  **Sequential (Space)**: Use spaces between separate quoted arguments. The first happens, then the next must happen within **5 candles** (configurable `PROXIMITY_LIMIT` in `backtest.py`).
 
 ### Directional Rules
 The first item in the chain establishes the "Root Direction" (e.g. Bullish).
@@ -30,9 +30,10 @@ The first item in the chain establishes the "Root Direction" (e.g. Bullish).
 - **Open Mode**: Add `open` as a separate argument to make the entire chain direction-agnostic.
 
 ### Examples
-- **Combination**: `"engulfing + sentiment 10 20"` (Must meet both on one candle).
-- **Sequence**: `"engulfing -> fvg 3 25"` (Engulfing first, then FVG follows).
-- **Mixed**: `"engulfing + sentiment 10 20 -> fvg 3 25 1.5"` (Combined signal followed by FVG with 1.5 RRR).
+- **Combination**: `python backtest.py "engulfing + sentiment 10 20"` (Must meet both on one candle).
+- **Sequence**: `python backtest.py "engulfing" "fvg 3 25"` (Engulfing first, then FVG follows).
+- **Mixed**: `python backtest.py "engulfing + sentiment 10 20" "fvg 3 25 1.5" open` (Combined signal followed by FVG with 1.5 RRR, direction-agnostic).
+- **Rejection**: `python backtest.py "trend" "(sentiment 10 90)"` (Establish trend, then look for a sentiment rejection in the opposite direction).
 
 ### Date Range
 - **Default**: The last 30 days (for speed).
@@ -84,3 +85,44 @@ The system automatically detects missing data for the requested range/asset/time
     - **Algorithm**: Uses `tools/trading_utils.py:calculate_position_size`, which is "fee-aware"—it accounts for entry and exit fees when calculating the maximum quantity allowed for a given risk fraction.
 - **Fees**: Accounts for Maker (Limit TP) and Taker (Market/SL) fees as defined in `config.py`.
 - **Slippage**: Applies `EXPECTED_SLIPPAGE` from `config.py` to all taker-executed legs.
+
+## Strategy Reference
+
+### Engulfing (`candle/engulfing` & `candle/engulfing_total`)
+**How it works**:
+- Looks for "Engulfing" candles where the current candle's body swallows the previous candle.
+- Bullish: Green swallows Red. Bearish: Red swallows Green.
+- **TP**: Default +1% Net ROE.
+- **SL**: 1 tick beyond the extreme high/low of the engulfing candle.
+
+### Sentiment (`sentiment`)
+**How it works**:
+- Matches candles based on their shape.
+- **Body Percentage**: How much of the candle is the "body" (the block between Open and Close).
+- **Offset Percentage**: How close that body is to the High or Low.
+- **Command**: `python backtest.py sentiment [body_pct] [offset_pct]`
+- **Leeway**: Includes a 1% allowance (e.g., searching for 10% body finds 9-11%).
+
+### FVG (`fvg`)
+**How it works**:
+- Detects "Fair Value Gaps"—moments where price moves so fast it leaves a "hole" between the 1st and 3rd candle's wicks.
+- **Command**: `python backtest.py fvg [dir_count] [gap_pct] [rrr_override]`
+    - `dir_count`: How many of the 3 candles in the sequence must match the direction.
+    - `gap_pct`: How much of the 2nd candle's range the gap must cover (e.g. 30%).
+- **SL**: 1 tick shy of the gap's midpoint on the opposite side.
+- **TP**: Default +1% Net ROE, or a custom Reward-to-Risk (RRR) ratio.
+
+### Trend (`trend`)
+**How it works**:
+- A "Big Picture" strategy. It establishes if the market is trending up or down.
+- **Command**: `python backtest.py trend [fast_ma] [slow_ma] [rrr_override]`
+- **Buy**: Price is above 200 MA, 50 MA is above 200 MA, and recent swings are moving up.
+- **SL**: Placed at the most recent "valley" (for Longs) or "peak" (for Shorts).
+
+### Market Structure (`structure`)
+**How it works**:
+- A breakout strategy that triggers when price breaks through a previous ceiling or floor.
+- **BOS**: Continuation of the current trend.
+- **MSS**: Initial sign of a trend reversal.
+- **Command**: `python backtest.py structure [type] [rrr_override]`
+- **SL**: 1 tick beyond the level that was just broken.
