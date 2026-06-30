@@ -173,15 +173,23 @@ def find_strategy_file(query: str) -> Optional[str]:
     if len(matches) == 1:
         return matches[0]
     elif len(matches) > 1:
+        # Check if we are in an interactive terminal
+        if not sys.stdin.isatty():
+            print(f"\nError: Multiple strategies found for '{query}', but terminal is non-interactive.", file=sys.stderr)
+            for m in matches:
+                print(f"  - {m}", file=sys.stderr)
+            return None
+
         print(f"\nMultiple strategies found matching '{query}':")
         for i, m in enumerate(matches):
             print(f"{i+1}) {m}")
-        choice = input("Select a strategy (number) or press Enter to cancel: ")
         try:
+            choice = input("Select a strategy (number) or press Enter to cancel: ")
             idx = int(choice) - 1
             if 0 <= idx < len(matches):
                 return matches[idx]
-        except:
+        except (EOFError, ValueError, KeyboardInterrupt):
+            print("\nSelection cancelled.")
             pass
     return None
 
@@ -307,7 +315,7 @@ class ConfluenceChain:
 
 def parse_confluence_command(command: str):
     """
-    Parses a string like "A + B > C > D + E" or "A B > C" into segments.
+    Parses a string like "A + B -> C -> D + E" or "A B -> C" into segments.
     Also handles "~" and "open".
     """
     global DIRECTION_MODE
@@ -315,8 +323,8 @@ def parse_confluence_command(command: str):
         DIRECTION_MODE = "open"
         command = command[:-5].strip()
 
-    # Split by ">" for sequential
-    steps = [s.strip() for s in command.split(">")]
+    # Split by "->" for sequential (to avoid shell redirection conflict with ">")
+    steps = [s.strip() for s in command.split("->")]
 
     segments = []
     for step in steps:
@@ -562,7 +570,7 @@ async def main():
     if len(sys.argv) < 2:
         print("Usage: python backtest.py [strategy_query] [optional: START_DATE (YYYY-MM-DD)] [optional: END_DATE (YYYY-MM-DD)]")
         print("Examples:")
-        print('  python backtest.py "engulfing + sentiment 10 20 > fvg 3 25 1"')
+        print('  python backtest.py "engulfing + sentiment 10 20 -> fvg 3 25 1"')
         print('  python backtest.py "sentiment 10 30" 2026-05-01 2026-06-01')
         return
 

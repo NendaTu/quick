@@ -9,7 +9,7 @@ Basic command:
 python backtest.py "[strategy_query]" [start_date] [end_date]
 ```
 
-> **IMPORTANT**: Always wrap your strategy query in quotes (e.g. `"A > B"`) to prevent your terminal from misinterpreting the `>` symbol as a command to overwrite a file.
+> **IMPORTANT**: Always wrap your strategy query in quotes. While the system now uses `->` for sequences to minimize risk, shell environments may still misinterpret certain characters.
 
 ### Strategy Resolution
 The system recursively searches the `ta/` directory. It includes a "singular-to-plural" mapping for convenience:
@@ -20,7 +20,7 @@ The system recursively searches the `ta/` directory. It includes a "singular-to-
 ## Confluence Chaining (Advanced)
 You can combine multiple strategies using two operators:
 1.  **Simultaneous (`+`)**: Both conditions must happen on the exact same candle.
-2.  **Sequential (`>`)**: The first condition happens, then the next must happen within **5 candles** (configurable in `backtest.py`).
+2.  **Sequential (`->`)**: The first condition happens, then the next must happen within **5 candles** (configurable in `backtest.py`).
 
 ### Directional Rules
 - **Strict (Default)**: All items in the chain must point in the same direction (e.g., all Bullish).
@@ -29,8 +29,8 @@ You can combine multiple strategies using two operators:
 
 ### Examples
 - **Combination**: `"engulfing + sentiment 10 20"` (Must meet both on one candle).
-- **Sequence**: `"engulfing > fvg 3 25"` (Engulfing first, then FVG follows).
-- **Mixed**: `"engulfing + sentiment 10 20 > fvg 3 25 1.5"` (Combined signal followed by FVG with 1.5 RRR).
+- **Sequence**: `"engulfing -> fvg 3 25"` (Engulfing first, then FVG follows).
+- **Mixed**: `"engulfing + sentiment 10 20 -> fvg 3 25 1.5"` (Combined signal followed by FVG with 1.5 RRR).
 
 ### Date Range
 - **Default**: The last 30 days (for speed).

@@ -50,6 +50,9 @@ python backtest.py sentiment 10 30
 
 # Backtest with a specific date range
 python backtest.py candle/engulfing_total 2026-05-01 2026-06-01
+
+# Advanced: Confluence Chaining (use -> for sequences)
+python backtest.py "candle/engulfing -> fvg 3 25"
 ```
 
 The system will automatically download missing historical data and save it to the shared database.
