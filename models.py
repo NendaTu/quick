@@ -471,6 +471,7 @@ class LearningModel:
 
         qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
         if qty <= 0:
+            log.debug(f"REJECT {symbol}: Position size rounded to zero at precision {vol_place}")
             return None
 
         entry = round(entry, price_place)

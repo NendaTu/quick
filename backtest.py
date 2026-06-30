@@ -278,7 +278,7 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
 
                 # Calculate ROE for this trade (using 20x leverage as baseline for comparison)
                 margin = (open_pos["qty"] * entry) / 20
-                trade_roe = (net_pnl / margin) * 100
+                trade_roe = (net_pnl / margin) * 100 if margin > 0 else 0
                 total_roe += trade_roe
 
                 equity += net_pnl
@@ -317,6 +317,11 @@ async def run_backtest(strategy, db: Database, client: BitGetClient, asset: str,
                     if qty > 0:
                         # Apply precision
                         qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
+
+                        # Re-check qty after precision (might have become 0)
+                        if qty <= 0:
+                            progress.update(1)
+                            continue
 
                         # Apply slippage on entry if taker
                         entry_price = signal["entry_price"]
