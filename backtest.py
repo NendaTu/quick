@@ -194,10 +194,11 @@ def find_strategy_file(query: str) -> Optional[str]:
     return None
 
 class StrategyWrapper:
-    def __init__(self, path: str, params: List[str] = None, ignore_direction: bool = False):
+    def __init__(self, path: str, params: List[str] = None, ignore_direction: bool = False, is_flipped: bool = False):
         self.path = path
         self.params = params or []
         self.ignore_direction = ignore_direction
+        self.is_flipped = is_flipped
         self.module = self._load_module(path)
 
     def _load_module(self, path):
@@ -222,13 +223,13 @@ class ConfluenceChain:
         self.segments = segments
         self.current_segment_idx = 0
         self.proximity_timer = 0
-        self.last_direction = None
+        self.root_direction = None # Establish by the first segment
         self.chain_active = False
 
     def reset(self):
         self.current_segment_idx = 0
         self.proximity_timer = 0
-        self.last_direction = None
+        self.root_direction = None
         self.chain_active = False
 
     def check(self, ohlcv, tf):
@@ -260,28 +261,34 @@ class ConfluenceChain:
 
         # 2. Handle Segment Result
         if all_match:
-            # Check directional consistency with previous segments
-            if self.current_segment_idx > 0 and DIRECTION_MODE == "strict" and self.last_direction and direction != self.last_direction:
-                # If we were waiting for the next segment but got a signal in the wrong direction,
-                # we don't necessarily reset, but this signal doesn't count.
-                # However, if it's the SAME segment repeating, handle it:
-                pass
+            # establish root direction on first match
+            if self.current_segment_idx == 0:
+                target_direction = direction
+            else:
+                # Determine target direction based on root
+                # By default (strict), we match root.
+                target_direction = self.root_direction
 
-            # If it's the first segment or we are strictly matching direction
+                # Check if any item in this segment is flipped
+                # (For simultaneous groups, they should ideally all be flipped or none,
+                # but we'll respect the first item's flip state for the group)
+                if current_segment[0].is_flipped:
+                    target_direction = "sell" if self.root_direction == "buy" else "buy"
+                    # log.debug(f"Segment {self.current_segment_idx} Flipped: target={target_direction} (root={self.root_direction})")
+
             valid_transition = True
-            if self.current_segment_idx > 0 and DIRECTION_MODE == "strict" and self.last_direction:
+            if DIRECTION_MODE == "strict":
                 # Check if this segment's wrappers allow ignoring direction
-                # For simplicity, if ANY in segment follows direction, we check it
-                should_check = any(not s.ignore_direction for s in current_segment)
-                if should_check and direction != self.last_direction:
+                should_match = any(not s.ignore_direction for s in current_segment)
+                if should_match and direction != target_direction:
                     valid_transition = False
 
             if valid_transition:
                 # Progress the chain
                 if self.current_segment_idx == 0:
                     self.chain_active = True
+                    self.root_direction = direction
 
-                self.last_direction = direction
                 self.proximity_timer = PROXIMITY_LIMIT
 
                 # If this was the last segment, return the result
@@ -302,7 +309,7 @@ class ConfluenceChain:
                 if all(r is not None for r in first_results):
                     # Check direction for repeat reset
                     first_dir = first_results[0]["side"]
-                    if DIRECTION_MODE == "open" or first_dir == self.last_direction:
+                    if DIRECTION_MODE == "open" or first_dir == self.root_direction:
                         self.proximity_timer = PROXIMITY_LIMIT
                         # Also reset to waiting for segment 1 (index 1)
                         self.current_segment_idx = 1
@@ -340,6 +347,11 @@ def parse_confluence_command(command: str):
                 ignore_dir = True
                 p = p[:-1].strip()
 
+            is_flipped = False
+            if p.startswith("(") and p.endswith(")"):
+                is_flipped = True
+                p = p[1:-1].strip()
+
             # Resolution logic
             # Extract query and params (space separated)
             bits = p.split()
@@ -350,7 +362,7 @@ def parse_confluence_command(command: str):
             if not strat_path:
                 raise ValueError(f"Strategy {query} not found")
 
-            wrappers.append(StrategyWrapper(strat_path, params=params, ignore_direction=ignore_dir))
+            wrappers.append(StrategyWrapper(strat_path, params=params, ignore_direction=ignore_dir, is_flipped=is_flipped))
 
         segments.append(wrappers)
 
@@ -571,6 +583,7 @@ async def main():
         print("Usage: python backtest.py [strategy_query] [optional: START_DATE (YYYY-MM-DD)] [optional: END_DATE (YYYY-MM-DD)]")
         print("Examples:")
         print('  python backtest.py "engulfing + sentiment 10 20 -> fvg 3 25 1"')
+        print('  python backtest.py "engulfing" "(sentiment 10 90)"')
         print('  python backtest.py "sentiment 10 30" 2026-05-01 2026-06-01')
         return
 

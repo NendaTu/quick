@@ -23,9 +23,11 @@ You can combine multiple strategies using two operators:
 2.  **Sequential (`->`)**: The first condition happens, then the next must happen within **5 candles** (configurable in `backtest.py`).
 
 ### Directional Rules
-- **Strict (Default)**: All items in the chain must point in the same direction (e.g., all Bullish).
-- **Ignore Direction (`~`)**: Add a tilde to an item (e.g. `fvg~`) to allow it to trigger in either direction regardless of the chain.
-- **Open (`open`)**: Add "open" to the end of the query to allow the entire chain to be direction-agnostic.
+The first item in the chain establishes the "Root Direction" (e.g. Bullish).
+- **Strict (Default)**: All subsequent items must point in the same Root Direction.
+- **Ignore Direction (`~`)**: Add a tilde (e.g. `"fvg~"`) to allow that specific item to trigger in either direction.
+- **Flip Direction (`()`)**: Wrap an item in parentheses (e.g. `"(sentiment 10 30)"`) to require it to be in the **opposite** direction of the Root Direction.
+- **Open Mode**: Add `open` as a separate argument to make the entire chain direction-agnostic.
 
 ### Examples
 - **Combination**: `"engulfing + sentiment 10 20"` (Must meet both on one candle).
