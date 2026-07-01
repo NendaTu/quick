@@ -35,6 +35,7 @@ The first item in the chain establishes the "Root Direction" (e.g. Bullish).
 - **Mixed**: `python backtest.py "engulfing + sentiment 10 20" "fvg 3 25 1.5" open` (Combined signal followed by FVG with 1.5 RRR, direction-agnostic).
 - **Rejection**: `python backtest.py "trend" "(sentiment 10 90)"` (Establish trend, then look for a sentiment rejection in the opposite direction).
 - **Session Filter**: `python backtest.py "sessions london true + engulfing"` (Only trade engulfing candles during the London Killzone).
+- **Trend Filter**: `python backtest.py "adx 25 + ema 20 50 + supertrend"` (Only enter Supertrend flips if the trend is strong and EMAs are aligned).
 
 ### Date Range
 - **Default**: The last 30 days (for speed).
@@ -127,6 +128,38 @@ The system automatically detects missing data for the requested range/asset/time
 - **MSS**: Initial sign of a trend reversal.
 - **Command**: `python backtest.py structure [type] [rrr_override]`
 - **SL**: 1 tick beyond the level that was just broken.
+
+### MACD (`macd`)
+**How it works**:
+- A momentum strategy using the Histogram Zero-Cross.
+- **Buy**: Histogram turns positive (MACD crosses above Signal).
+- **Sell**: Histogram turns negative (MACD crosses below Signal).
+- **SL**: Recent local valley or peak.
+
+### Supertrend (`supertrend`)
+**How it works**:
+- A trend-following strategy using a trailing band.
+- **Command**: `python backtest.py supertrend [period] [multiplier] [rrr_override]`
+- **SL**: Placed at the next local swing point for extra buffer.
+
+### Liquidity Sweeps (`sweep`)
+**How it works**:
+- Institutional reversal strategy.
+- **Buy**: Sell-side sweep (wick below low, close above).
+- **Sell**: Buy-side sweep (wick above high, close below).
+- **SL**: 1 tick beyond the reversal wick.
+
+### EMA Alignment (`ema`)
+**How it works**:
+- A trend filter (`+`) to ensure short-term and long-term averages are aligned.
+- **Command**: `python backtest.py "ema 20 50 + [trigger]"`
+- **Buy**: 20 EMA > 50 EMA. **Sell**: 20 EMA < 50 EMA.
+
+### ADX Trend Strength (`adx`)
+**How it works**:
+- A direction-agnostic filter (`+`) to ensure the market is strongly moving.
+- **Command**: `python backtest.py "adx 25 + [trigger]"`
+- **Both**: Trigger only if ADX > 25.
 
 ### RSI (`rsi`)
 **How it works**:

@@ -1,13 +1,94 @@
 """
-Moving Average Convergence Divergence (MACD) Indicator
+Moving Average Convergence Divergence (MACD) Strategy
+
+How it works:
+1. This is a "Momentum" strategy. It measures the relationship between two moving averages
+   of a security’s price.
+2. It consists of the MACD Line, a Signal Line, and a Histogram (the difference between them).
+3. Signal Logic (Histogram Zero-Cross):
+   - Bullish (Buy): When the MACD line crosses ABOVE the Signal line (Histogram turns Positive).
+   - Bearish (Sell): When the MACD line crosses BELOW the Signal line (Histogram turns Negative).
+4. This "Zero-Cross" method is widely considered by elite traders to be more reliable for
+   catching the meat of a move than simple line crossovers.
+5. Stop Loss (SL): Placed at the recent local valley (for Longs) or peak (for Shorts).
+6. Take Profit (TP): Targets a specific net profit (default +1% ROE).
+7. Backtesting command: `python backtest.py macd [fast] [slow] [signal] [rrr_override]`
 """
-from typing import List, Tuple
+
+from typing import List, Tuple, Dict, Optional
+from ta.patterns.swings import detect_swings
+from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr
+import config
 
 # --- Configuration ---
 ENABLED = True
 FAST = 12
 SLOW = 26
 SIGNAL = 9
+
+# Default Strategy Settings
+DEFAULT_TARGET_ROE = 0.01
+
+def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+    """
+    Backtesting entry point for MACD strategy.
+    """
+    if len(ohlcv) < SLOW + 2:
+        return None
+
+    # Parse Parameters
+    fast = int(params[0]) if params and len(params) > 0 else FAST
+    slow = int(params[1]) if params and len(params) > 1 else SLOW
+    sig_p = int(params[2]) if params and len(params) > 2 else SIGNAL
+    rrr_override = float(params[3]) if params and len(params) > 3 else None
+
+    # 1. Calculate MACD for current and previous candle
+    prices = [c['c'] for c in ohlcv]
+    _, _, current_hist = compute_macd(prices, fast, slow, sig_p)
+    _, _, prev_hist = compute_macd(prices[:-1], fast, slow, sig_p)
+
+    entry_side = None
+
+    # 2. Bullish Signal: Histogram turns positive
+    if prev_hist <= 0 and current_hist > 0:
+        entry_side = "buy"
+    # Bearish Signal: Histogram turns negative
+    elif prev_hist >= 0 and current_hist < 0:
+        entry_side = "sell"
+
+    if not entry_side:
+        return None
+
+    # 3. Entry/Exit Calculations
+    entry = ohlcv[-1]['c']
+    swings = detect_swings(ohlcv[-50:], strength=2)
+
+    if entry_side == 'buy':
+        if not swings['lows']: return None
+        stop = swings['lows'][-1]['price']
+    else: # sell
+        if not swings['highs']: return None
+        stop = swings['highs'][-1]['price']
+
+    if stop == entry: return None
+
+    entry_maker = (config.ENTRY_ORDER_TYPE == "limit")
+    tp_maker = (config.TP_ORDER_TYPE == "limit")
+
+    if rrr_override is not None:
+        target_roe = calculate_target_roe_for_rrr(rrr_override, entry, stop, 20, entry_maker=entry_maker)
+    else:
+        target_roe = DEFAULT_TARGET_ROE
+
+    tp = calculate_tp_for_roe(entry, target_roe, entry_side, 20, entry_maker=entry_maker, exit_maker=tp_maker)
+
+    return {
+        "side": entry_side,
+        "entry_price": entry,
+        "stop_price": stop,
+        "exit_price": tp,
+        "metadata": {"macd_hist": current_hist}
+    }
 
 def compute_macd(prices: List[float], fast: int = None, slow: int = None, signal: int = None) -> Tuple[float, float, float]:
     """Optimized MACD calculation."""

@@ -1,9 +1,20 @@
 """
-Average Directional Index (ADX)
+Average Directional Index (ADX) Strategy (Filter)
 
-Measures trend strength regardless of direction.
+How it works:
+1. This is a "Trend Strength" filter. It doesn't tell you the direction (Up or Down),
+   but it tells you how *strongly* the market is moving in that direction.
+2. ADX values range from 0 to 100:
+   - Below 25: The market is "Ranging" or "Flat" (No clear trend).
+   - Above 25: The market is "Trending" (Strong move in progress).
+3. Signal Logic:
+   - Returns "both" (allowing any direction) if the ADX is above the threshold.
+   - Blocks signals if the market is flat (ADX below threshold).
+4. Backtesting command: `python backtest.py "adx [threshold] + [trigger]"`
+   - Example: `"adx 25 + supertrend"`
 """
-from typing import List, Tuple
+
+from typing import List, Tuple, Dict, Optional
 from ta.indicators.atr import compute_atr
 
 # --- Configuration ---
@@ -12,6 +23,33 @@ PERIOD = 14
 
 # Threshold above which we consider the market strongly trending.
 STRONG_TREND_THRESHOLD = 25.0
+
+def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+    """
+    Backtesting entry point for ADX Trend Strength filter.
+    """
+    if len(ohlcv) < PERIOD * 2 + 5:
+        return None
+
+    # Parse Parameters
+    threshold = float(params[0]) if params and len(params) > 0 else STRONG_TREND_THRESHOLD
+
+    h = [c['h'] for c in ohlcv]
+    l = [c['l'] for c in ohlcv]
+    c = [c['c'] for c in ohlcv]
+
+    adx_val = compute_adx(h, l, c, PERIOD)
+
+    if adx_val < threshold:
+        return None
+
+    return {
+        "side": "both",
+        "entry_price": ohlcv[-1]['c'],
+        "stop_price": 0,
+        "exit_price": 0,
+        "metadata": {"adx": adx_val}
+    }
 
 def compute_adx(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
     """
