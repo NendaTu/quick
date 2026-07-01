@@ -34,6 +34,7 @@ The first item in the chain establishes the "Root Direction" (e.g. Bullish).
 - **Sequence**: `python backtest.py "engulfing" "fvg 3 25"` (Engulfing first, then FVG follows).
 - **Mixed**: `python backtest.py "engulfing + sentiment 10 20" "fvg 3 25 1.5" open` (Combined signal followed by FVG with 1.5 RRR, direction-agnostic).
 - **Rejection**: `python backtest.py "trend" "(sentiment 10 90)"` (Establish trend, then look for a sentiment rejection in the opposite direction).
+- **Session Filter**: `python backtest.py "sessions london true + engulfing"` (Only trade engulfing candles during the London Killzone).
 
 ### Date Range
 - **Default**: The last 30 days (for speed).
@@ -126,3 +127,26 @@ The system automatically detects missing data for the requested range/asset/time
 - **MSS**: Initial sign of a trend reversal.
 - **Command**: `python backtest.py structure [type] [rrr_override]`
 - **SL**: 1 tick beyond the level that was just broken.
+
+### RSI (`rsi`)
+**How it works**:
+- A "Mean Reversion" strategy. It identifies "exhausted" moves that are likely to snap back.
+- **Command**: `python backtest.py rsi [oversold] [overbought] [rrr_override]`
+- **Buy**: RSI was below 30, but has now closed back above it.
+- **Sell**: RSI was above 70, but has now closed back below it.
+- **SL**: Placed at the recent local valley (Long) or peak (Short).
+
+### Order Blocks (`ob`)
+**How it works**:
+- Institutional strategy. Targets areas where major buying/selling occurred before a fast impulse.
+- **Command**: `python backtest.py ob [rrr_override]`
+- **Logic**: Triggers when price touches an active (unmitigated) Order Block.
+- **SL**: Placed beyond the local swing extreme to protect against common liquidity "sweeps."
+
+### Trading Sessions (`sessions`)
+**How it works**:
+- A "Filter" strategy used for confluence (`+`). It restricts trading to specific global hours.
+- **Command**: `python backtest.py sessions [name] [is_killzone]`
+    - `name`: `asia`, `london`, or `ny`.
+    - `is_killzone`: `true` to only trade the first 2 hours of the session.
+- **Example**: `"sessions ny true + engulfing"`

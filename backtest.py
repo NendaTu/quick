@@ -250,6 +250,9 @@ class ConfluenceChain:
                 break
 
             sig_dir = res["side"]
+            if sig_dir == "both":
+                continue # Filter strategy, matches any direction
+
             if not current_segment[i].ignore_direction and DIRECTION_MODE == "strict":
                 if direction is None:
                     direction = sig_dir
@@ -287,6 +290,9 @@ class ConfluenceChain:
                 # Progress the chain
                 if self.current_segment_idx == 0:
                     self.chain_active = True
+
+                # Establish or maintain root direction from directional signals
+                if direction is not None and self.root_direction is None:
                     self.root_direction = direction
 
                 self.proximity_timer = PROXIMITY_LIMIT
