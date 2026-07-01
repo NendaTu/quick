@@ -1,20 +1,104 @@
 """
-Support and Resistance (S/R) Detection
+Support and Resistance (S/R) Strategy
 
-Identifies horizontal price levels where buying or selling interest is concentrated.
-
-Identification:
-- Swing Highs/Lows: Foundation of S/R levels.
-- Multiple Touches: Confirmed levels tested at least twice.
-- Flipped Levels: Broken resistance becomes support (and vice versa).
+How it works:
+1. This strategy identifies horizontal "Floors" (Support) and "Ceilings" (Resistance)
+   where the price has bounced multiple times in the past.
+2. It operates in two modes:
+   - **Bounce (Default)**: A Mean Reversion approach. Buy when price touches a floor;
+     Sell when price touches a ceiling.
+   - **Breakout**: A Momentum approach. Buy when price closes ABOVE a ceiling;
+     Sell when price closes BELOW a floor.
+3. Signal Logic:
+   - Bounce: Triggered when the current candle range overlaps an S/R level.
+   - Breakout: Triggered when the current candle close crosses an S/R level.
+4. Stop Loss (SL): Placed 1 tick beyond the S/R level being traded.
+5. Take Profit (TP): Targets a specific net profit (default +1% ROE).
+6. Backtesting command: `python backtest.py sr [mode] [rrr_override]`
+   - [mode]: 'bounce' or 'breakout'.
 """
 
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
+from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr
+import config
 
 # --- Internal Configuration ---
 ENABLED = True
 TOLERANCE_PCT = 0.002 # 0.2% price tolerance for "touches"
+
+# Default Strategy Settings
+DEFAULT_TARGET_ROE = 0.01
+SL_TICK_BUFFER = 0.0001
+
+def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+    """
+    Backtesting entry point for Support/Resistance strategy.
+    """
+    if len(ohlcv) < 50:
+        return None
+
+    # Parse Parameters
+    mode = params[0].lower() if params and len(params) > 0 else 'bounce'
+    rrr_override = float(params[1]) if params and len(params) > 1 else None
+
+    # 1. Identify Levels
+    sr_info = identify_sr(ohlcv)
+    res = sr_info['sr_resistance']
+    sup = sr_info['sr_support']
+
+    curr = ohlcv[-1]
+    entry_side = None
+    target_level = None
+
+    # 2. Strategy Logic
+    if mode == 'bounce':
+        # Overlaps support but stays above
+        if curr['l'] <= sup and curr['c'] > sup:
+            entry_side = "buy"
+            target_level = sup
+        # Overlaps resistance but stays below
+        elif curr['h'] >= res and curr['c'] < res:
+            entry_side = "sell"
+            target_level = res
+    else: # breakout
+        # Closes above resistance
+        if curr['c'] > res:
+            entry_side = "buy"
+            target_level = res
+        # Closes below support
+        elif curr['c'] < sup:
+            entry_side = "sell"
+            target_level = sup
+
+    if not entry_side: return None
+
+    # 3. Entry/Exit Calculations
+    entry = curr['c']
+    if entry_side == 'buy':
+        stop = target_level * (1 - SL_TICK_BUFFER)
+    else:
+        stop = target_level * (1 + SL_TICK_BUFFER)
+
+    if stop == entry: return None
+
+    entry_maker = (config.ENTRY_ORDER_TYPE == "limit")
+    tp_maker = (config.TP_ORDER_TYPE == "limit")
+
+    if rrr_override is not None:
+        target_roe = calculate_target_roe_for_rrr(rrr_override, entry, stop, 20, entry_maker=entry_maker)
+    else:
+        target_roe = DEFAULT_TARGET_ROE
+
+    tp = calculate_tp_for_roe(entry, target_roe, entry_side, 20, entry_maker=entry_maker, exit_maker=tp_maker)
+
+    return {
+        "side": entry_side,
+        "entry_price": entry,
+        "stop_price": stop,
+        "exit_price": tp,
+        "metadata": {"mode": mode, "level": target_level}
+    }
 
 def identify_sr(ohlcv: List[dict]) -> Dict:
     """

@@ -9,11 +9,20 @@ log = logging.getLogger("scalper.database")
 class Database:
     def __init__(self, db_path="market_data.db"):
         self.db_path = db_path
+        self._conn = None
         self._init_db()
         self.write_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.worker_thread = threading.Thread(target=self._write_worker, daemon=True)
         self.worker_thread.start()
+
+    @property
+    def connection(self):
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path, timeout=30)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+        return self._conn
 
     def _init_db(self):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
@@ -163,60 +172,60 @@ class Database:
 
     def save_discovered_assets(self, assets_list):
         assets_str = ",".join(assets_list)
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            conn.execute("DELETE FROM discovered_assets")
-            conn.execute("INSERT INTO discovered_assets (timestamp, assets) VALUES (?, ?)", (time.time(), assets_str))
-            conn.commit()
+        conn = self.connection
+        conn.execute("DELETE FROM discovered_assets")
+        conn.execute("INSERT INTO discovered_assets (timestamp, assets) VALUES (?, ?)", (time.time(), assets_str))
+        conn.commit()
 
     def get_discovered_assets(self):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.execute("SELECT timestamp, assets FROM discovered_assets LIMIT 1")
-            row = cursor.fetchone()
-            if row:
-                return row[0], row[1].split(",")
+        cursor = self.connection.execute("SELECT timestamp, assets FROM discovered_assets LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            return row[0], row[1].split(",")
         return 0, []
 
     def get_recent_ticks(self, symbol, limit=1000):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            conn.execute("PRAGMA busy_timeout=10000")
-            cursor = conn.execute(
-                "SELECT timestamp, price, side, size FROM ticks WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?",
-                (symbol, limit)
-            )
-            return cursor.fetchall()[::-1]
+        cursor = self.connection.execute(
+            "SELECT timestamp, price, side, size FROM ticks WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?",
+            (symbol, limit)
+        )
+        return cursor.fetchall()[::-1]
 
     def get_recent_candles(self, symbol, timeframe, limit=500):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            conn.execute("PRAGMA busy_timeout=10000")
-            cursor = conn.execute("""
-                SELECT timestamp, open, high, l, close, volume
-                FROM (
-                    SELECT timestamp, open, high, low as l, close, volume
-                    FROM candles
-                    WHERE symbol = ? AND timeframe = ?
-                    ORDER BY timestamp DESC LIMIT ?
-                ) ORDER BY timestamp ASC
-            """, (symbol, timeframe, limit))
-            return cursor.fetchall()
+        cursor = self.connection.execute("""
+            SELECT timestamp, open, high, l, close, volume
+            FROM (
+                SELECT timestamp, open, high, low as l, close, volume
+                FROM candles
+                WHERE symbol = ? AND timeframe = ?
+                ORDER BY timestamp DESC LIMIT ?
+            ) ORDER BY timestamp ASC
+        """, (symbol, timeframe, limit))
+        return cursor.fetchall()
 
     def get_candle_range_stats(self, symbol, timeframe, start_ts, end_ts):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.execute("""
-                SELECT MIN(timestamp), MAX(timestamp), COUNT(*)
-                FROM candles
-                WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
-            """, (symbol, timeframe, start_ts, end_ts))
-            return cursor.fetchone()
+        cursor = self.connection.execute("""
+            SELECT MIN(timestamp), MAX(timestamp), COUNT(*)
+            FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+        """, (symbol, timeframe, start_ts, end_ts))
+        return cursor.fetchone()
 
     def get_candles_in_range(self, symbol, timeframe, start_ts, end_ts):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.execute("""
-                SELECT timestamp, open, high, low, close, volume
-                FROM candles
-                WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
-                ORDER BY timestamp ASC
-            """, (symbol, timeframe, start_ts, end_ts))
-            return cursor.fetchall()
+        cursor = self.connection.execute("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp ASC
+        """, (symbol, timeframe, start_ts, end_ts))
+        return cursor.fetchall()
+
+    def check_candle_exists(self, symbol, timeframe, timestamp):
+        cursor = self.connection.execute("""
+            SELECT 1 FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp = ?
+        """, (symbol, timeframe, timestamp))
+        return cursor.fetchone() is not None
 
     def purge_old_data(self, tick_retention_seconds=3600, candle_retention_days=7):
         self.write_queue.put(("purge", (tick_retention_seconds, candle_retention_days)))
@@ -228,3 +237,5 @@ class Database:
     def stop(self):
         self.stop_event.set()
         self.worker_thread.join()
+        if self._conn:
+            self._conn.close()

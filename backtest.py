@@ -85,26 +85,14 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
 
             while current_end > target_start_ms:
                 # [OPT-001] Check for existing data block to avoid redundant API calls
-                import sqlite3
-                with sqlite3.connect(db.db_path) as conn:
-                    # Check if we have the candle at current_end
-                    cursor = conn.execute("""
-                        SELECT timestamp FROM candles
-                        WHERE symbol = ? AND timeframe = ? AND timestamp = ?
-                    """, (asset, tf, current_end / 1000))
-                    if cursor.fetchone():
-                        # We have this candle. Now find the earliest candle in this continuous block.
-                        # We'll use a simpler heuristic: skip back 200 candles and check again.
-                        # If we have that too, we skip.
-                        jump_ms = tf_seconds[tf] * 200 * 1000
-                        cursor = conn.execute("""
-                            SELECT timestamp FROM candles
-                            WHERE symbol = ? AND timeframe = ? AND timestamp = ?
-                        """, (asset, tf, (current_end - jump_ms) / 1000))
-                        if cursor.fetchone():
-                            current_end -= jump_ms
-                            progress.update(200)
-                            continue
+                if db.check_candle_exists(asset, tf, current_end / 1000):
+                    # We have this candle. Now find the earliest candle in this continuous block.
+                    # We'll use a simpler heuristic: skip back 200 candles and check again.
+                    jump_ms = tf_seconds[tf] * 200 * 1000
+                    if db.check_candle_exists(asset, tf, (current_end - jump_ms) / 1000):
+                        current_end -= jump_ms
+                        progress.update(200)
+                        continue
 
                 candles = await client.request("GET", "/api/v2/mix/market/history-candles", params={
                     "symbol": asset,
@@ -602,24 +590,29 @@ async def main():
         print('  python backtest.py "sentiment 10 30" 2026-05-01 2026-06-01')
         return
 
-    query_cmd = sys.argv[1]
-
-    # Parse optional dates from the end of the argument list
-    for arg in sys.argv[2:]:
-        if "-" in arg and len(arg) == 10:
+    query_parts = []
+    for arg in sys.argv[1:]:
+        # Detect dates (YYYY-MM-DD)
+        if len(arg) == 10 and arg.count("-") == 2:
             try:
                 dt = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=pytz.UTC)
                 if START_DATE == DEFAULT_START_DATE:
                     START_DATE = dt
                 else:
                     END_DATE = dt
+                continue
             except ValueError:
                 pass
+        query_parts.append(arg)
 
-    # If no dates provided and not explicitly set to full range by user,
-    # we might want to default to 1 month for speed as per user suggestion,
-    # but the instructions said "defaults range is the June 1, 2022 to June 1, 2026".
-    # I will stick to the 4-year default but allow easy override.
+    if not query_parts:
+        print("Error: No strategy segments provided.")
+        return
+
+    # Join with -> if segments were passed as separate arguments
+    # This allows: python backtest.py "A + B" "C" -> A + B -> C
+    query_cmd = " -> ".join(query_parts)
+
     try:
         chain = parse_confluence_command(query_cmd)
     except Exception as e:

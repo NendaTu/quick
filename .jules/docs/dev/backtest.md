@@ -36,6 +36,7 @@ The first item in the chain establishes the "Root Direction" (e.g. Bullish).
 - **Rejection**: `python backtest.py "trend" "(sentiment 10 90)"` (Establish trend, then look for a sentiment rejection in the opposite direction).
 - **Session Filter**: `python backtest.py "sessions london true + engulfing"` (Only trade engulfing candles during the London Killzone).
 - **Trend Filter**: `python backtest.py "adx 25 + ema 20 50 + supertrend"` (Only enter Supertrend flips if the trend is strong and EMAs are aligned).
+- **Complex Chain**: `python backtest.py "pattern/trend" "structure mss" "(fvg 3 25)"` (Wait for an HTF trend, then a market shift, then enter on a pullback gap).
 
 ### Date Range
 - **Default**: The last 30 days (for speed).
@@ -128,6 +129,37 @@ The system automatically detects missing data for the requested range/asset/time
 - **MSS**: Initial sign of a trend reversal.
 - **Command**: `python backtest.py structure [type] [rrr_override]`
 - **SL**: 1 tick beyond the level that was just broken.
+
+### Directional Trend (`drt`)
+**How it works**:
+- A sophisticated linear regression gauge that measures trend slope.
+- **Command**: `python backtest.py drt [threshold] [period] [rrr_override]`
+- **Buy**: DRT > 0.6. **Sell**: DRT < 0.4.
+- **SL**: Placed at the recent local valley or peak.
+
+### Institutional Delivery (`idm`)
+**How it works**:
+- High-probability ICT strategy that trades sweeps during London/NY open.
+- **Command**: `python backtest.py idm [rrr_override]`
+- **TP**: Automatically targets the **opposite liquidity pool** (nearest major High for Longs, Low for Shorts).
+- **SL**: 1 tick beyond the sweep wick.
+
+### Support & Resistance (`sr`)
+**How it works**:
+- Trades horizontal "Floors" (Support) and "Ceilings" (Resistance).
+- **Command**: `python backtest.py sr [mode] [rrr_override]`
+    - `mode`: `bounce` (Default) or `breakout`.
+- **Bounce Mode**: A "Mean Reversion" strategy. It assumes price will respect the level.
+    - *Buy* when price touches a Floor; *Sell* when price touches a Ceiling.
+- **Breakout Mode**: A "Momentum" strategy. It assumes price will continue once it breaks through.
+    - *Buy* when price closes ABOVE a Ceiling; *Sell* when price closes BELOW a Floor.
+- **SL**: 1 tick beyond the level being traded.
+
+### Volatility Filter (`atr`)
+**How it works**:
+- A direction-agnostic filter (`+`) to ensure the market is active.
+- **Command**: `python backtest.py "atr [threshold_pct] + [trigger]"`
+- **Both**: Trigger only if volatility > threshold % of price.
 
 ### MACD (`macd`)
 **How it works**:
