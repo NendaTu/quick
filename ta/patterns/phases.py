@@ -61,3 +61,34 @@ def identify_phases(ohlcv: List[dict]) -> Dict:
         'market_phase': phase,
         'is_consolidating': phase in ['accumulation', 'distribution']
     }
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for Phases.
+    Triggers LONG on Manipulation, SHORT on Distribution.
+    """
+    phase_data = identify_phases(ohlcv)
+    phase = phase_data.get('market_phase')
+
+    if phase not in ['manipulation', 'distribution']:
+        return None
+
+    price = ohlcv[-1]['c']
+    atr = compute_atr([c['h'] for c in ohlcv], [c['l'] for c in ohlcv], [c['c'] for c in ohlcv])
+    if atr == 0: atr = price * 0.01
+
+    if phase == 'manipulation':
+        return {
+            "side": "long",
+            "entry_price": price,
+            "stop_price": price - atr,
+            "exit_price": price + (atr * 2)
+        }
+    if phase == 'distribution':
+        return {
+            "side": "short",
+            "entry_price": price,
+            "stop_price": price + atr,
+            "exit_price": price - (atr * 2)
+        }
+    return None

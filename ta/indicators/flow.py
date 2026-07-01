@@ -29,3 +29,11 @@ def compute_trade_delta(trades: List[Dict]) -> float:
         return 0.0
 
     return (buy_vol - sell_vol) / total_vol
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for Flow (aggregated trades).
+    Note: Standard OHLCV does not contain trade-level delta.
+    This remains as a placeholder for MTF/Live integration.
+    """
+    return None

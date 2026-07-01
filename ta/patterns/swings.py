@@ -50,3 +50,41 @@ def detect_swings(ohlcv: List[dict], strength: int = 2) -> Dict[str, List[dict]]
         'highs': swing_highs,
         'lows': swing_lows
     }
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for Swings.
+    Triggers LONG on Swing Low, SHORT on Swing High.
+    """
+    swings = detect_swings(ohlcv, strength=STRENGTH)
+    if not swings['highs'] and not swings['lows']:
+        return None
+
+    last_idx = len(ohlcv) - 1
+    # Check if a swing was confirmed at current index - STRENGTH
+    is_sh = any(s['index'] == (last_idx - STRENGTH) for s in swings['highs'])
+    is_sl = any(s['index'] == (last_idx - STRENGTH) for s in swings['lows'])
+
+    if not is_sh and not is_sl:
+        return None
+
+    price = ohlcv[-1]['c']
+    # Use a dummy move for SL/TP
+    move = (ohlcv[-1]['h'] - ohlcv[-1]['l']) * 2
+    if move == 0: move = price * 0.005
+
+    if is_sl:
+        return {
+            "side": "long",
+            "entry_price": price,
+            "stop_price": price - move,
+            "exit_price": price + (move * 2)
+        }
+    if is_sh:
+        return {
+            "side": "short",
+            "entry_price": price,
+            "stop_price": price + move,
+            "exit_price": price - (move * 2)
+        }
+    return None

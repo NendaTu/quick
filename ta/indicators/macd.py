@@ -29,7 +29,7 @@ SIGNAL = 9
 # Default Strategy Settings
 DEFAULT_TARGET_ROE = 0.01
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for MACD strategy.
     """

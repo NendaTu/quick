@@ -36,3 +36,31 @@ def identify_poc(ohlcv: List[dict], lookback: int = None) -> float:
 
     poc = max(profile, key=profile.get)
     return poc
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for Volume Profile.
+    Triggers LONG on POC touch from below (support), SHORT on touch from above.
+    """
+    poc = identify_poc(ohlcv)
+    if not poc: return None
+
+    price = ohlcv[-1]['c']
+    prev_price = ohlcv[-2]['c'] if len(ohlcv) > 1 else price
+
+    # Simple mean reversion towards POC
+    if prev_price < poc and ohlcv[-1]['h'] >= poc:
+        return {
+            "side": "long",
+            "entry_price": price,
+            "stop_price": ohlcv[-1]['l'] * 0.999,
+            "exit_price": price * 1.01
+        }
+    if prev_price > poc and ohlcv[-1]['l'] <= poc:
+        return {
+            "side": "short",
+            "entry_price": price,
+            "stop_price": ohlcv[-1]['h'] * 1.001,
+            "exit_price": price * 0.99
+        }
+    return None

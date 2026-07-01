@@ -32,7 +32,7 @@ SESSIONS = {
 # Default Strategy Settings
 KILLZONE_DURATION = 2 # Hours
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for Sessions filter.
     """

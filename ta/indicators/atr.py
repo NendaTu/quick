@@ -42,7 +42,7 @@ REDUCED_RISK_FRACTION = 0.5
 # Default Strategy Settings
 DEFAULT_THRESHOLD_PCT = 0.15 # 0.15%
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for ATR Volatility filter.
     """

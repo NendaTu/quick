@@ -38,7 +38,7 @@ STRENGTH_MIN = 0.1
 DEFAULT_THRESHOLD_OFFSET = 0.1 # 0.6 / 0.4
 DEFAULT_TARGET_ROE = 0.01
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for DRT strategy.
     """

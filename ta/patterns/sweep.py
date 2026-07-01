@@ -31,7 +31,7 @@ SWEEP_MARGIN_PCT = 0.002
 DEFAULT_TARGET_ROE = 0.01
 SL_TICK_BUFFER = 0.0001
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for Liquidity Sweep strategy.
     """

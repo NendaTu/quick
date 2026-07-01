@@ -24,7 +24,7 @@ PERIOD = 14
 # Threshold above which we consider the market strongly trending.
 STRONG_TREND_THRESHOLD = 25.0
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for ADX Trend Strength filter.
     """

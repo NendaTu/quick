@@ -7,7 +7,7 @@ Files should implement the get_signal() function.
 
 from typing import List, Dict, Optional, Tuple
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, timeframe, params=None, **kwargs) -> Optional[Dict]:
     """
     Standard interface for TA strategies.
 

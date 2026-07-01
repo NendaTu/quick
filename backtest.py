@@ -394,8 +394,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     # Side-based stats
     side_stats = {
-        "buy": {"trades": 0, "wins": 0, "pnl": 0.0},
-        "sell": {"trades": 0, "wins": 0, "pnl": 0.0}
+        "long": {"trades": 0, "wins": 0, "pnl": 0.0},
+        "short": {"trades": 0, "wins": 0, "pnl": 0.0}
     }
 
     open_pos = None
@@ -501,12 +501,16 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                         # Apply slippage on entry if taker
                         entry_price = signal["entry_price"]
+                        side = signal["side"]
+                        if side == "buy": side = "long"
+                        if side == "sell": side = "short"
+
                         if not entry_maker:
-                            entry_price *= (1 + config.EXPECTED_SLIPPAGE if signal["side"] == "buy" else 1 - config.EXPECTED_SLIPPAGE)
+                            entry_price *= (1 + config.EXPECTED_SLIPPAGE if side == "long" else 1 - config.EXPECTED_SLIPPAGE)
                         entry_price = round(entry_price, price_place)
 
                         open_pos = {
-                            "side": signal["side"],
+                            "side": side,
                             "qty": qty,
                             "entry_price": entry_price,
                             "stop_price": signal["stop_price"],
@@ -551,21 +555,21 @@ def print_results(results):
     for r in results:
         if not r: continue
         ss = r['side_stats']
-        win_l = (ss['buy']['wins'] / ss['buy']['trades'] * 100) if ss['buy']['trades'] > 0 else 0
-        win_s = (ss['sell']['wins'] / ss['sell']['trades'] * 100) if ss['sell']['trades'] > 0 else 0
+        win_l = (ss['long']['wins'] / ss['long']['trades'] * 100) if ss['long']['trades'] > 0 else 0
+        win_s = (ss['short']['wins'] / ss['short']['trades'] * 100) if ss['short']['trades'] > 0 else 0
         win_ls = f"{win_l:.0f}%/{win_s:.0f}%"
-        pnl_ls = f"{ss['buy']['pnl']:.1f}/{ss['sell']['pnl']:.1f}"
+        pnl_ls = f"{ss['long']['pnl']:.1f}/{ss['short']['pnl']:.1f}"
 
         print(f"{date_range:<22} | {r['asset']:<10} | {r['tf']:<5} | {win_ls:>12} | {pnl_ls:>15} | {r['roe']:>8.1f}% | {r['pnl']:>10.2f} | {r['roi']:>7.1f}% | {r['trades']:>8} | {r['equity']:>12.2f}")
 
         total_pnl += r['pnl']
         total_trades += r['trades']
-        total_l_wins += ss['buy']['wins']
-        total_l_trades += ss['buy']['trades']
-        total_l_pnl += ss['buy']['pnl']
-        total_s_wins += ss['sell']['wins']
-        total_s_trades += ss['sell']['trades']
-        total_s_pnl += ss['sell']['pnl']
+        total_l_wins += ss['long']['wins']
+        total_l_trades += ss['long']['trades']
+        total_l_pnl += ss['long']['pnl']
+        total_s_wins += ss['short']['wins']
+        total_s_trades += ss['short']['trades']
+        total_s_pnl += ss['short']['pnl']
 
     if total_trades > 0:
         print("-" * 165)
@@ -582,6 +586,10 @@ def print_results(results):
 async def main():
     global START_DATE, END_DATE
 
+    # Ensure they are set to defaults at start of main
+    START_DATE = DEFAULT_START_DATE
+    END_DATE = DEFAULT_END_DATE
+
     if len(sys.argv) < 2:
         print("Usage: python backtest.py [strategy_query] [optional: START_DATE (YYYY-MM-DD)] [optional: END_DATE (YYYY-MM-DD)]")
         print("Examples:")
@@ -591,9 +599,12 @@ async def main():
         return
 
     query_parts = []
+    import re
+    date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
     for arg in sys.argv[1:]:
         # Detect dates (YYYY-MM-DD)
-        if len(arg) == 10 and arg.count("-") == 2:
+        if date_regex.match(arg):
             try:
                 dt = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=pytz.UTC)
                 if START_DATE == DEFAULT_START_DATE:

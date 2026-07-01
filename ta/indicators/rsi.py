@@ -57,7 +57,7 @@ DEFAULT_OVERSOLD = 30.0
 DEFAULT_OVERBOUGHT = 70.0
 DEFAULT_TARGET_ROE = 0.01
 
-def get_signal(ohlcv: List[dict], timeframe: str, params: List[str] = None) -> Optional[Dict]:
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for RSI strategy.
     """
