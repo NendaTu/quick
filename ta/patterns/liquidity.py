@@ -28,7 +28,10 @@ def identify_liquidity(ohlcv: List[dict], lookback: int = None) -> Dict:
     if not ENABLED or len(ohlcv) < lookback:
         return {}
 
-    relevant = ohlcv[-lookback:]
+    # Use closed candles for level identification to prevent repainting/noise
+    closed_ohlcv = ohlcv[:-1] if len(ohlcv) > lookback else ohlcv
+    relevant = closed_ohlcv[-lookback:]
+
     highs = [c['h'] for c in relevant]
     lows = [c['l'] for c in relevant]
 

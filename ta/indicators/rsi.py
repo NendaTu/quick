@@ -26,7 +26,16 @@ ENABLED = True
 
 # Standard period for RSI calculation (default: 14).
 # Higher values result in a smoother but more lagging indicator.
+# [OP Roadmap] Adaptive periods per timeframe.
 PERIOD = 14
+TF_PERIODS = {
+    '1m': 21,  # Smoother for noise
+    '5m': 14,
+    '15m': 14,
+    '1H': 9,   # Faster for HTF turns
+    '4H': 7,
+    '1D': 7
+}
 
 # --- Strategy Thresholds ---
 # RSI level below which we consider the asset oversold for scoring (+1 point).
@@ -117,13 +126,13 @@ def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
         "metadata": {"current_rsi": current_rsi, "prev_rsi": prev_rsi}
     }
 
-def compute_rsi(prices: List[float], period: int = None) -> float:
+def compute_rsi(prices: List[float], period: int = None, timeframe: str = None) -> float:
     """
     Calculates the Relative Strength Index.
     Uses Wilder's Smoothing for more reliable signals in high-frequency trading.
     """
     if period is None:
-        period = PERIOD
+        period = TF_PERIODS.get(timeframe, PERIOD) if timeframe else PERIOD
 
     if not ENABLED or len(prices) < period + 1:
         return 50.0

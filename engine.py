@@ -30,11 +30,13 @@ class Engine:
 
         # Performance tracking
         self.asset_stats: Dict[str, Dict[str, any]] = {}
+        self.asset_regimes: Dict[str, str] = {} # symbol -> 'major', 'high_beta', 'stable'
         self.last_exit_time: Dict[str, float] = {}
         self.pos_pnl: Dict[str, float] = {} # Cumulative PnL per symbol_side
 
         self._last_mid = {}
         self._last_features = {}
+        self._last_activity = {} # symbol -> timestamp
 
         self.stop_event = asyncio.Event()
         self.start_time = None
@@ -69,8 +71,15 @@ class Engine:
 
         if MODE == "paper":
             await self.exchange.warm_up(preloaded_data=preloaded_data)
-            self.leverage_limits = self.exchange.get_leverage_limits()
             self.enabled_assets = self.exchange.discovered_assets
+        else:
+            # Future: Discover assets from live exchange
+            self.enabled_assets = []
+
+        self._classify_asset_regimes()
+
+        if MODE == "paper":
+            self.leverage_limits = self.exchange.get_leverage_limits()
             # Initialize books for discovered assets
             for sym in self.enabled_assets + [BTC_SYMBOL]:
                 self.books[sym] = OrderBook(sym)
@@ -155,9 +164,13 @@ class Engine:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False):
+    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False, features: dict = None):
         # Local registration cleanup
         pos_key = f"{symbol}_{side}"
+
+        # [C-004] Adaptive Learning: Feedback loop based on trade PnL
+        if not is_partial and features:
+            self.model.train_on_trade(symbol, features, round_trip_pnl)
 
         # Track session-wide metrics (always updated)
         self.cumulative_pnl += round_trip_pnl
@@ -234,16 +247,52 @@ class Engine:
                          f"Short: {stats['sell_wins']}/{s_total} ({s_winrate:5.1f}%) | "
                          f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
-    def _asset_is_tradable(self, symbol: str, side: str) -> bool:
-        # 1. Statistical Arbitrage Filter (Correlation)
+    def _classify_asset_regimes(self):
+        """[OP Roadmap] Group assets into volatility buckets."""
+        for sym in self.enabled_assets:
+            # Classification based on 1H ATR / Price
+            h = self.exchange.ohlcv.get(sym, {}).get("1H", [])
+            if not h:
+                self.asset_regimes[sym] = 'major'
+                continue
+
+            closes = [c['c'] for c in h]
+            highs = [c['h'] for c in h]
+            lows = [c['l'] for c in h]
+            from ta.indicators.atr import compute_atr
+            atr = compute_atr(highs, lows, closes, period=20)
+            price = closes[-1]
+            atr_pct = (atr / price) if price > 0 else 0
+
+            if sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
+                self.asset_regimes[sym] = 'major'
+            elif atr_pct > 0.005: # > 0.5% hourly move
+                self.asset_regimes[sym] = 'high_beta'
+            else:
+                self.asset_regimes[sym] = 'stable'
+
+        counts = {r: list(self.asset_regimes.values()).count(r) for r in ['major', 'high_beta', 'stable']}
+        log.info(f"REGIMES | Classification Complete: {counts}")
+
+    def _asset_is_tradable(self, symbol: str, side: str, features: dict = None) -> bool:
+        # 1. Statistical Arbitrage Filter (Correlation & Mean Reversion)
         if hasattr(self.exchange, "asset_correlations"):
             corrs = self.exchange.asset_correlations.get(symbol, {})
             for other_sym, score in corrs.items():
                 if score > 0.9: # High correlation
                     if f"{other_sym}_buy" in self.open_positions or f"{other_sym}_sell" in self.open_positions:
-                         # Already exposed to a highly correlated asset
-                         # Only proceed if current asset has higher POI score (contextual priority)
-                         # For now, simpler: block to reduce systemic risk
+                         # [OP Roadmap] Stat-Arb Check: If we have an edge on the divergence, allow trade
+                         # regardless of correlation block (Mean Reversion of the pair)
+                         from ta.patterns.spread import detect_divergence
+                         h1 = self.exchange.ohlcv.get(symbol, {}).get("1m", [])
+                         h2 = self.exchange.ohlcv.get(other_sym, {}).get("1m", [])
+                         div = detect_divergence(h1, h2, score)
+
+                         if div.get('divergence_active') and div['recommended_side'] == side:
+                             log.debug(f"STAT-ARB | Overriding correlation block for {symbol} {side}: Z={div['z_score']:.2f}")
+                             continue # Allow the trade
+
+                         # Standard block to reduce systemic risk
                          return False
 
         # Check volume
@@ -257,9 +306,25 @@ class Engine:
         if pos_key in self.open_positions or pos_key in self.pending_entries:
             return False
 
-        # Cooldown check
+        # [C-002] Asset-level Lock: Prevent simultaneous Long and Short in the same asset
+        # unless explicitly allowed by strategy. For HFT safety, we lock the whole asset.
+        other_side = "sell" if side == "buy" else "buy"
+        other_key = f"{symbol}_{other_side}"
+        if other_key in self.open_positions or other_key in self.pending_entries:
+            return False
+
+        # [C-005] Dynamic Cooldown check: Scale with volatility (ATR)
         last_exit = self.last_exit_time.get(symbol, 0)
-        if time.time() - last_exit < REENTRY_COOLDOWN:
+        cooldown = REENTRY_COOLDOWN
+        if features and features.get("atr") and features.get("mid"):
+            # Scale cooldown down during high volatility to capture moves,
+            # and up during low volatility to prevent wash trading.
+            atr_pct = features["atr"] / features["mid"]
+            # Baseline: 0.1% ATR -> 1.0x cooldown. 0.5% ATR -> 0.2x cooldown.
+            scale_factor = max(0.2, min(3.0, 0.001 / (atr_pct + 1e-9)))
+            cooldown *= scale_factor
+
+        if time.time() - last_exit < cooldown:
             return False
 
         return True
@@ -273,6 +338,7 @@ class Engine:
             try:
                 # 1. Update Features and Train (Selective)
                 all_features = {}
+                now = time.time()
                 # Ensure each unique symbol is processed only once
                 for sym in set(self.enabled_assets + [BTC_SYMBOL]):
                     try:
@@ -281,6 +347,10 @@ class Engine:
                             continue
 
                         current_mid = (book.best_bid + book.best_ask) / 2
+                        # [C-001] Track activity based on book timestamp
+                        if book.timestamp > 0:
+                            self._last_activity[sym] = book.timestamp
+
                         old_mid = self._last_mid.get(sym)
 
                         if old_mid is not None and current_mid != old_mid:
@@ -291,18 +361,24 @@ class Engine:
 
                         self._last_mid[sym] = current_mid
 
-                        # Optimization: only get expensive features if we might trade
-                        # or for BTC (global confluence)
-                        if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
-                             # Skip if BOTH sides are already open or pending
-                             is_full = (f"{sym}_buy" in self.open_positions or f"{sym}_buy" in self.pending_entries) and \
-                                       (f"{sym}_sell" in self.open_positions or f"{sym}_sell" in self.pending_entries)
-                             if is_full:
-                                 continue
+                        # [C-001] Event-Driven Optimization: only process if there is activity
+                        # or if it's BTC (global confluence), or if we have an open position
+                        has_pos = f"{sym}_buy" in self.open_positions or f"{sym}_sell" in self.open_positions
+                        last_act = self._last_activity.get(sym, 0)
 
-                             feat = self.exchange.get_features(sym)
-                             self._last_features[sym] = feat
-                             all_features[sym] = feat
+                        # Process if: BTC, Has Position, or Recent Activity (< 1s ago)
+                        if sym == BTC_SYMBOL or has_pos or (now - last_act < 1.0):
+                            # Optimization: only get expensive features if we might trade
+                            if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
+                                 # Skip if BOTH sides are already open or pending
+                                 is_full = (f"{sym}_buy" in self.open_positions or f"{sym}_buy" in self.pending_entries) and \
+                                           (f"{sym}_sell" in self.open_positions or f"{sym}_sell" in self.pending_entries)
+                                 if is_full:
+                                     continue
+
+                                 feat = self.exchange.get_features(sym)
+                                 self._last_features[sym] = feat
+                                 all_features[sym] = feat
                     except Exception as e:
                         log.error(f"Feature calculation error for {sym}: {e}")
 
@@ -361,7 +437,7 @@ class Engine:
                         if f"{sym}_{side}" in self.open_positions:
                             continue
 
-                        if not self._asset_is_tradable(sym, side):
+                        if not self._asset_is_tradable(sym, side, features=feat):
                             continue
 
                         qty = signal["qty"]
@@ -413,12 +489,15 @@ class Engine:
                             })
 
                         # Final collision check immediately before exchange call
-                        if not self._asset_is_tradable(sym, side):
+                        if not self._asset_is_tradable(sym, side, features=feat):
                             if pos_key in self.open_positions: del self.open_positions[pos_key]
                             if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
                             continue
 
-                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr, **kwargs)
+                        # Add regime to features for predict logic
+                        feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
+
+                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr, features=feat, **kwargs)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:
                             # Show signal with fill/place if LOG_SIGNALS is False
                             log.info(f"Entry Triggered | {signal_msg}")

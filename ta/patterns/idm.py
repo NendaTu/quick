@@ -116,20 +116,40 @@ def detect_idm(ohlcv: List[dict]) -> Dict:
     if not active_kz:
         return {'idm_active': False, 'killzone': None}
 
-    sweep_data = detect_sweeps(ohlcv)
+    # [T-005] Refined IDM logic: Search for recent sweeps with strict temporal link
+    # IDM delivery occurs AFTER a sweep. We scan the last 20 candles.
+    found_sweep = None
+    for i in range(len(ohlcv)-1, max(0, len(ohlcv)-21), -1):
+        sd = detect_sweeps(ohlcv[:i+1])
+        if sd.get('sweep_detected'):
+            found_sweep = sd
+            break
 
     is_valid_idm = False
-    if sweep_data.get('sweep_detected'):
-        sweep_ts = sweep_data.get('sweep_timestamp')
-        if sweep_ts:
-            sweep_dt = convert_to_local(sweep_ts)
-            now_dt = convert_to_local(last_ts)
-            if sweep_dt.date() == now_dt.date():
-                if is_within_time_window(sweep_ts, KILLZONES[active_kz][0], KILLZONES[active_kz][1]):
-                    is_valid_idm = True
+    target_side = None
+    if found_sweep:
+        sweep_ts = found_sweep.get('sweep_timestamp')
+        target_side = 'bullish' if found_sweep.get('sweep_type') == 'sell_side' else 'bearish'
+
+        # Check if sweep was within the killzone OR immediately preceding (30m)
+        kz_start_hm = KILLZONES[active_kz][0]
+        kz_end_hm = KILLZONES[active_kz][1]
+
+        in_kz = is_within_time_window(sweep_ts, kz_start_hm, kz_end_hm)
+
+        # Preceding check: 30 mins before kz_start
+        from datetime import datetime, timedelta
+        kz_start_dt = datetime.strptime(kz_start_hm, "%H:%M")
+        pre_start_dt = (kz_start_dt - timedelta(minutes=30)).time()
+
+        sweep_dt_local = convert_to_local(sweep_ts).time()
+        is_preceding = pre_start_dt <= sweep_dt_local < kz_start_dt.time()
+
+        if in_kz or is_preceding:
+            is_valid_idm = True
 
     return {
         'idm_active': is_valid_idm,
         'killzone': active_kz,
-        'idm_target_side': 'bullish' if sweep_data.get('sweep_type') == 'sell_side' else 'bearish' if sweep_data.get('sweep_type') == 'buy_side' else None
+        'idm_target_side': target_side
     }

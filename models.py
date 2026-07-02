@@ -1,7 +1,7 @@
 import math
 import logging
 import config
-from tools.trading_utils import calculate_position_size, calculate_tp_for_roe
+from tools.trading_utils import calculate_position_size, calculate_tp_for_roe, calculate_kelly_size
 import ta.indicators.rsi as rsi_ind
 import ta.indicators.atr as atr_ind
 import ta.indicators.flow as flow_ind
@@ -24,7 +24,49 @@ class LearningModel:
             "ema": 1.0,
             "trend": 1.0
         }
-        self.lr = 0.0 # Disabled as per user request "Not yet"
+        self.lr = 0.01
+
+    def train_on_trade(self, symbol, features, pnl):
+        """
+        [C-004] Real-time Reinforcement Learning: Adjust weights based on trade success.
+        """
+        if not getattr(config, 'USE_ONLINE_LEARNING', False):
+            return
+
+        side = features.get("side", "buy")
+        # Impact represents whether the trade won (positive) or lost (negative)
+        impact = 1.0 if pnl > 0 else -1.0
+
+        # Mapping score signs to indicator direction: positive score = bullish, negative = bearish
+        def get_adjustment(indicator_score):
+            if indicator_score == 0: return 0
+            # Indicator was 'correct' if its score matched the trade direction
+            indicator_matches_side = (indicator_score > 0 and side == "buy") or (indicator_score < 0 and side == "sell")
+            # We increase weight if (matches and won) OR (doesn't match and lost)
+            # Actually, standard RL: Weight += LR * reward * contribution
+            # If matches and won -> + * + = + (Increase)
+            # If matches and lost -> - * + = - (Decrease)
+            # If doesn't match and won -> + * - = - (Decrease)
+            # If doesn't match and lost -> - * - = + (Increase)
+            return self.lr * impact * (1.0 if indicator_matches_side else -1.0)
+
+        # 1. Imbalance
+        self.weights["imbalance"] += get_adjustment(features.get("imb_score", 0))
+
+        # 2. RSI
+        self.weights["rsi"] += get_adjustment(features.get("rsi_score", 0))
+
+        # 3. MACD
+        self.weights["macd"] += get_adjustment(features.get("macd_score", 0))
+
+        # 5. Trend
+        self.weights["trend"] += get_adjustment(features.get("trend_score", 0))
+
+        # Keep weights in a reasonable range
+        for k in self.weights:
+            self.weights[k] = max(0.1, min(5.0, self.weights[k]))
+
+        log.info(f"LEARNING | {symbol} {side.upper()} PnL={pnl:.4f} | Adjusted Weights: {self.weights}")
 
     def train_on_tick(self, symbol, prev_features, actual_up):
         # online learning toggle check
@@ -121,6 +163,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_IMBALANCE', True) or not getattr(config, 'RESTRICT_SCORE', False):
             score += imb_score * self.weights["imbalance"]
+            features["imb_score"] = imb_score
 
         # RSI contribution
         rsi = features.get("rsi", 50)
@@ -130,6 +173,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_RSI', False) or not getattr(config, 'RESTRICT_SCORE', False):
             score += rsi_score * self.weights["rsi"]
+            features["rsi_score"] = rsi_score
 
         # MACD contribution
         macd_hist = features.get("macd_hist", 0)
@@ -139,6 +183,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_MACD', False) or not getattr(config, 'RESTRICT_SCORE', False):
             score += macd_score * self.weights["macd"]
+            features["macd_score"] = macd_score
 
         # Trend/Confluence contribution
         asset_15m = features.get("asset_15m", 0)
@@ -149,6 +194,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_15M_TREND', False) or not getattr(config, 'RESTRICT_SCORE', False):
             score += trend_score * self.weights["trend"]
+            features["trend_score"] = trend_score
 
         # Supertrend contribution (Scoring instead of Hard Gate)
         supertrend_dir = features.get("supertrend_dir", 0)
@@ -177,6 +223,37 @@ class LearningModel:
             import ta.indicators.book_delta as bd
             score += imb_delta * bd.SCORE_WEIGHT
             log.debug(f"Imbalance Delta for {symbol}: {imb_delta:.4f} (added to score)")
+
+        # [OP Roadmap] Lead/Lag Imbalance Velocity logic
+        # If price slope is flat/neutral but imbalance is spiking, front-run the turn
+        price_slope = features.get("mid_slope", 0.0) # We need to ensure mid_slope exists in features
+        if abs(price_slope) < 0.0001 and abs(imb_delta) > 0.05:
+            bonus = 1.0 if imb_delta > 0 else -1.0
+            score += bonus
+            log.debug(f"IMBALANCE LEAD (Price Flat): adding {bonus} bonus to score")
+
+        # [OP Roadmap] Session Liquidity "Magnet" Weighting
+        # Bias trades toward unswapped session extremes
+        curr_price = features.get("mid", 0)
+        session = features.get("current_session")
+        if session:
+            # We look for the MOST RECENT session's high/low
+            # For simplicity, if we are in London, we check Asia's H/L as magnets
+            prev_session = 'asia' if session == 'london' else 'london' if session == 'ny' else 'ny'
+            ph = features.get(f"{prev_session}_h", 0)
+            pl = features.get(f"{prev_session}_l", 0)
+
+            if ph > 0 and pl > 0:
+                dist_h = (ph / curr_price - 1) if curr_price > 0 else 0
+                dist_l = (curr_price / pl - 1) if curr_price > 0 else 0
+
+                # Bonus if trade side points TOWARD a session magnet within 1%
+                if direction == "buy" and dist_h > 0 and dist_h < 0.01:
+                    score += 0.5
+                    log.debug(f"SESSION MAGNET (Bullish): Targeting {prev_session}_h")
+                elif direction == "sell" and dist_l > 0 and dist_l < 0.01:
+                    score -= 0.5
+                    log.debug(f"SESSION MAGNET (Bearish): Targeting {prev_session}_l")
 
         # 8. Market Structure (BOS vs MSS) contribution
         struct = features.get("structure_signal")
@@ -409,7 +486,9 @@ class LearningModel:
         else:
             sl_move = getattr(config, 'SL_MOVE', 0.004) * (0.5 if is_momentum_rider else 1.0)
 
-        sl_move = max(sl_move, 0.001)
+        # [T-004] Robust SL Floor to prevent market-noise compression
+        sl_floor = max(0.001, getattr(config, 'MAX_SPREAD_PCT', 0.002) * 1.5)
+        sl_move = max(sl_move, sl_floor)
 
         # 2. Synchronize TP_MOVE to maintain the 1:2 Net RRR
         net_sl_cost = sl_move + entry_fee_rate + sl_exit_fee_rate
@@ -423,17 +502,33 @@ class LearningModel:
                 tp_move = (net_sl_cost * 1.5) + entry_fee_rate + tp_exit_fee_rate + getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
                 log.debug(f"TP RELAXED for {symbol}: using 1.5:1 RRR due to flat DRT ({drt_offset:.4f})")
 
+        # [OP Roadmap] Regime-Specific Scaling
+        # Adjust targets and caps based on the asset's identified bucket
+        asset_regime = features.get("asset_regime", "stable")
+        tp_mult = 1.0
+        if asset_regime == 'high_beta':
+            tp_mult = 1.5 # Target more for volatile alts
+        elif asset_regime == 'major':
+            tp_mult = 0.8 # Tighten targets for low-vol majors
+
         # 4. Final Caps and Floors
         if getattr(config, 'USE_ATR_CAPPED_TP', False) and features.get("atr"):
-            atr_15m_move = (features["atr"] * 3.8) / entry
+            atr_15m_move = (features["atr"] * 3.8 * tp_mult) / entry
             tp_move = min(tp_move, atr_15m_move)
 
-        tp_move = max(tp_move, getattr(config, 'TP_MOVE', 0.008))
+        tp_move = max(tp_move, getattr(config, 'TP_MOVE', 0.008) * tp_mult)
 
-        # 5. Final SL Recalibration
+        # 5. Final SL Recalibration (Ensure TP supports the SL floor)
         net_tp_win = tp_move - entry_fee_rate - tp_exit_fee_rate - getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
-        sl_move = (net_tp_win / 2) - entry_fee_rate - sl_exit_fee_rate
-        sl_move = max(sl_move, 0.001)
+        sl_move_target = (net_tp_win / 2) - entry_fee_rate - sl_exit_fee_rate
+
+        # If recalibrated SL is below floor, we must increase TP instead of compressing SL
+        if sl_move_target < sl_floor:
+            sl_move = sl_floor
+            # Adjust TP to maintain RRR based on the fixed SL floor
+            tp_move = (net_sl_cost * 2) + entry_fee_rate + tp_exit_fee_rate + getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
+        else:
+            sl_move = sl_move_target
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)
@@ -442,8 +537,17 @@ class LearningModel:
             exit_price = entry * (1 - tp_move)
             stop_price = entry * (1 + sl_move)
 
+        # --- VARIANCE-ADJUSTED (KELLY) RISK LOGIC ---
+        # Scale risk based on score confidence (Practical Opportunity [Missing])
+        # Base win rate assumed from target RRR (1:2 -> ~33% BE win rate)
+        # We scale expected win rate based on confidence (0.66 -> 0.40 WR)
+        expected_wr = 0.35 + (confidence - 0.5) * 0.2
+        # R is avg win / avg loss (Net RRR)
+        expected_r = (net_tp_win / (net_sl_cost + 1e-9))
+
+        risk_fraction = calculate_kelly_size(expected_wr, expected_r, kelly_fraction=0.5)
+
         # --- VOL-ADJUSTED RISK LOGIC ---
-        risk_fraction = getattr(config, 'RISK_PER_TRADE', 0.005)
         if getattr(config, 'USE_VOL_ADJUSTED_RISK', False):
             atr_pct = features.get("atr", 0) / entry if entry > 0 else 0
             if atr_pct > atr_ind.VOL_ADJUST_THRESHOLD:
