@@ -21,7 +21,14 @@ ENABLED = True
 
 # Standard period for ATR calculation (default: 14).
 # Higher values result in a smoother, more stable volatility estimate.
+# [OP Roadmap] Adaptive periods per timeframe.
 PERIOD = 14
+TF_PERIODS = {
+    '1m': 21,  # Smoother for noise
+    '5m': 14,
+    '1H': 10,  # Faster for HTF
+    '1D': 7
+}
 
 # --- Strategy Multipliers ---
 # Standard multiplier for ATR-based stop losses.
@@ -72,13 +79,13 @@ def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
         "metadata": {"atr_pct": actual_pct}
     }
 
-def compute_atr(highs: List[float], lows: List[float], closes: List[float], period: int = None) -> float:
+def compute_atr(highs: List[float], lows: List[float], closes: List[float], period: int = None, timeframe: str = None) -> float:
     """
     Calculates the Average True Range.
     Uses Wilder's Smoothing for more stable volatility estimation.
     """
     if period is None:
-        period = PERIOD
+        period = TF_PERIODS.get(timeframe, PERIOD) if timeframe else PERIOD
 
     if not ENABLED or len(closes) < period + 1:
         return 0.0

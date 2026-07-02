@@ -30,6 +30,7 @@ class Engine:
 
         # Performance tracking
         self.asset_stats: Dict[str, Dict[str, any]] = {}
+        self.asset_regimes: Dict[str, str] = {} # symbol -> 'major', 'high_beta', 'stable'
         self.last_exit_time: Dict[str, float] = {}
         self.pos_pnl: Dict[str, float] = {} # Cumulative PnL per symbol_side
 
@@ -70,8 +71,15 @@ class Engine:
 
         if MODE == "paper":
             await self.exchange.warm_up(preloaded_data=preloaded_data)
-            self.leverage_limits = self.exchange.get_leverage_limits()
             self.enabled_assets = self.exchange.discovered_assets
+        else:
+            # Future: Discover assets from live exchange
+            self.enabled_assets = []
+
+        self._classify_asset_regimes()
+
+        if MODE == "paper":
+            self.leverage_limits = self.exchange.get_leverage_limits()
             # Initialize books for discovered assets
             for sym in self.enabled_assets + [BTC_SYMBOL]:
                 self.books[sym] = OrderBook(sym)
@@ -239,16 +247,52 @@ class Engine:
                          f"Short: {stats['sell_wins']}/{s_total} ({s_winrate:5.1f}%) | "
                          f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
+    def _classify_asset_regimes(self):
+        """[OP Roadmap] Group assets into volatility buckets."""
+        for sym in self.enabled_assets:
+            # Classification based on 1H ATR / Price
+            h = self.exchange.ohlcv.get(sym, {}).get("1H", [])
+            if not h:
+                self.asset_regimes[sym] = 'major'
+                continue
+
+            closes = [c['c'] for c in h]
+            highs = [c['h'] for c in h]
+            lows = [c['l'] for c in h]
+            from ta.indicators.atr import compute_atr
+            atr = compute_atr(highs, lows, closes, period=20)
+            price = closes[-1]
+            atr_pct = (atr / price) if price > 0 else 0
+
+            if sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
+                self.asset_regimes[sym] = 'major'
+            elif atr_pct > 0.005: # > 0.5% hourly move
+                self.asset_regimes[sym] = 'high_beta'
+            else:
+                self.asset_regimes[sym] = 'stable'
+
+        counts = {r: list(self.asset_regimes.values()).count(r) for r in ['major', 'high_beta', 'stable']}
+        log.info(f"REGIMES | Classification Complete: {counts}")
+
     def _asset_is_tradable(self, symbol: str, side: str, features: dict = None) -> bool:
-        # 1. Statistical Arbitrage Filter (Correlation)
+        # 1. Statistical Arbitrage Filter (Correlation & Mean Reversion)
         if hasattr(self.exchange, "asset_correlations"):
             corrs = self.exchange.asset_correlations.get(symbol, {})
             for other_sym, score in corrs.items():
                 if score > 0.9: # High correlation
                     if f"{other_sym}_buy" in self.open_positions or f"{other_sym}_sell" in self.open_positions:
-                         # Already exposed to a highly correlated asset
-                         # Only proceed if current asset has higher POI score (contextual priority)
-                         # For now, simpler: block to reduce systemic risk
+                         # [OP Roadmap] Stat-Arb Check: If we have an edge on the divergence, allow trade
+                         # regardless of correlation block (Mean Reversion of the pair)
+                         from ta.patterns.spread import detect_divergence
+                         h1 = self.exchange.ohlcv.get(symbol, {}).get("1m", [])
+                         h2 = self.exchange.ohlcv.get(other_sym, {}).get("1m", [])
+                         div = detect_divergence(h1, h2, score)
+
+                         if div.get('divergence_active') and div['recommended_side'] == side:
+                             log.debug(f"STAT-ARB | Overriding correlation block for {symbol} {side}: Z={div['z_score']:.2f}")
+                             continue # Allow the trade
+
+                         # Standard block to reduce systemic risk
                          return False
 
         # Check volume
@@ -303,6 +347,10 @@ class Engine:
                             continue
 
                         current_mid = (book.best_bid + book.best_ask) / 2
+                        # [C-001] Track activity based on book timestamp
+                        if book.timestamp > 0:
+                            self._last_activity[sym] = book.timestamp
+
                         old_mid = self._last_mid.get(sym)
 
                         if old_mid is not None and current_mid != old_mid:
@@ -445,6 +493,9 @@ class Engine:
                             if pos_key in self.open_positions: del self.open_positions[pos_key]
                             if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
                             continue
+
+                        # Add regime to features for predict logic
+                        feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
 
                         resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr, features=feat, **kwargs)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:

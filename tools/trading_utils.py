@@ -125,3 +125,16 @@ def calculate_position_size(equity, risk_fraction, entry_price, stop_price, entr
         return 0
 
     return risk_amount / risk_per_unit
+
+def calculate_kelly_size(win_rate, win_loss_ratio, kelly_fraction=0.5):
+    """
+    Calculates the Kelly Criterion position size fraction.
+    K% = W - (1 - W) / R
+    Where W is win rate, R is win/loss ratio (avg win / avg loss).
+    """
+    if win_loss_ratio <= 0:
+        return 0.01 # Fallback to 1% risk
+
+    k = win_rate - (1 - win_rate) / win_loss_ratio
+    # Apply fractional Kelly for safety and return clamped value
+    return max(0.005, min(0.1, k * kelly_fraction))

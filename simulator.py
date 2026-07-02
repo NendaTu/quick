@@ -259,10 +259,10 @@ class Simulator:
         trade_delta = compute_trade_delta(trades[-50:]) # Last 50 trades
 
         # Imbalance Delta [OP-001]
-        imb_history = [f.get('imbalance', 0) for f in self._feature_cache.values() if '_ts' in f] # Simplified for POC
-        # Real implementation should track imbalance history per symbol
         if not hasattr(self, '_imb_history'): self._imb_history = {}
         if symbol not in self._imb_history: self._imb_history[symbol] = []
+        if not hasattr(self, '_mid_history'): self._mid_history = {}
+        if symbol not in self._mid_history: self._mid_history[symbol] = []
 
         bid_vol, ask_vol = book.top_bid_ask_qty()
         total_vol = bid_vol + ask_vol
@@ -270,6 +270,13 @@ class Simulator:
         imb_delta = compute_imbalance_delta(current_imb, self._imb_history[symbol])
         self._imb_history[symbol].append(current_imb)
         if len(self._imb_history[symbol]) > 20: self._imb_history[symbol].pop(0)
+
+        mid = (book.best_bid + book.best_ask) / 2
+        mid_slope = 0
+        if len(self._mid_history[symbol]) >= 5:
+            mid_slope = (mid - self._mid_history[symbol][-5]) / 5
+        self._mid_history[symbol].append(mid)
+        if len(self._mid_history[symbol]) > 10: self._mid_history[symbol].pop(0)
 
         # 1. Check Cache (Only truly stable patterns that don't depend on live price)
         h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
@@ -287,6 +294,7 @@ class Simulator:
                 features.update({
                     "imbalance": current_imb,
                     "imb_delta": imb_delta,
+                    "mid_slope": mid_slope,
                     "spread_pct": (book.best_ask - book.best_bid) / mid if mid > 0 else 0,
                     "mid": mid,
                     "vol_pct": min(1.0, total_vol / 4000.0),
@@ -330,13 +338,13 @@ class Simulator:
 
         # RSI (1m)
         c1, h1, l1 = get_ohlc("1m")
-        rsi = compute_rsi(c1, rsi_ind.PERIOD) if len(c1) > 20 else 50.0
+        rsi = compute_rsi(c1, timeframe="1m") if len(c1) > 25 else 50.0
 
         # MACD (1m)
         macd, macd_signal, macd_hist = compute_macd(c1) if len(c1) > 30 else (0,0,0)
 
         # ATR (1m)
-        atr = compute_atr(h1, l1, c1, atr_ind.PERIOD) if len(c1) > 20 else 0.0
+        atr = compute_atr(h1, l1, c1, timeframe="1m") if len(c1) > 25 else 0.0
         vol_regime = detect_vol_regime(h1, l1, c1, atr_ind.PERIOD) if len(c1) > 30 else 'Stable'
         vol_forecast = get_volatility_forecast(h1, l1, c1) if len(c1) > 51 else 'Neutral'
 
@@ -408,6 +416,7 @@ class Simulator:
         features = {
             "imbalance": imbalance,
             "imb_delta": imb_delta,
+            "mid_slope": mid_slope,
             "spread_pct": spread / mid if mid > 0 else 0,
             "mid": mid,
             "vol_pct": vol_pct,
@@ -552,8 +561,6 @@ class Simulator:
                     engine.books[sym].bids = list(book.bids)
                     engine.books[sym].asks = list(book.asks)
                     engine.books[sym].timestamp = time.time()
-                    if hasattr(engine, "_last_activity"):
-                        engine._last_activity[sym] = engine.books[sym].timestamp
 
             await self._process_orders()
             engine.equity = self.equity

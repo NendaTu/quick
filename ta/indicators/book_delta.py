@@ -9,7 +9,8 @@ from typing import List
 ENABLED = True
 
 # Weight for the imbalance delta in the scoring model.
-SCORE_WEIGHT = 0.5
+# [OP Roadmap] Increased for higher frequency responsiveness.
+SCORE_WEIGHT = 1.5
 
 # Lookback period (ticks) to calculate the delta.
 DELTA_LOOKBACK = 5
