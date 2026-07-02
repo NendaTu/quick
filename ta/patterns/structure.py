@@ -36,6 +36,7 @@ MIN_SWING_DIST_PCT = 0.002
 
 # If True, requires the candle to CLOSE beyond the high/low for a valid break.
 # Reduces false breakouts on wicks.
+# [T-002] Hardened to True to prevent repainting signals.
 CONFIRM_BREAK_ON_CLOSE = True
 
 # Default Strategy Settings

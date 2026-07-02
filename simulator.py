@@ -382,19 +382,16 @@ class Simulator:
         poi_data = identify_pois(h_active, ob_data, fvg_data, liq_data, sess_data) if h_active else {}
 
         # BTC confluence cache (global per tick)
+        # [T-001] ENFORCE CLOSED CANDLES to eliminate look-ahead bias
         now = time.time()
         if now - self._last_confluence_update > 0.1: # Update cache every 100ms
             self._btc_confluence_cache = {}
             for tf in ["15m", "1H", "4H", "1D"]:
                 h = self.confluence_history.get(BTC_SYMBOL, {}).get(tf, [])
+                # We always use the last CLOSED candle for bias to ensure stability
                 if len(h) >= 3:
-                    if BTC_REALTIME_CONFLUENCE:
-                        self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
-                    else:
-                        # Use last two CLOSED candles
-                        self._btc_confluence_cache[f"btc_{tf}"] = (h[-2] / h[-3] - 1)
-                elif len(h) >= 2:
-                    self._btc_confluence_cache[f"btc_{tf}"] = (h[-1] / h[-2] - 1)
+                    # Change in the last FULLY CLOSED candle
+                    self._btc_confluence_cache[f"btc_{tf}"] = (h[-2] / h[-3] - 1)
                 else:
                     self._btc_confluence_cache[f"btc_{tf}"] = 0.0
             self._last_confluence_update = now
@@ -402,8 +399,9 @@ class Simulator:
         asset_changes = {}
         for tf in ["15m", "1H", "4H", "1D"]:
             h = self.confluence_history.get(symbol, {}).get(tf, [])
-            if len(h) >= 2:
-                asset_changes[f"asset_{tf}"] = (h[-1] / h[-2] - 1)
+            if len(h) >= 3:
+                # [T-001] Use last CLOSED candle for asset-specific MTF bias
+                asset_changes[f"asset_{tf}"] = (h[-2] / h[-3] - 1)
             else:
                 asset_changes[f"asset_{tf}"] = 0.0
 
@@ -549,9 +547,13 @@ class Simulator:
         while True:
             for sym in symbols:
                 book = self.books[sym]
-                engine.books[sym].bids = list(book.bids)
-                engine.books[sym].asks = list(book.asks)
-                engine.books[sym].timestamp = time.time()
+                # Check for activity before updating
+                if engine.books[sym].bids != book.bids or engine.books[sym].asks != book.asks:
+                    engine.books[sym].bids = list(book.bids)
+                    engine.books[sym].asks = list(book.asks)
+                    engine.books[sym].timestamp = time.time()
+                    if hasattr(engine, "_last_activity"):
+                        engine._last_activity[sym] = engine.books[sym].timestamp
 
             await self._process_orders()
             engine.equity = self.equity
@@ -695,7 +697,7 @@ class Simulator:
                                 self.engine.pending_entries.remove(pos_key)
                         continue
 
-                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type, o.get("original_side"), o.get("is_contrarian", False))
+                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type, o.get("original_side"), o.get("is_contrarian", False), features=o.get("features"))
 
                 # Once entry is filled, add TP/SL
                 sid = self.order_id_counter; self.order_id_counter += 1
@@ -756,14 +758,28 @@ class Simulator:
         total_cost = 0
         if not levels: return self.last_price.get(symbol, 0)
 
-        for price, size in levels:
+        # Copy levels to avoid modifying the real book during calculation
+        temp_levels = list(levels)
+        for price, size in temp_levels:
             take = min(qty - filled_qty, size)
             total_cost += take * price
             filled_qty += take
             if filled_qty >= qty: break
 
         if filled_qty < qty:
-            total_cost += (qty - filled_qty) * (levels[-1][0] if levels else self.last_price.get(symbol, 0)) * 1.01
+            # [C-003] Order Book Impact: Apply exponential slippage if we exceed visible liquidity
+            remaining = qty - filled_qty
+            last_price = temp_levels[-1][0] if temp_levels else self.last_price.get(symbol, 0)
+
+            # 1% base slippage for the portion outside the book, plus a penalty for size
+            # Size penalty scales with how much we exceeded the book
+            size_penalty = 1 + (remaining / (filled_qty + 1)) * 0.05
+            slippage_factor = 1.01 * size_penalty
+
+            if side == "buy":
+                total_cost += remaining * last_price * slippage_factor
+            else:
+                total_cost += remaining * last_price * (2 - slippage_factor)
 
         avg_price = total_cost / qty if qty > 0 else 0
 
@@ -772,7 +788,7 @@ class Simulator:
         price_place = int(spec.get('pricePlace', 2))
         return round(avg_price, price_place)
 
-    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5, original_side=None, is_contrarian=False, **kwargs):
+    def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5, original_side=None, is_contrarian=False, features=None, **kwargs):
         spec = self.contract_specs.get(symbol, {})
         min_usdt = float(spec.get('minTradeUSDT', 5.0))
         if RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
@@ -806,7 +822,7 @@ class Simulator:
                     log.debug(rej_msg) # Log as debug so it goes to DB but not console
                 return {"code": "2", "msg": "high slippage"}
 
-            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian)
+            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian, features=features)
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
@@ -835,7 +851,8 @@ class Simulator:
                 "stop_price": stop_price, "tp_price": tp_price,
                 "btc_conf": btc_conf, "drt": drt,
                 "original_side": original_side, "is_contrarian": is_contrarian,
-                "reserved_margin": required_margin
+                "reserved_margin": required_margin,
+                "features": features
             }
             order_data.update(kwargs)
             self.pending_orders.append(order_data)
@@ -845,7 +862,7 @@ class Simulator:
             log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f} | Margin Reserved: {required_margin:.2f}")
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False):
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None):
         now = time.time()
         fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
         self.equity -= fee
@@ -856,7 +873,8 @@ class Simulator:
 
         self.positions[(symbol, side)] = {
             "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
-            "original_side": original_side, "is_contrarian": is_contrarian, "ts": now
+            "original_side": original_side, "is_contrarian": is_contrarian, "ts": now,
+            "features": features
         }
         side_str = side.upper()
         if is_contrarian:
@@ -934,4 +952,4 @@ class Simulator:
             del self.positions[(sym, side)]
             self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
-        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial)
+        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial, features=pos.get("features"))

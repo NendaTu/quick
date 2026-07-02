@@ -28,6 +28,7 @@ def identify_momentum(ohlcv: List[dict]) -> Dict:
     if not ENABLED or len(ohlcv) < 26:
         return {}
 
+    # Use closed candles for baseline and current for live check
     volumes = [c['v'] for c in ohlcv]
     current_vol = volumes[-1]
     avg_vol = calculate_sma(volumes[:-1], 20)
@@ -40,6 +41,8 @@ def identify_momentum(ohlcv: List[dict]) -> Dict:
         if n < 2: return 0
         return (prices[-1] - prices[0]) / n
 
+    # Note: Using live candle for slope/influx is intentional for HFT responsiveness
+    # but we ensure the baseline (SMA) is stable by using volumes[:-1].
     closes = [c['c'] for c in ohlcv]
     current_slope = get_slope(closes[-5:])
     baseline_slope = get_slope(closes[-25:-5])

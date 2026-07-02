@@ -24,7 +24,48 @@ class LearningModel:
             "ema": 1.0,
             "trend": 1.0
         }
-        self.lr = 0.0 # Disabled as per user request "Not yet"
+        self.lr = 0.01
+
+    def train_on_trade(self, symbol, features, pnl):
+        """
+        [C-004] Real-time Reinforcement Learning: Adjust weights based on trade success.
+        """
+        if not getattr(config, 'USE_ONLINE_LEARNING', False):
+            return
+
+        # Reward (or penalize) the indicators that contributed to the winning (or losing) signal
+        impact = 1.0 if pnl > 0 else -1.0
+
+        # 1. Imbalance
+        imb_score = features.get("imb_score", 0) # We'll need to store this in predict
+        if imb_score != 0:
+            # If trade won and imbalance matched direction, increase weight
+            # If trade won but imbalance was opposite, decrease weight
+            # If trade lost and imbalance matched direction, decrease weight
+            # (Basically impact * sign(imb_score * direction) )
+            # In predict() we have 'direction', but here we know the 'side' was matched to pnl.
+            self.weights["imbalance"] += self.lr * impact
+
+        # 2. RSI
+        rsi_score = features.get("rsi_score", 0)
+        if rsi_score != 0:
+            self.weights["rsi"] += self.lr * impact
+
+        # 3. MACD
+        macd_score = features.get("macd_score", 0)
+        if macd_score != 0:
+            self.weights["macd"] += self.lr * impact
+
+        # 5. Trend
+        trend_score = features.get("trend_score", 0)
+        if trend_score != 0:
+            self.weights["trend"] += self.lr * impact
+
+        # Keep weights in a reasonable range
+        for k in self.weights:
+            self.weights[k] = max(0.1, min(5.0, self.weights[k]))
+
+        log.info(f"LEARNING | {symbol} PnL={pnl:.2f} | Adjusted Weights: {self.weights}")
 
     def train_on_tick(self, symbol, prev_features, actual_up):
         # online learning toggle check
@@ -121,6 +162,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_IMBALANCE', True) or not getattr(config, 'RESTRICT_SCORE', False):
             score += imb_score * self.weights["imbalance"]
+            features["imb_score"] = imb_score
 
         # RSI contribution
         rsi = features.get("rsi", 50)
@@ -130,6 +172,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_RSI', False) or not getattr(config, 'RESTRICT_SCORE', False):
             score += rsi_score * self.weights["rsi"]
+            features["rsi_score"] = rsi_score
 
         # MACD contribution
         macd_hist = features.get("macd_hist", 0)
@@ -139,6 +182,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_MACD', False) or not getattr(config, 'RESTRICT_SCORE', False):
             score += macd_score * self.weights["macd"]
+            features["macd_score"] = macd_score
 
         # Trend/Confluence contribution
         asset_15m = features.get("asset_15m", 0)
@@ -149,6 +193,7 @@ class LearningModel:
 
         if getattr(config, 'RESTRICT_15M_TREND', False) or not getattr(config, 'RESTRICT_SCORE', False):
             score += trend_score * self.weights["trend"]
+            features["trend_score"] = trend_score
 
         # Supertrend contribution (Scoring instead of Hard Gate)
         supertrend_dir = features.get("supertrend_dir", 0)
@@ -409,7 +454,9 @@ class LearningModel:
         else:
             sl_move = getattr(config, 'SL_MOVE', 0.004) * (0.5 if is_momentum_rider else 1.0)
 
-        sl_move = max(sl_move, 0.001)
+        # [T-004] Robust SL Floor to prevent market-noise compression
+        sl_floor = max(0.001, getattr(config, 'MAX_SPREAD_PCT', 0.002) * 1.5)
+        sl_move = max(sl_move, sl_floor)
 
         # 2. Synchronize TP_MOVE to maintain the 1:2 Net RRR
         net_sl_cost = sl_move + entry_fee_rate + sl_exit_fee_rate
@@ -430,10 +477,17 @@ class LearningModel:
 
         tp_move = max(tp_move, getattr(config, 'TP_MOVE', 0.008))
 
-        # 5. Final SL Recalibration
+        # 5. Final SL Recalibration (Ensure TP supports the SL floor)
         net_tp_win = tp_move - entry_fee_rate - tp_exit_fee_rate - getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
-        sl_move = (net_tp_win / 2) - entry_fee_rate - sl_exit_fee_rate
-        sl_move = max(sl_move, 0.001)
+        sl_move_target = (net_tp_win / 2) - entry_fee_rate - sl_exit_fee_rate
+
+        # If recalibrated SL is below floor, we must increase TP instead of compressing SL
+        if sl_move_target < sl_floor:
+            sl_move = sl_floor
+            # Adjust TP to maintain RRR based on the fixed SL floor
+            tp_move = (net_sl_cost * 2) + entry_fee_rate + tp_exit_fee_rate + getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
+        else:
+            sl_move = sl_move_target
 
         if direction == "buy":
             exit_price = entry * (1 + tp_move)
