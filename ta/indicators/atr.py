@@ -1,9 +1,19 @@
 """
-Average True Range (ATR) Indicator
+Average True Range (ATR) Strategy (Filter)
 
-Measures market volatility by decomposing the entire range of an asset price for that period.
+How it works:
+1. This is a "Volatility Filter" strategy. It ensures that trades are only taken
+   when the market has enough "life" (movement) to hit targets.
+2. It calculates the ATR as a percentage of the current price.
+3. Signal Logic:
+   - Returns "both" (allowing any direction) if the ATR % is above the threshold.
+   - Blocks signals if the market is too quiet (ATR below threshold).
+4. Backtesting command: `python backtest.py "atr [threshold_pct] + [trigger]"`
+   - Example: `"atr 0.2 + engulfing"` (Requires 0.2% minimum volatility).
 """
-from typing import List
+
+from typing import List, Dict, Optional
+import config
 
 # --- Configuration ---
 # Toggle to enable/disable ATR calculation.
@@ -28,6 +38,39 @@ VOL_ADJUST_THRESHOLD = 0.002 # 0.2% of price
 
 # The fraction of RISK_PER_TRADE used when volatility exceeds VOL_ADJUST_THRESHOLD.
 REDUCED_RISK_FRACTION = 0.5
+
+# Default Strategy Settings
+DEFAULT_THRESHOLD_PCT = 0.15 # 0.15%
+
+def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
+    """
+    Backtesting entry point for ATR Volatility filter.
+    """
+    if len(ohlcv) < PERIOD + 2:
+        return None
+
+    # Parse Parameters
+    threshold_pct = float(params[0]) if params and len(params) > 0 else DEFAULT_THRESHOLD_PCT
+
+    h = [c['h'] for c in ohlcv]
+    l = [c['l'] for c in ohlcv]
+    c = [c['c'] for c in ohlcv]
+
+    atr_val = compute_atr(h, l, c, PERIOD)
+    curr_price = c[-1]
+
+    actual_pct = (atr_val / curr_price) * 100 if curr_price > 0 else 0
+
+    if actual_pct < threshold_pct:
+        return None
+
+    return {
+        "side": "both",
+        "entry_price": curr_price,
+        "stop_price": 0, # Not used for filter
+        "exit_price": 0, # Not used for filter
+        "metadata": {"atr_pct": actual_pct}
+    }
 
 def compute_atr(highs: List[float], lows: List[float], closes: List[float], period: int = None) -> float:
     """

@@ -56,3 +56,25 @@ def identify_momentum(ohlcv: List[dict]) -> Dict:
         'cisd_detected': cisd,
         'rel_vol': current_vol / avg_vol if avg_vol > 0 else 1.0
     }
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for Momentum.
+    Triggers on Volume Influx in the direction of the current candle.
+    """
+    mom = identify_momentum(ohlcv)
+    if not mom.get('volume_influx'):
+        return None
+
+    last = ohlcv[-1]
+    side = "long" if last['c'] > last['o'] else "short"
+    price = last['c']
+    move = abs(last['c'] - last['o']) * 2
+    if move == 0: move = price * 0.005
+
+    return {
+        "side": side,
+        "entry_price": price,
+        "stop_price": price - move if side == "long" else price + move,
+        "exit_price": price + (move * 2) if side == "long" else price - (move * 2)
+    }

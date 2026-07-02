@@ -57,16 +57,25 @@ class BitGetClient:
 
         for attempt in range(retries):
             try:
-                async with session.request(method, url, data=body, headers=headers) as response:
+                async with session.request(method, url, data=body, headers=headers, timeout=30) as response:
                     if response.status == 429:
                         wait = (2 ** attempt) + (random.random() * 0.1)
                         log.warning(f"Rate limited (429). Retrying in {wait:.2f}s... (Attempt {attempt+1}/{retries})")
                         await asyncio.sleep(wait)
-                        # Re-generate headers for new timestamp on retry
                         headers = self._get_headers(method, signed_path, body)
                         continue
 
-                    result = await response.json()
+                    try:
+                        result = await response.json()
+                    except Exception as json_err:
+                        # Fallback for non-JSON responses
+                        text = await response.text()
+                        log.error(f"Failed to parse JSON response: {json_err}. Body: {text[:200]}")
+                        if attempt < retries - 1:
+                            await asyncio.sleep(1)
+                            continue
+                        return {"code": "error", "msg": f"JSON parse error: {json_err}", "data": None}
+
                     if result.get("code") == "429" or result.get("code") == "400031": # Bitget specific rate limit codes
                         wait = (2 ** attempt) + (random.random() * 0.1)
                         log.warning(f"Rate limited ({result.get('code')}). Retrying in {wait:.2f}s... (Attempt {attempt+1}/{retries})")
@@ -77,8 +86,16 @@ class BitGetClient:
                     if result.get("code") != "00000":
                         log.error(f"BitGet Error: {result} on {url}")
                     return result
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                log.error(f"Connection error ({type(e).__name__}): {e} on {url}")
+                if attempt < retries - 1:
+                    wait = (attempt + 1) * 2
+                    await asyncio.sleep(wait)
+                    headers = self._get_headers(method, signed_path, body)
+                    continue
+                return {"code": "error", "msg": f"{type(e).__name__}: {e}", "data": None}
             except Exception as e:
-                log.error(f"Request Exception: {e} on {url}")
+                log.error(f"Unexpected Request Exception ({type(e).__name__}): {e} on {url}")
                 if attempt < retries - 1:
                     await asyncio.sleep(1)
                     continue

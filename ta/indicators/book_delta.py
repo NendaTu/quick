@@ -26,3 +26,10 @@ def compute_imbalance_delta(current_imb: float, history: List[float], lookback: 
 
     prev_imb = history[-min(len(history), lookback)]
     return current_imb - prev_imb
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for Book Delta.
+    Note: Standard OHLCV does not contain order book metrics.
+    """
+    return None

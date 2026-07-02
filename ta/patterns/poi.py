@@ -80,3 +80,11 @@ def identify_pois(
         'primary_poi_type': primary_type,
         'poi_confluence_score': total_score
     }
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for POI confluence.
+    Standalone backtesting is limited as it coordinates other modules.
+    Returns None for standalone runs.
+    """
+    return None

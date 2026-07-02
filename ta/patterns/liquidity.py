@@ -46,3 +46,30 @@ def identify_liquidity(ohlcv: List[dict], lookback: int = None) -> Dict:
         'range_high': max_high,
         'range_low': min_low
     }
+
+def get_signal(ohlcv, tf, params=None, **kwargs):
+    """
+    Backtestable interface for Liquidity.
+    Triggers LONG on SSL touch (reversal), SHORT on BSL touch.
+    """
+    liq = identify_liquidity(ohlcv)
+    if not liq: return None
+
+    price = ohlcv[-1]['c']
+    # If price swept SSL and is now above it (mean reversion)
+    if ohlcv[-1]['l'] <= liq['ssl_level'] and price > liq['ssl_level']:
+        return {
+            "side": "long",
+            "entry_price": price,
+            "stop_price": ohlcv[-1]['l'] * 0.999,
+            "exit_price": liq['bsl_level']
+        }
+    # If price swept BSL and is now below it
+    if ohlcv[-1]['h'] >= liq['bsl_level'] and price < liq['bsl_level']:
+        return {
+            "side": "short",
+            "entry_price": price,
+            "stop_price": ohlcv[-1]['h'] * 1.001,
+            "exit_price": liq['ssl_level']
+        }
+    return None

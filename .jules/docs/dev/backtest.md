@@ -1,0 +1,217 @@
+# Backtesting System Documentation
+
+The `backtest.py` system allows for high-fidelity simulation of Technical Analysis (TA) conditions against historical Bitget USDT-M Futures data. It is designed to be modular, automated, and mathematically consistent with live trading.
+
+## How to Run a Backtest
+
+Basic command:
+```bash
+python backtest.py "[step_1]" "[step_2]" ... [start_date] [end_date]
+```
+
+> **IMPORTANT**: Always wrap your strategy steps in quotes. Separate sequential steps with spaces.
+
+### Strategy Resolution
+The system recursively searches the `ta/` directory. It includes a "singular-to-plural" mapping for convenience:
+- `candle/engulfing` resolves to `ta/candles/engulfing.py`
+- `pattern/fvg` resolves to `ta/patterns/fvg.py`
+- `engulfing` will find all matches and prompt you if ambiguous.
+
+## Confluence Chaining (Advanced)
+You can combine multiple strategies using two methods:
+1.  **Simultaneous (`+`)**: Both conditions must happen on the exact same candle. Put these in the same quoted argument.
+2.  **Sequential (Space)**: Use spaces between separate quoted arguments. The first happens, then the next must happen within **5 candles** (configurable `PROXIMITY_LIMIT` in `backtest.py`).
+
+### Directional Rules
+The first item in the chain establishes the "Root Direction" (e.g. Bullish).
+- **Strict (Default)**: All subsequent items must point in the same Root Direction.
+- **Ignore Direction (`~`)**: Add a tilde (e.g. `"fvg~"`) to allow that specific item to trigger in either direction.
+- **Flip Direction (`()`)**: Wrap an item in parentheses (e.g. `"(sentiment 10 30)"`) to require it to be in the **opposite** direction of the Root Direction.
+- **Open Mode**: Add `open` as a separate argument to make the entire chain direction-agnostic.
+
+### Examples
+- **Combination**: `python backtest.py "engulfing + sentiment 10 20"` (Must meet both on one candle).
+- **Sequence**: `python backtest.py "engulfing" "fvg 3 25"` (Engulfing first, then FVG follows).
+- **Mixed**: `python backtest.py "engulfing + sentiment 10 20" "fvg 3 25 1.5" open` (Combined signal followed by FVG with 1.5 RRR, direction-agnostic).
+- **Rejection**: `python backtest.py "trend" "(sentiment 10 90)"` (Establish trend, then look for a sentiment rejection in the opposite direction).
+- **Session Filter**: `python backtest.py "sessions london true + engulfing"` (Only trade engulfing candles during the London Killzone).
+- **Trend Filter**: `python backtest.py "adx 25 + ema 20 50 + supertrend"` (Only enter Supertrend flips if the trend is strong and EMAs are aligned).
+- **Complex Chain**: `python backtest.py "pattern/trend" "structure mss" "(fvg 3 25)"` (Wait for an HTF trend, then a market shift, then enter on a pullback gap).
+
+### Date Range
+- **Default**: The last 30 days (for speed).
+- **Global Range**: June 1, 2022 to June 1, 2026.
+- **Custom**: Provide `YYYY-MM-DD` as the 2nd and 3rd arguments.
+
+## The Strategy Template (`get_signal`)
+
+To make a TA condition "backtestable," it must implement the following function interface:
+
+```python
+from typing import List, Dict, Optional
+
+def get_signal(ohlcv: List[dict], timeframe: str) -> Optional[Dict]:
+    """
+    Args:
+        ohlcv: List of candles {'ts', 'o', 'h', 'l', 'c', 'v'}
+        timeframe: e.g., '1m', '5m', '15m'
+
+    Returns:
+        {
+            "side": "buy" | "sell",
+            "entry_price": float,
+            "stop_price": float,
+            "exit_price": float, # The Take Profit target
+            "metadata": dict     # Optional extra logging info
+        } or None
+    """
+```
+
+### Implementation Tips
+- **Consistency**: Use `tools/trading_utils.py` to calculate target prices for specific ROEs.
+- **State**: Backtesting is stateless per candle; the `ohlcv` list provides the necessary history.
+- **Slippage/Fees**: The backtest engine handles these automatically based on `config.py` settings. You only need to provide the price levels.
+
+## Data Management
+The system automatically detects missing data for the requested range/asset/timeframe and downloads it from Bitget's history API.
+- **Persistence**: Data is saved to `market_data.db`.
+- **Assets**: Defaults to ETH, HBAR, UNI, GRT (editable in `backtest.py`).
+- **Timeframes**: Defaults to 1m, 3m, 5m, 15m.
+
+## Math & Reporting
+- **Win% (L/S)**: Net win rate for Long and Short positions respectively.
+- **PnL (L/S)**: Cumulative Net PnL for Long and Short positions.
+- **ROE%**: Calculated using 20x leverage as a standard baseline for comparison across different assets.
+- **Position Sizing**: Derived strictly from `config.py` settings:
+    - **Risk**: Uses `RISK_PER_TRADE` (fraction of equity).
+    - **Balance**: Starts with `INITIAL_EQUITY` and compounds based on realized PnL.
+    - **Algorithm**: Uses `tools/trading_utils.py:calculate_position_size`, which is "fee-aware"—it accounts for entry and exit fees when calculating the maximum quantity allowed for a given risk fraction.
+- **Fees**: Accounts for Maker (Limit TP) and Taker (Market/SL) fees as defined in `config.py`.
+- **Slippage**: Applies `EXPECTED_SLIPPAGE` from `config.py` to all taker-executed legs.
+
+## Strategy Reference
+
+### Engulfing (`candle/engulfing` & `candle/engulfing_total`)
+**How it works**:
+- Looks for "Engulfing" candles where the current candle's body swallows the previous candle.
+- Bullish: Green swallows Red. Bearish: Red swallows Green.
+- **TP**: Default +1% Net ROE.
+- **SL**: 1 tick beyond the extreme high/low of the engulfing candle.
+
+### Sentiment (`sentiment`)
+**How it works**:
+- Matches candles based on their shape.
+- **Body Percentage**: How much of the candle is the "body" (the block between Open and Close).
+- **Offset Percentage**: How close that body is to the High or Low.
+- **Command**: `python backtest.py sentiment [body_pct] [offset_pct]`
+- **Leeway**: Includes a 1% allowance (e.g., searching for 10% body finds 9-11%).
+
+### FVG (`fvg`)
+**How it works**:
+- Detects "Fair Value Gaps"—moments where price moves so fast it leaves a "hole" between the 1st and 3rd candle's wicks.
+- **Command**: `python backtest.py fvg [dir_count] [gap_pct] [rrr_override]`
+    - `dir_count`: How many of the 3 candles in the sequence must match the direction.
+    - `gap_pct`: How much of the 2nd candle's range the gap must cover (e.g. 30%).
+- **SL**: 1 tick shy of the gap's midpoint on the opposite side.
+- **TP**: Default +1% Net ROE, or a custom Reward-to-Risk (RRR) ratio.
+
+### Trend (`trend`)
+**How it works**:
+- A "Big Picture" strategy. It establishes if the market is trending up or down.
+- **Command**: `python backtest.py trend [fast_ma] [slow_ma] [rrr_override]`
+- **Buy**: Price is above 200 MA, 50 MA is above 200 MA, and recent swings are moving up.
+- **SL**: Placed at the most recent "valley" (for Longs) or "peak" (for Shorts).
+
+### Market Structure (`structure`)
+**How it works**:
+- A breakout strategy that triggers when price breaks through a previous ceiling or floor.
+- **BOS**: Continuation of the current trend.
+- **MSS**: Initial sign of a trend reversal.
+- **Command**: `python backtest.py structure [type] [rrr_override]`
+- **SL**: 1 tick beyond the level that was just broken.
+
+### Directional Trend (`drt`)
+**How it works**:
+- A sophisticated linear regression gauge that measures trend slope.
+- **Command**: `python backtest.py drt [threshold] [period] [rrr_override]`
+- **Buy**: DRT > 0.6. **Sell**: DRT < 0.4.
+- **SL**: Placed at the recent local valley or peak.
+
+### Institutional Delivery (`idm`)
+**How it works**:
+- High-probability ICT strategy that trades sweeps during London/NY open.
+- **Command**: `python backtest.py idm [rrr_override]`
+- **TP**: Automatically targets the **opposite liquidity pool** (nearest major High for Longs, Low for Shorts).
+- **SL**: 1 tick beyond the sweep wick.
+
+### Support & Resistance (`sr`)
+**How it works**:
+- Trades horizontal "Floors" (Support) and "Ceilings" (Resistance).
+- **Command**: `python backtest.py sr [mode] [rrr_override]`
+    - `mode`: `bounce` (Default) or `breakout`.
+- **Bounce Mode**: A "Mean Reversion" strategy. It assumes price will respect the level.
+    - *Buy* when price touches a Floor; *Sell* when price touches a Ceiling.
+- **Breakout Mode**: A "Momentum" strategy. It assumes price will continue once it breaks through.
+    - *Buy* when price closes ABOVE a Ceiling; *Sell* when price closes BELOW a Floor.
+- **SL**: 1 tick beyond the level being traded.
+
+### Volatility Filter (`atr`)
+**How it works**:
+- A direction-agnostic filter (`+`) to ensure the market is active.
+- **Command**: `python backtest.py "atr [threshold_pct] + [trigger]"`
+- **Both**: Trigger only if volatility > threshold % of price.
+
+### MACD (`macd`)
+**How it works**:
+- A momentum strategy using the Histogram Zero-Cross.
+- **Buy**: Histogram turns positive (MACD crosses above Signal).
+- **Sell**: Histogram turns negative (MACD crosses below Signal).
+- **SL**: Recent local valley or peak.
+
+### Supertrend (`supertrend`)
+**How it works**:
+- A trend-following strategy using a trailing band.
+- **Command**: `python backtest.py supertrend [period] [multiplier] [rrr_override]`
+- **SL**: Placed at the next local swing point for extra buffer.
+
+### Liquidity Sweeps (`sweep`)
+**How it works**:
+- Institutional reversal strategy.
+- **Buy**: Sell-side sweep (wick below low, close above).
+- **Sell**: Buy-side sweep (wick above high, close below).
+- **SL**: 1 tick beyond the reversal wick.
+
+### EMA Alignment (`ema`)
+**How it works**:
+- A trend filter (`+`) to ensure short-term and long-term averages are aligned.
+- **Command**: `python backtest.py "ema 20 50 + [trigger]"`
+- **Buy**: 20 EMA > 50 EMA. **Sell**: 20 EMA < 50 EMA.
+
+### ADX Trend Strength (`adx`)
+**How it works**:
+- A direction-agnostic filter (`+`) to ensure the market is strongly moving.
+- **Command**: `python backtest.py "adx 25 + [trigger]"`
+- **Both**: Trigger only if ADX > 25.
+
+### RSI (`rsi`)
+**How it works**:
+- A "Mean Reversion" strategy. It identifies "exhausted" moves that are likely to snap back.
+- **Command**: `python backtest.py rsi [oversold] [overbought] [rrr_override]`
+- **Buy**: RSI was below 30, but has now closed back above it.
+- **Sell**: RSI was above 70, but has now closed back below it.
+- **SL**: Placed at the recent local valley (Long) or peak (Short).
+
+### Order Blocks (`ob`)
+**How it works**:
+- Institutional strategy. Targets areas where major buying/selling occurred before a fast impulse.
+- **Command**: `python backtest.py ob [rrr_override]`
+- **Logic**: Triggers when price touches an active (unmitigated) Order Block.
+- **SL**: Placed beyond the local swing extreme to protect against common liquidity "sweeps."
+
+### Trading Sessions (`sessions`)
+**How it works**:
+- A "Filter" strategy used for confluence (`+`). It restricts trading to specific global hours.
+- **Command**: `python backtest.py sessions [name] [is_killzone]`
+    - `name`: `asia`, `london`, or `ny`.
+    - `is_killzone`: `true` to only trade the first 2 hours of the session.
+- **Example**: `"sessions ny true + engulfing"`
