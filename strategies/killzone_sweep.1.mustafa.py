@@ -161,6 +161,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
         if state == "WAITING_FOR_BOS1":
             if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
+                log.info(f"MUSTAFA | {symbol} BOS1 detected! Looking for FVG...")
                 self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
                 # Keep going to check FVG in same tick
                 state = "WAITING_FOR_FVG"
@@ -168,8 +169,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
         if state == "WAITING_FOR_FVG":
             fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
             if fvg_data.get('fvg_count', 0) > 0:
-                # Store FVG level for retest check
-                # (Simplification: just move to retest)
+                log.info(f"MUSTAFA | {symbol} FVG detected! Waiting for retest...")
                 self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
                 state = "WAITING_FOR_RETEST"
 
@@ -192,6 +192,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     retested = True
 
             if retested:
+                log.info(f"MUSTAFA | {symbol} FVG Retest complete! Looking for BOS2...")
                 self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                 state = "WAITING_FOR_BOS2"
 

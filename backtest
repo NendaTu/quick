@@ -1,2 +1,4 @@
-#!/usr/bin/env bash
-python backtest.py "$@"
+import sys, subprocess, os
+if __name__ == "__main__":
+    cmd = [sys.executable, "backtest.py"] + sys.argv[1:]
+    subprocess.run(cmd)

@@ -62,15 +62,13 @@ class Progress:
             print()
 
 async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str]):
-    # Filter to only relevant timeframes (entry: 1m, setup: 15m, bias: 1H)
-    target_tfs = [tf for tf in timeframes if tf in ["1m", "15m", "1H"]]
-    log.info(f"Acquiring historical data for {target_tfs}...")
+    log.info("Acquiring historical data...")
 
     target_start_ms = int(START_DATE.timestamp() * 1000)
     target_end_ms = int(END_DATE.timestamp() * 1000)
 
     for asset in assets:
-        for tf in target_tfs:
+        for tf in timeframes:
             # Check what we already have in the required range
             min_ts, max_ts, count = db.get_candle_range_stats(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
 
@@ -432,15 +430,14 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     if len(candles) < 10:
         return None
 
-    # Inject relevant timeframes for this asset and BTC for confluence
+    # Inject ALL timeframes for this asset and BTC for confluence
     history_sec = 86400 * 3 # 3 days history for indicators (balance speed/accuracy)
     asset_history = {}
-    relevant_tfs = ["1m", "15m", "1H"] # Only these are used by the strategy
     for sym in [asset, BTC_SYMBOL]:
-        sim.ohlcv[sym] = {t: [] for t in relevant_tfs}
+        sim.ohlcv[sym] = {t: [] for t in AVAILABLE_TIMEFRAMES}
         sim.confluence_history[sym] = {t: [] for t in ["15m", "1H", "4H", "1D", "1W"]}
         asset_history[sym] = {}
-        for t in relevant_tfs:
+        for t in AVAILABLE_TIMEFRAMES:
             c_data = db.get_candles_in_range(sym, t, START_DATE.timestamp() - history_sec, END_DATE.timestamp())
             data = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v} for ts, o, h, l, cl, v in c_data]
             asset_history[sym][t] = data
@@ -494,7 +491,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             # Synchronize BTC and other timeframes to the current timestamp
             current_ts = c['ts']
             for sym in [asset, BTC_SYMBOL]:
-                for t in relevant_tfs:
+                for t in AVAILABLE_TIMEFRAMES:
                     if sym == asset and t == tf: continue
                     # Add candles from history up to current_ts
                     while len(sim.ohlcv[sym][t]) < len(asset_history[sym][t]) and asset_history[sym][t][len(sim.ohlcv[sym][t])]['ts'] <= current_ts:
@@ -523,8 +520,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         "short": {"trades": ss["sell_wins"] + ss["sell_losses"], "wins": ss["sell_wins"], "pnl": ss["sell_pnl"]}
     }
 
-    # Calculate avg ROE from asset stats if available
-    avg_roe = (ss["pnl"] / (engine.total_trades * config.RISK_PER_TRADE * config.INITIAL_EQUITY / 20) * 100) if engine.total_trades > 0 else 0
+    avg_roe = (sum(engine.pos_pnl.values()) / engine.total_trades) if engine.total_trades > 0 else 0 # Rough estimate
 
     return {
         "asset": asset,
@@ -656,8 +652,7 @@ async def main():
     all_results = []
 
     for asset in DEFAULT_ASSETS:
-        # Only run for the entry timeframe (1m) as requested
-        for tf in ["1m"]:
+        for tf in DEFAULT_TIMEFRAMES:
             res = await run_backtest(chain, db, client, asset, tf)
             all_results.append(res)
 

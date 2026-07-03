@@ -1,2 +1,4 @@
-#!/usr/bin/env bash
-python compare.py "$@"
+import sys, subprocess, os
+if __name__ == "__main__":
+    cmd = [sys.executable, "compare.py"] + sys.argv[1:]
+    subprocess.run(cmd)
