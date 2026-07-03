@@ -5,6 +5,7 @@ from config import *
 from orderbook import OrderBook
 from simulator import Simulator
 from models import LearningModel, DummyModel
+from engine.entry import SignalRouter
 
 log = logging.getLogger("scalper.engine")
 
@@ -51,6 +52,8 @@ class Engine:
             self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
             self.model = DummyModel()
             log.warning("Live/testnet mode support is in foundation.")
+
+        self.router = SignalRouter(mode=MODE, exchange=self.exchange)
 
     async def start(self, preloaded_data=None, external_feed=None):
         self.start_time = time.time()
@@ -158,15 +161,28 @@ class Engine:
         pos_key = f"{symbol}_{side}"
         # If orig_side not passed (e.g. from simulator), default to current
         if orig_side is None: orig_side = side
+
+        # Calculate Margin used for this entry
+        leverage = self.leverage_limits.get(symbol, 20)
+        margin = (qty * entry) / leverage
+
+        entry_ts = ts if ts is not None else time.time()
         self.open_positions[pos_key] = {
             "side": side, "qty": qty, "entry": entry,
             "orig_side": orig_side, "is_contr": is_contr,
-            "ts": ts if ts is not None else time.time()
+            "margin": margin,
+            "ts": entry_ts
         }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False, features: dict = None):
+        # Persistence
+        if hasattr(self.exchange, "db"):
+            strat_id = getattr(self, "strategy", None)
+            strat_id = strat_id.name if strat_id else "model"
+            self.exchange.db.save_trade(strat_id, symbol, side, entry_ts, entry, qty)
+
+    def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False, features: dict = None, margin: float = 0):
         # Local registration cleanup
         pos_key = f"{symbol}_{side}"
 
@@ -176,8 +192,36 @@ class Engine:
 
         # Track session-wide metrics (always updated)
         self.cumulative_pnl += round_trip_pnl
+
+        # Persistence
+        if hasattr(self.exchange, "db"):
+            strat_id = getattr(self, "strategy", None)
+            strat_id = strat_id.name if strat_id else "model"
+            entry_ts = 0
+            entry_price = 0
+            qty = 0
+            if pos_key in self.open_positions:
+                p = self.open_positions[pos_key]
+                entry_ts = p["ts"]
+                entry_price = p["entry"]
+                qty = p["qty"]
+
+            self.exchange.db.save_trade(
+                strat_id, symbol, side, entry_ts, entry_price, qty,
+                exit_ts=time.time(), exit_price=self.exchange.last_price.get(symbol),
+                pnl=round_trip_pnl, exit_type=exit_type
+            )
+
         if symbol not in self.asset_stats:
-            self.asset_stats[symbol] = {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "buy_pnl": 0.0, "sell_pnl": 0.0}
+            self.asset_stats[symbol] = {
+                "buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0,
+                "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "buy_pnl": 0.0, "sell_pnl": 0.0,
+                "total_margin": 0.0
+            }
+
+        # Accumulate margin from the position (proportional to exit)
+        self.asset_stats[symbol]["total_margin"] += margin
+
         self.asset_stats[symbol]["pnl"] += round_trip_pnl
         if side == "buy": self.asset_stats[symbol]["buy_pnl"] += round_trip_pnl
         else: self.asset_stats[symbol]["sell_pnl"] += round_trip_pnl
@@ -504,16 +548,7 @@ class Engine:
                         else:
                             log.debug(signal_msg)
 
-                        kwargs = {}
-                        if EXIT_STRATEGY == "BE+TP1+TP2":
-                            kwargs.update({
-                                "tp1_price": signal.get("tp1_price"),
-                                "tp2_price": signal.get("tp2_price"),
-                                "tp1_qty": signal.get("tp1_qty"),
-                                "tp2_qty": signal.get("tp2_qty")
-                            })
-
-                        # Final collision check immediately before exchange call
+                        # Final collision check immediately before router call
                         if not self._asset_is_tradable(sym, side, features=feat):
                             if pos_key in self.open_positions: del self.open_positions[pos_key]
                             if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
@@ -522,7 +557,13 @@ class Engine:
                         # Add regime to features for predict logic
                         feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
 
-                        resp = self.exchange.place_trade_oco(sym, side, qty, entry, stop, tp, btc_conf, drt, original_side=orig_side, is_contrarian=is_contr, features=feat, **kwargs)
+                        # Inject extra info for router/exchange
+                        signal.update({
+                            "symbol": sym,
+                            "features": feat
+                        })
+
+                        resp = await self.router.route_signal(signal)
                         if resp.get("code") == "00000" and not LOG_SIGNALS:
                             # Show signal with fill/place if LOG_SIGNALS is False
                             log.info(f"Entry Triggered | {signal_msg}")

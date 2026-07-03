@@ -101,7 +101,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
 
             if count >= expected * 0.9: # 90% coverage is good enough to skip
                 if not silent:
-                    log.info(f"Data for {asset} {tf} already exists in DB ({count} candles).")
+                    log.debug(f"Data for {asset} {tf} already exists in DB ({count} candles).")
                 continue
 
             current_end = target_end_ms
@@ -440,6 +440,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     spec_map = {s['symbol']: s for s in specs}
     sim.contract_specs = spec_map
     sim.leverage_limits = {s: float(spec_map[s].get('maxLever', 20)) for s in spec_map if s in [asset, BTC_SYMBOL]}
+    engine.leverage_limits = sim.leverage_limits
     sim.discovered_assets = [asset]
 
     from orderbook import SimulatedOrderBook
@@ -501,6 +502,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] < START_DATE.timestamp():
                 pointers[sym][t] += 1
 
+    # PERFORMANCE: Throttle update processing for confluence timeframes
+    last_processed_ts = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
+
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
@@ -554,7 +558,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                 res = sim.place_trade_oco(
                     asset, signal["side"], signal.get("qty", 0),
                     signal["entry_price"], signal["stop_price"], signal["exit_price"],
-                    features=signal # Pass features so they are available for reporting
+                    features=signal, # Pass features so they are available for reporting
+                    **signal
                 )
 
         progress.update(1)
@@ -568,8 +573,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         "short": {"trades": ss["sell_wins"] + ss["sell_losses"], "wins": ss["sell_wins"], "pnl": ss["sell_pnl"]}
     }
 
-    # Calculate avg ROE from asset stats if available
-    avg_roe = (ss["pnl"] / (engine.total_trades * config.RISK_PER_TRADE * config.INITIAL_EQUITY / 20) * 100) if engine.total_trades > 0 else 0
+    # Calculate ROE based on actual cumulative margin
+    total_margin = ss.get("total_margin", 0)
+    avg_roe = (ss["pnl"] / total_margin * 100) if total_margin > 0 else 0
 
     return {
         "asset": asset,
@@ -580,7 +586,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         "win_rate": (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0,
         "trades": engine.total_trades,
         "equity": sim.equity,
-        "side_stats": side_stats
+        "side_stats": side_stats,
+        "no_data": False
     }
 
 def print_results(results):
@@ -592,6 +599,7 @@ def print_results(results):
     print("-" * 165)
 
     total_pnl = 0
+    total_account_roi = 0
     total_trades = 0
     total_l_wins = 0
     total_l_trades = 0
@@ -602,6 +610,11 @@ def print_results(results):
 
     for r in results:
         if not r: continue
+
+        if r.get("no_data"):
+             print(f"{date_range:<22} | {r['asset']:<10} | {'N/A':<5} | {'NO DATA':>12} | {'N/A':>15} | {'N/A':>8} | {'N/A':>10} | {'N/A':>7} | {'0':>8} | {'N/A':>12}")
+             continue
+
         ss = r['side_stats']
         win_l = (ss['long']['wins'] / ss['long']['trades'] * 100) if ss['long']['trades'] > 0 else 0
         win_s = (ss['short']['wins'] / ss['short']['trades'] * 100) if ss['short']['trades'] > 0 else 0
@@ -611,6 +624,7 @@ def print_results(results):
         print(f"{date_range:<22} | {r['asset']:<10} | {r['tf']:<5} | {win_ls:>12} | {pnl_ls:>15} | {r['roe']:>8.1f}% | {r['pnl']:>10.2f} | {r['roi']:>7.1f}% | {r['trades']:>8} | {r['equity']:>12.2f}")
 
         total_pnl += r['pnl']
+        total_account_roi += r['roi']
         total_trades += r['trades']
         total_l_wins += ss['long']['wins']
         total_l_trades += ss['long']['trades']
@@ -619,13 +633,15 @@ def print_results(results):
         total_s_trades += ss['short']['trades']
         total_s_pnl += ss['short']['pnl']
 
-    if total_trades > 0:
+    if results:
         print("-" * 165)
         ov_win_l = (total_l_wins / total_l_trades * 100) if total_l_trades > 0 else 0
         ov_win_s = (total_s_wins / total_s_trades * 100) if total_s_trades > 0 else 0
         ov_win_ls = f"{ov_win_l:.0f}%/{ov_win_s:.0f}%"
         ov_pnl_ls = f"{total_l_pnl:.1f}/{total_s_pnl:.1f}"
-        ov_roi = (total_pnl / (config.INITIAL_EQUITY * len([x for x in results if x]))) * 100
+
+        # Average ROI across all tested assets
+        ov_roi = total_account_roi / len(results)
 
         print(f"{'OVERALL':<22} | {'ALL':<10} | {'MIX':<5} | {ov_win_ls:>12} | {ov_pnl_ls:>15} | {'N/A':>8} | {total_pnl:>10.2f} | {ov_roi:>7.1f}% | {total_trades:>8} | {'N/A':>12}")
 
@@ -683,6 +699,13 @@ async def main():
     # This allows: python backtest.py "A + B" "C" -> A + B -> C
     query_cmd = " -> ".join(query_parts)
 
+    db = Database()
+    client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE)
+
+    # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
+    if not assets_to_run:
+        assets_to_run = await discover_assets(client)
+
     try:
         chain = parse_confluence_command(query_cmd)
         # Apply overrides to wrappers in the chain
@@ -695,13 +718,6 @@ async def main():
         print(f"Error parsing command: {e}")
         return
 
-    db = Database()
-    client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE)
-
-    # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
-    if not assets_to_run:
-        assets_to_run = await discover_assets(client)
-
     # 1. Acquisition of data
     await download_historical_data(client, db, assets_to_run, DEFAULT_TIMEFRAMES)
 
@@ -711,6 +727,19 @@ async def main():
     for asset in assets_to_run:
         # Only run for the entry timeframe (1m) as requested by user
         res = await run_backtest(chain, db, client, asset, "1m")
+        if res is None:
+             # Create dummy result for assets with no data
+             res = {
+                 "asset": asset,
+                 "no_data": True,
+                 "roi": 0,
+                 "pnl": 0,
+                 "trades": 0,
+                 "side_stats": {
+                     "long": {"wins": 0, "trades": 0, "pnl": 0},
+                     "short": {"wins": 0, "trades": 0, "pnl": 0}
+                 }
+             }
         all_results.append(res)
 
         # Print Milestone Report for this asset

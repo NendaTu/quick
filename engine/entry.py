@@ -7,10 +7,11 @@ from config import MODE, BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
 log = logging.getLogger("engine.router")
 
 class SignalRouter:
-    def __init__(self, mode: str = MODE):
+    def __init__(self, mode: str = MODE, exchange: Optional[BaseExchange] = None):
         self.mode = mode
-        self.exchange: Optional[BaseExchange] = None
-        self._init_exchange()
+        self.exchange = exchange
+        if not self.exchange:
+            self._init_exchange()
 
     def _init_exchange(self):
         if self.mode == "paper":

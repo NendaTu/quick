@@ -711,7 +711,10 @@ class Simulator:
                 # Once entry is filled, add TP/SL
                 sid = self.order_id_counter; self.order_id_counter += 1
                 tp_orders = []
-                if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2" and o.get("tp1_price"):
+                # Check if we should use TP1+TP2 (either from config or signal presence)
+                use_tp_split = (EXIT_STRATEGY == "BE+TP1+TP2" or o.get("tp1_price") is not None)
+
+                if use_tp_split and o.get("tp1_price"):
                     tid1 = self.order_id_counter; self.order_id_counter += 1
                     tid2 = self.order_id_counter; self.order_id_counter += 1
                     tp_orders.extend([
@@ -835,7 +838,9 @@ class Simulator:
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
-            if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2" and kwargs.get("tp1_price"):
+            use_tp_split = (EXIT_STRATEGY == "BE+TP1+TP2" or kwargs.get("tp1_price") is not None)
+
+            if use_tp_split and kwargs.get("tp1_price"):
                 tid1 = self.order_id_counter; self.order_id_counter += 1
                 tid2 = self.order_id_counter; self.order_id_counter += 1
                 tp_orders.extend([
@@ -954,7 +959,7 @@ class Simulator:
             if not pos.get("initial_qty"): pos["initial_qty"] = pos["qty"]
             pos["qty"] -= qty
 
-            # If TP1 hit, move Stop Loss to halfway between BE and TP1
+            # If TP1 hit, move Stop Loss to halfway between Entry and TP1 (Aggressive BE)
             if is_tp1:
                 # Find the existing STOP order
                 for o in self.pending_orders:
@@ -962,19 +967,20 @@ class Simulator:
                         # Update quantity to remaining
                         o["qty"] = pos["qty"]
 
-                        # Move SL price
-                        be_price = o.get("triggerPrice") # It was already at BE because TP1 only activates after BE
-                        new_sl = (be_price + fill_price) / 2
+                        # Move SL price to halfway between entry and exit (fill_price)
+                        entry_price = pos["entry_price"]
+                        new_sl = (entry_price + fill_price) / 2
 
                         # Respect precision
                         spec = self.contract_specs.get(sym, {})
                         price_place = int(spec.get('pricePlace', 2))
                         o["triggerPrice"] = round(new_sl, price_place)
+                        o["is_breakeven"] = True # Mark as protected
 
-                        log.info(f"TP1 HIT: SL for {sym} {side.upper()} moved to {o['triggerPrice']:.8f} (Halfway BE/TP1)")
+                        log.info(f"TP1 HIT: SL for {sym} {side.upper()} moved to {o['triggerPrice']:.8f} (Halfway Entry/TP1)")
                         break
         else:
             del self.positions[(sym, side)]
             self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
-        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial, features=pos.get("features"))
+        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial, features=pos.get("features"), margin=margin_release)

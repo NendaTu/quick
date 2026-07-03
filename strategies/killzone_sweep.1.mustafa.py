@@ -15,10 +15,11 @@ high precision across three timeframes.
 - **JAPAN**: Core 19:00-1:00 | Overnight 1:00-19:00
 - **HK**: Core 20:30-4:00 | Overnight 4:00-20:30
 
-## Goals
-- **Compounding Target**: Progress toward the 5% per trade conceptually required for rapid capital growth.
-- **Selectivity**: Prioritize setup quality over frequency, targeting high-probability reversal points.
-- **Risk Management**: Dynamic Reward-to-Risk (RRR) based on real-time institutional liquidity levels.
+## Goals & Rationale
+- **Compounding Target**: Targets a net ROI of 1-5% per trade. While the system's "north star" is 5%, this strategy balances that with realistic institutional liquidity targets to maintain a high win rate (>65%).
+- **Frequency**: Aims for 1-3 high-quality setups per asset per day. By monitoring 250 assets, the global frequency supports the rapid compounding goal.
+- **Selectivity**: Prioritize setup quality over raw frequency. It avoids "choppy" mid-range price action, focusing exclusively on extremes where institutional "smart money" is forced to reveal its hand.
+- **Risk Management**: Employs a strict 0.5% risk-per-trade model with fee-aware position sizing. Uses an "Aggressive Break-Even" (moving SL to 50% profit point) upon TP1 to eliminate tail risk early.
 
 ## Modules Used
 - `ta/patterns/sessions.py`: Orchestrates the awareness of which global hub is active and calculates
@@ -51,12 +52,15 @@ high precision across three timeframes.
    - **TP2**: Targeted at the next 15m liquidity level at/beyond 1:2.5 RRR.
 
 ## Limitations & Assumptions
-- **Volume Dependence**: Expects standard exchange hours for liquidity; may underperform during bank holidays.
-- **Latency Sensitivity**: Requires low-latency execution as 1m BOS2 triggers can move quickly.
-- **History Requirement**: Needs at least 3 days of 1H/15m data to accurately calculate ranges and MTF bias.
+- **Volume Dependence**: Expects standard exchange hours for liquidity (London/NY overlap is optimal); may underperform during low-volume bank holidays or late Asian session "drifts".
+- **Latency Sensitivity**: Requires low-latency execution as 1m BOS2 triggers can move significantly within seconds.
+- **History Requirement**: Needs at least 3-5 days of 1H/15m data to accurately calculate multi-day overnight ranges and establish consistent MTF bias.
+- **Market Conditions**: Highly effective in Trending or Range-Expansion markets. May suffer from "paper cuts" in low-volatility, sideways-grinding markets where liquidity sweeps lack follow-through.
+- **Asset Universe**: Designed for high-volume USDT-M futures on Bitget; requires assets with tight spreads (<0.1%) and sufficient order book depth to support the intended position sizes.
 """
 
 import logging
+import math
 from typing import Dict, Optional, Any, List
 from strategies.base_strategy import JBaseStrategy
 from tools.trading_utils import calculate_position_size
@@ -225,10 +229,22 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 # --- Phase 4: Entry & Risk Management ---
                 entry_price = m1[-1]['c']
 
-                # SL: 1 tick past FVG (opposite side)
+                # Get asset precision
+                price_place = 2
+                if self.simulator and symbol in self.simulator.contract_specs:
+                    price_place = int(self.simulator.contract_specs[symbol].get('pricePlace', 2))
+                tick_size = 1 / (10**price_place)
+
+                # SL: exactly 1 tick past FVG extreme (opposite side)
                 fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
-                fvg_mid = entry_price / (1 + fvg_data.get('nearest_fvg_dist', 0))
-                stop_price = fvg_mid * (0.998 if sweep_side == 'ssl' else 1.002)
+                if sweep_side == 'ssl': # Bullish Entry
+                    # SL is below FVG Bottom
+                    fvg_extreme = fvg_data.get('nearest_fvg_bottom') or (entry_price * 0.995)
+                    stop_price = fvg_extreme - tick_size
+                else: # Bearish Entry
+                    # SL is above FVG Top
+                    fvg_extreme = fvg_data.get('nearest_fvg_top') or (entry_price * 1.005)
+                    stop_price = fvg_extreme + tick_size
 
                 # TP1/TP2 from 15m liquidity
                 risk = abs(entry_price - stop_price)
@@ -254,6 +270,23 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 equity = market_data.get("equity") or (self.simulator.equity if self.simulator else config.INITIAL_EQUITY)
                 qty = calculate_position_size(equity, config.RISK_PER_TRADE, entry_price, stop_price)
 
+                # Round quantity based on asset specs
+                if self.simulator and symbol in self.simulator.contract_specs:
+                    spec = self.simulator.contract_specs[symbol]
+                    qty_place = int(spec.get('quantityPlace', 3))
+                    # Use floor to avoid exceeding margin limits
+                    qty = math.floor(qty * (10**qty_place)) / (10**qty_place)
+
+                    # Check minimum size
+                    min_qty = float(spec.get('minTradeUSDT', 5.0)) / entry_price
+                    if qty < min_qty:
+                        qty = math.ceil(min_qty * (10**qty_place)) / (10**qty_place)
+                        # Re-verify we still have margin for this rounded-up qty
+                        max_lev = float(spec.get('maxLever', 20))
+                        if (qty * entry_price) / max_lev > equity * 0.95: # Safety buffer
+                            log.warning(f"MUSTAFA | {symbol} Rounded qty {qty} exceeds available margin. Skipping.")
+                            return None
+
                 # TRIGGER ENTRY & LOG DATA
                 if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
                     log.info(f"MUSTAFA | {symbol} {sweep_side.upper()} BOS2 Triggered ({m1_sig})! Hub: {hub}")
@@ -264,6 +297,11 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
 
+                tp1_qty = qty * self.params["tp1_qty_ratio"]
+                # Ensure tp1_qty also follows asset precision
+                tp1_qty = round(tp1_qty, qty_place)
+                tp2_qty = qty - tp1_qty
+
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",
                     "entry_price": entry_price,
@@ -271,8 +309,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     "exit_price": tp2,
                     "tp1_price": tp1,
                     "tp1_qty_ratio": self.params["tp1_qty_ratio"],
-                    "tp1_qty": qty * self.params["tp1_qty_ratio"],
-                    "tp2_qty": qty * (1 - self.params["tp1_qty_ratio"]),
+                    "tp1_qty": tp1_qty,
+                    "tp2_qty": tp2_qty,
                     "qty": qty
                 }
 
