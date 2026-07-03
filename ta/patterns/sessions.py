@@ -35,6 +35,8 @@ HUBS = {
     }
 }
 
+_ov_range_cache = {}
+
 def is_time_in_range(target_min: int, start_min: int, end_min: int) -> bool:
     if start_min <= end_min:
         return start_min <= target_min < end_min
@@ -64,17 +66,18 @@ def get_current_hub_context(timestamp_s: float) -> Dict:
 def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
     """
     Identifies the high/low range of the most recent overnight session for the current hub.
-    Uses the provided now_ts to determine the hub context.
+    Uses caching to avoid redundant heavy scans.
     """
     if not ohlcv: return {}
 
+    # Cache key based on the current hour and hub context
     ctx = get_current_hub_context(now_ts)
-    now_min = ctx['dt'].hour * 60 + ctx['dt'].minute
+    now_hour_ts = (now_ts // 3600) * 3600
 
-    # 1. Determine which hub's killzone we are in
+    # Determine target hub for current killzone
+    now_min = ctx['dt'].hour * 60 + ctx['dt'].minute
     target_hub = None
     for hub_name, sessions in HUBS.items():
-        # Killzone: First 2 hours of core session
         if is_time_in_range(now_min, sessions['core'][0], sessions['core'][0] + 120):
             target_hub = hub_name
             break
@@ -82,24 +85,24 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
     if not target_hub:
         return {}
 
+    cache_key = f"{now_hour_ts}_{target_hub}"
+    if cache_key in _ov_range_cache:
+        return _ov_range_cache[cache_key]
+
     # 2. Find range from previous Core End to current Core Start
-    # We scan the provided ohlcv (assumed to be 1H for efficiency)
     ov_high = -1.0
     ov_low = 1e12
     found = False
 
     # Target period: candles where hub was in 'overnight' status AND before now_ts
-    for c in reversed(ohlcv):
+    # Scan limit: 120 candles (5 days of 1H) is enough to cover weekends
+    for c in reversed(ohlcv[-120:]):
         if c['ts'] >= now_ts: continue
 
         c_dt = convert_to_local(c['ts'])
         c_min = c_dt.hour * 60 + c_dt.minute
 
-        # Is this hub's status 'overnight' at this candle?
         hub_ov = is_time_in_range(c_min, HUBS[target_hub]['overnight'][0], HUBS[target_hub]['overnight'][1])
-
-        # Weekend extension: Saturday and Sunday are always part of the 'overnight' range
-        # for a Monday morning open.
         if c_dt.weekday() >= 5: hub_ov = True
 
         if hub_ov:
@@ -107,16 +110,20 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
             ov_low = min(ov_low, c['l'])
             found = True
         elif found:
-            # We reached the previous Core session, stop scanning
             break
 
     if not found: return {}
 
-    return {
+    res = {
         'overnight_high': ov_high,
         'overnight_low': ov_low,
         'hub': target_hub
     }
+
+    if len(_ov_range_cache) > 500: _ov_range_cache.clear()
+    _ov_range_cache[cache_key] = res
+
+    return res
 
 def identify_sessions(ohlcv: List[dict]) -> Dict:
     """Legacy support."""

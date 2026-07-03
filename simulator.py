@@ -49,6 +49,7 @@ class Simulator:
         self.pending_orders: List[dict] = []
         self.order_id_counter = 1000
         self.total_realized_pnl = 0.0
+        self.latency_simulation = True
         self.engine = None
         self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
@@ -676,8 +677,9 @@ class Simulator:
 
         for o, et in fills:
             # Simulate realistic network latency and engine processing time
-            latency = random.lognormvariate(math.log(0.035), 0.4)
-            await asyncio.sleep(max(0.01, min(0.3, latency)))
+            if self.latency_simulation:
+                latency = random.lognormvariate(math.log(0.035), 0.4)
+                await asyncio.sleep(max(0.01, min(0.3, latency)))
 
             if et in ["entry", "entry_timeout"]:
                 # Release reserved margin from the pending limit order

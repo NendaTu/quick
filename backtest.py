@@ -473,15 +473,32 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             wrapper.simulator = sim
             wrapper.instance = wrapper._load_strategy(wrapper.path)
 
+    # Track pointers into history for each timeframe/symbol to avoid re-scanning
+    pointers = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
+    # Advance pointers to where we pre-populated
+    for sym in [asset, BTC_SYMBOL]:
+        for t in relevant_tfs:
+            while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] < START_DATE.timestamp():
+                pointers[sym][t] += 1
+
+    # PERFORMANCE: Throttle update processing for confluence timeframes
+    last_processed_ts = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
+
+    # Remove artificial latency for backtests
+    sim.latency_simulation = False
+
     # Simulation Loop using unified engine
     for i in range(start_idx, len(full_history)):
         c = full_history[i]
         o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
-        # Update simulator's OHLCV for current candle
+        # [PERF-001] Update simulator's OHLCV with sliding window
         sim.ohlcv[asset][tf].append(c)
+        if len(sim.ohlcv[asset][tf]) > 1000: sim.ohlcv[asset][tf].pop(0)
+
         if tf in sim.confluence_history[asset]:
             sim.confluence_history[asset][tf].append(cl)
+            if len(sim.confluence_history[asset][tf]) > 1000: sim.confluence_history[asset][tf].pop(0)
 
         # [BT-001] Simulate Intra-Candle Price Action (O -> H/L -> C)
         for price in [o, h, l, cl]:
@@ -489,7 +506,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             if asset in sim.books:
                 sim.books[asset].mid_price = price
                 sim.books[asset]._regenerate()
-            await sim._process_orders()
+            # [PERF-002] Order processing is only needed if we have positions or pending orders
+            if sim.positions or sim.pending_orders:
+                await sim._process_orders()
 
         # 2. Check for entry signal
         if len(sim.ohlcv[asset][tf]) >= 2:
@@ -498,14 +517,21 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             for sym in [asset, BTC_SYMBOL]:
                 for t in relevant_tfs:
                     if sym == asset and t == tf: continue
-                    # Add candles from history up to current_ts
-                    while len(sim.ohlcv[sym][t]) < len(asset_history[sym][t]) and asset_history[sym][t][len(sim.ohlcv[sym][t])]['ts'] <= current_ts:
-                        new_c = asset_history[sym][t][len(sim.ohlcv[sym][t])]
+
+                    # [PERF-003] Only sync history when needed
+                    while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] <= current_ts:
+                        new_c = asset_history[sym][t][pointers[sym][t]]
                         sim.ohlcv[sym][t].append(new_c)
+                        if len(sim.ohlcv[sym][t]) > 1000: sim.ohlcv[sym][t].pop(0)
+
                         if t in sim.confluence_history[sym]:
                             sim.confluence_history[sym][t].append(new_c['c'])
+                            if len(sim.confluence_history[sym][t]) > 1000: sim.confluence_history[sym][t].pop(0)
 
-            signal = chain.check(sim.ohlcv[asset][tf][-200:], tf, symbol=asset)
+                        pointers[sym][t] += 1
+
+            # [PERF-004] Pass the limited sliding window to pattern detection
+            signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
             if signal:
                 # Place trade via unified engine
                 res = sim.place_trade_oco(
