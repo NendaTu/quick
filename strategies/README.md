@@ -98,9 +98,31 @@ The `LearningModel` is available to provide weighted scoring based on collective
 
 ```python
 """
-# [Name] Strategy v[Version].[Author]
+# [Strategy Name] Strategy v[Version].[Author]
+
 ## Overview
-...
+This strategy [detailed description of logic...].
+It is designed for [market conditions...] using [timeframes...].
+
+## Goals
+- Target ROE: [e.g., 20% per trade]
+- Frequency: [e.g., 10-20 trades per hour]
+- Rationale: [e.g., High-frequency micro-compounding...]
+
+## Modules Used
+- `ta/patterns/sessions.py`: Used to identify [specific role...]
+- `ta/indicators/rsi.py`: Provides [specific filter...]
+- ...
+
+## The Intended Flow
+1. [Step 1: e.g., Identify HTF Bias...]
+2. [Step 2: e.g., Monitor for LTF liquidity sweep...]
+3. [Step 3: e.g., Confirm entry via BOS and FVG retest...]
+4. [Step 4: e.g., Manage position with trailing stops...]
+
+## Limitations & Assumptions
+- Assumes [e.g., 0.1% slippage maximum]
+- May underperform during [e.g., news events, bank holidays]
 """
 from strategies.base_strategy import JBaseStrategy
 

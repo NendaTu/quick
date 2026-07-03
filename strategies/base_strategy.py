@@ -13,6 +13,7 @@ class JBaseStrategy(BaseStrategy):
         self.version = version
         self.author = author
         self.file_name = f"{name}.{version}.{author}.py"
+        self._mem_state = {} # In-memory fallback
 
         # Apply config overrides
         for key, value in self.config_overrides.items():
@@ -29,8 +30,10 @@ class JBaseStrategy(BaseStrategy):
     def save_state(self, key: str, value: Any, simulator=None):
         if simulator and hasattr(simulator, "db") and simulator.db:
             simulator.db.save_strategy_state(self.file_name, key, value)
+        else:
+            self._mem_state[key] = str(value)
 
     def get_state(self, key: str, simulator=None) -> Optional[str]:
         if simulator and hasattr(simulator, "db") and simulator.db:
             return simulator.db.get_strategy_state(self.file_name, key)
-        return None
+        return self._mem_state.get(key)

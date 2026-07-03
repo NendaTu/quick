@@ -37,14 +37,21 @@ def identify_liquidity(ohlcv: List[dict], lookback: int = LOOKBACK, swing_streng
 
     swings = detect_swings(relevant, strength=swing_strength)
 
+    # 1. Immediate (last swing)
     immediate_bsl = swings['highs'][-1]['price'] if swings['highs'] else max_high
     immediate_ssl = swings['lows'][-1]['price'] if swings['lows'] else min_low
+
+    # 2. All recent levels for scanning
+    all_bsl = [s['price'] * (1 + BUFFER_PCT) for s in swings['highs']]
+    all_ssl = [s['price'] * (1 - BUFFER_PCT) for s in swings['lows']]
 
     return {
         'bsl_level': immediate_bsl * (1 + BUFFER_PCT),
         'ssl_level': immediate_ssl * (1 - BUFFER_PCT),
         'internal_bsl': swings['highs'][-2]['price'] if len(swings['highs']) > 1 else immediate_bsl,
         'internal_ssl': swings['lows'][-2]['price'] if len(swings['lows']) > 1 else immediate_ssl,
+        'all_bsl': sorted(list(set(all_bsl))),
+        'all_ssl': sorted(list(set(all_ssl)), reverse=True),
         'range_high': max_high,
         'range_low': min_low
     }

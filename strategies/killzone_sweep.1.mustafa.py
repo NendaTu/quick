@@ -99,7 +99,9 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
         # --- Phase 1: Bias Identification (1H) ---
         ov_range = identify_overnight_range(h1, prior_close_hour=self.params["prior_close_hour"])
-        if not ov_range: return None
+        if not ov_range:
+            # log.debug(f"MUSTAFA | No overnight range found for {symbol}")
+            return None
 
         h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
         h1_sig = h1_struct.get('structure_signal') or ''
@@ -109,7 +111,9 @@ class KillzoneSweepStrategy(JBaseStrategy):
         if 'bullish' in h1_sig: bias = 'bullish'
         elif 'bearish' in h1_sig: bias = 'bearish'
 
-        if bias == 'neutral': return None
+        if bias == 'neutral':
+            # log.debug(f"MUSTAFA | No 1H bias found for {symbol} (sig: {h1_sig})")
+            return None
 
         # --- Phase 2: Sweep Detection (15m) ---
         # 6. Invalidate if any 15m candle closed outside the overnight range
@@ -139,7 +143,11 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 sweep_detected = True
                 sweep_side = 'bsl'
 
-        if not sweep_detected: return None
+        if not sweep_detected:
+            # log.debug(f"MUSTAFA | No sweep detected for {symbol} (bias: {bias})")
+            return None
+
+        log.info(f"MUSTAFA | Sweep detected on 15m for {symbol} {sweep_side.upper()}! Bias: {bias}")
 
         # --- Phase 3: Execution Sequence (1m) ---
         # This part usually requires state tracking because BOS1 -> FVG -> Retest -> BOS2
@@ -217,11 +225,25 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
                 # Refine with actual liquidity levels
                 if sweep_side == 'ssl':
-                    if liq_15m.get('bsl_level', 0) > tp1: tp1 = liq_15m['bsl_level']
-                    if liq_15m.get('internal_bsl', 0) > tp1: tp1 = liq_15m['internal_bsl']
+                    # Bullish: look for BSL targets above min_tp
+                    for level in liq_15m.get('all_bsl', []):
+                        if level >= tp1:
+                            tp1 = level
+                            break
+                    for level in liq_15m.get('all_bsl', []):
+                        if level >= tp2:
+                            tp2 = level
+                            break
                 else:
-                    if liq_15m.get('ssl_level', 1e12) < tp1: tp1 = liq_15m['ssl_level']
-                    if liq_15m.get('internal_ssl', 1e12) < tp1: tp1 = liq_15m['internal_ssl']
+                    # Bearish: look for SSL targets below min_tp
+                    for level in liq_15m.get('all_ssl', []):
+                        if level <= tp1:
+                            tp1 = level
+                            break
+                    for level in liq_15m.get('all_ssl', []):
+                        if level <= tp2:
+                            tp2 = level
+                            break
 
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",

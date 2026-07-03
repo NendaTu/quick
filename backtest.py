@@ -189,12 +189,13 @@ def find_strategy_file(query: str) -> Optional[str]:
     return None
 
 class StrategyWrapper:
-    def __init__(self, path: str, params: List[str] = None, ignore_direction: bool = False, is_flipped: bool = False, simulator=None):
+    def __init__(self, path: str, params: List[str] = None, ignore_direction: bool = False, is_flipped: bool = False, simulator=None, overrides=None):
         self.path = path
         self.params = params or []
         self.ignore_direction = ignore_direction
         self.is_flipped = is_flipped
         self.simulator = simulator
+        self.overrides = overrides or {}
         self.instance = self._load_strategy(path)
 
     def _load_strategy(self, path):
@@ -210,7 +211,7 @@ class StrategyWrapper:
         if "strategies/" in path:
             for name, obj in module.__dict__.items():
                 if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
-                    return obj(simulator=self.simulator)
+                    return obj(simulator=self.simulator, config_overrides=self.overrides)
 
         return module
 
@@ -519,31 +520,17 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         "short": {"trades": ss["sell_wins"] + ss["sell_losses"], "wins": ss["sell_wins"], "pnl": ss["sell_pnl"]}
     }
 
-    return {
-        "asset": asset,
-        "tf": tf,
-        "roe": 0,
-        "pnl": ss["pnl"],
-        "roi": roi,
-        "win_rate": (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0,
-        "trades": engine.total_trades,
-        "equity": sim.equity,
-        "side_stats": side_stats
-    }
-
-    roi = (equity / config.INITIAL_EQUITY - 1) * 100
-    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-    avg_roe = (total_roe / total_trades) if total_trades > 0 else 0
+    avg_roe = (sum(engine.pos_pnl.values()) / engine.total_trades) if engine.total_trades > 0 else 0 # Rough estimate
 
     return {
         "asset": asset,
         "tf": tf,
         "roe": avg_roe,
-        "pnl": pnl,
+        "pnl": ss["pnl"],
         "roi": roi,
-        "win_rate": win_rate,
-        "trades": total_trades,
-        "equity": equity,
+        "win_rate": (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0,
+        "trades": engine.total_trades,
+        "equity": sim.equity,
         "side_stats": side_stats
     }
 
@@ -614,11 +601,19 @@ async def main():
     import re
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
     dates_found = []
+    overrides = {}
 
     for arg in sys.argv[1:]:
         # Detect dates (YYYY-MM-DD)
         if date_regex.match(arg):
             dates_found.append(arg)
+        elif "=" in arg:
+            k, v = arg.split("=", 1)
+            try:
+                import ast
+                overrides[k] = ast.literal_eval(v)
+            except:
+                overrides[k] = v
         else:
             query_parts.append(arg)
 
@@ -637,6 +632,12 @@ async def main():
 
     try:
         chain = parse_confluence_command(query_cmd)
+        # Apply overrides to wrappers in the chain
+        for segment in chain.segments:
+            for wrapper in segment:
+                wrapper.overrides = overrides
+                # Re-load instance with overrides
+                wrapper.instance = wrapper._load_strategy(wrapper.path)
     except Exception as e:
         print(f"Error parsing command: {e}")
         return
