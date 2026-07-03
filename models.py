@@ -25,6 +25,23 @@ class LearningModel:
             "trend": 1.0
         }
         self.lr = 0.01
+        self._load_shared_weights()
+
+    def _load_shared_weights(self):
+        if hasattr(self.simulator, "db") and self.simulator.db:
+            shared = self.simulator.db.get_weights()
+            if shared:
+                # Merge shared weights into our local weights
+                # This allows shared knowledge while keeping strategy-specific keys
+                for k, v in shared.items():
+                    if k in self.weights:
+                        self.weights[k] = v
+                log.info(f"LEARNING | Loaded shared weights: {self.weights}")
+
+    def _save_shared_weights(self):
+        if hasattr(self.simulator, "db") and self.simulator.db:
+            for k, v in self.weights.items():
+                self.simulator.db.save_weight(k, v)
 
     def train_on_trade(self, symbol, features, pnl):
         """
@@ -66,6 +83,7 @@ class LearningModel:
         for k in self.weights:
             self.weights[k] = max(0.1, min(5.0, self.weights[k]))
 
+        self._save_shared_weights()
         log.info(f"LEARNING | {symbol} {side.upper()} PnL={pnl:.4f} | Adjusted Weights: {self.weights}")
 
     def train_on_tick(self, symbol, prev_features, actual_up):
@@ -232,29 +250,6 @@ class LearningModel:
             score += bonus
             log.debug(f"IMBALANCE LEAD (Price Flat): adding {bonus} bonus to score")
 
-        # [OP Roadmap] Session Liquidity "Magnet" Weighting
-        # Bias trades toward unswapped session extremes
-        curr_price = features.get("mid", 0)
-        session = features.get("current_session")
-        if session:
-            # We look for the MOST RECENT session's high/low
-            # For simplicity, if we are in London, we check Asia's H/L as magnets
-            prev_session = 'asia' if session == 'london' else 'london' if session == 'ny' else 'ny'
-            ph = features.get(f"{prev_session}_h", 0)
-            pl = features.get(f"{prev_session}_l", 0)
-
-            if ph > 0 and pl > 0:
-                dist_h = (ph / curr_price - 1) if curr_price > 0 else 0
-                dist_l = (curr_price / pl - 1) if curr_price > 0 else 0
-
-                # Bonus if trade side points TOWARD a session magnet within 1%
-                if direction == "buy" and dist_h > 0 and dist_h < 0.01:
-                    score += 0.5
-                    log.debug(f"SESSION MAGNET (Bullish): Targeting {prev_session}_h")
-                elif direction == "sell" and dist_l > 0 and dist_l < 0.01:
-                    score -= 0.5
-                    log.debug(f"SESSION MAGNET (Bearish): Targeting {prev_session}_l")
-
         # 8. Market Structure (BOS vs MSS) contribution
         struct = features.get("structure_signal")
         if struct:
@@ -303,6 +298,29 @@ class LearningModel:
         elif imb > 0: direction = "buy"
         elif imb < 0: direction = "sell"
         else: direction = "buy" if drt >= 0.5 else "sell"
+
+        # [OP Roadmap] Session Liquidity "Magnet" Weighting
+        # Bias trades toward unswapped session extremes
+        curr_price = features.get("mid", 0)
+        session = features.get("current_session")
+        if session:
+            # We look for the MOST RECENT session's high/low
+            # For simplicity, if we are in London, we check Asia's H/L as magnets
+            prev_session = 'asia' if session == 'london' else 'london' if session == 'ny' else 'ny'
+            ph = features.get(f"{prev_session}_h", 0)
+            pl = features.get(f"{prev_session}_l", 0)
+
+            if ph > 0 and pl > 0:
+                dist_h = (ph / curr_price - 1) if curr_price > 0 else 0
+                dist_l = (curr_price / pl - 1) if curr_price > 0 else 0
+
+                # Bonus if trade side points TOWARD a session magnet within 1%
+                if direction == "buy" and dist_h > 0 and dist_h < 0.01:
+                    score += 0.5
+                    log.debug(f"SESSION MAGNET (Bullish): Targeting {prev_session}_h")
+                elif direction == "sell" and dist_l > 0 and dist_l < 0.01:
+                    score -= 0.5
+                    log.debug(f"SESSION MAGNET (Bearish): Targeting {prev_session}_l")
 
         # --- CONTRARIAN FILTER LOGIC ---
         # If CONTRARIAN_FILTER is True, we flip the INTENDED direction for all hard gates

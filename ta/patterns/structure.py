@@ -94,17 +94,19 @@ def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
         "metadata": {"type": sig, "target_roe": target_roe}
     }
 
-def identify_structure(ohlcv: List[dict]) -> Dict:
+def identify_structure(ohlcv: List[dict], strength: int = 2, impulse_threshold: float = IMPULSE_THRESHOLD) -> Dict:
     """
     Analyzes market structure and identifies breaks.
     Uses closed candles for structural points to prevent repainting.
     """
+    # [PERF-001] Cap scan range to 300 candles for high-frequency performance
+    lookback = 300
     if not ENABLED or len(ohlcv) < 51:
         return {}
 
     # 1. Get confirmed swing points from CLOSED candles
-    closed_ohlcv = ohlcv[:-1]
-    swings = detect_swings(closed_ohlcv, strength=2)
+    closed_ohlcv = ohlcv[-lookback:-1]
+    swings = detect_swings(closed_ohlcv, strength=strength)
     highs = swings['highs']
     lows = swings['lows']
 
@@ -133,7 +135,7 @@ def identify_structure(ohlcv: List[dict]) -> Dict:
         structure_signal = 'bullish_bos'
     elif is_breaking_lh:
         candle_range = curr['h'] - curr['l']
-        if candle_range > IMPULSE_THRESHOLD * atr:
+        if candle_range > impulse_threshold * atr:
             structure_signal = 'bullish_mss'
         else:
             structure_signal = 'bullish_choch'
@@ -141,7 +143,7 @@ def identify_structure(ohlcv: List[dict]) -> Dict:
         structure_signal = 'bearish_bos'
     elif is_breaking_hl:
         candle_range = curr['h'] - curr['l']
-        if candle_range > IMPULSE_THRESHOLD * atr:
+        if candle_range > impulse_threshold * atr:
             structure_signal = 'bearish_mss'
         else:
             structure_signal = 'bearish_choch'

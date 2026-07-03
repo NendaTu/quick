@@ -33,44 +33,49 @@ A high-performance algorithmic trading system for Bitget USDT-M Futures, featuri
 ## Usage
 
 ### Standard Run
-Execute the bot using the primary configuration in `config.py`:
+Execute the bot using a specific strategy. Strategies are located in the `strategies/` directory.
+
 ```bash
-python main.py
+# Run with a specific strategy and mode
+python3 main.py --strategy killzone_sweep.1.mustafa --mode paper
 ```
 
 ### Backtesting
-Backtest individual technical analysis conditions against historical data.
+Backtest individual strategies or technical analysis conditions against historical data.
 
 ```bash
-# Backtest a specific candle pattern (recursively searches ta/)
-python backtest.py candle/engulfing
+# Backtest a class-based strategy
+python3 backtest.py killzone_sweep.1.mustafa
 
-# Backtest with strategy parameters
-python backtest.py sentiment 10 30
+# Backtest with asset filtering and date range
+python3 backtest.py killzone_sweep.1.mustafa 2026-05-01 2026-06-01 assets=ETHUSDT,UNIUSDT
 
-# Backtest with a specific date range
-python backtest.py candle/engulfing_total 2026-05-01 2026-06-01
+# Backtest with parameter overrides
+python3 backtest.py killzone_sweep.1.mustafa h1_strength=1
+
+# Backtest a specific TA module (recursively searches ta/)
+python3 backtest.py pattern/structure
 
 # Advanced: Confluence Chaining (use -> for sequences)
-python backtest.py "candle/engulfing -> fvg 3 25"
+python3 backtest.py "candle/engulfing -> fvg 3 25"
 ```
 
 The system will automatically download missing historical data and save it to the shared database.
 
 ### A/B Testing (Comparison)
-The `compare.py` tool allows you to run multiple strategy variants concurrently against the same real-time data feed.
+The `compare` tool allows you to run multiple strategy variants or parameter overrides concurrently.
 
-#### Method 1: CLI Overrides
-Compare the baseline (`config.py`) against specific parameter changes:
+#### Method 1: Strategy Comparison
+Compare two different strategy files side-by-side:
 ```bash
-# Compare root config vs one override
-python compare.py SL_MOVE=0.01
+./compare --strategy-a scalper.1.jules --strategy-b my_new_strat.1.dev
+```
 
-# Compare root config vs multiple different values for the same parameter
-python compare.py SL_MOVE=0.005 SL_MOVE=0.01 SL_MOVE=0.02
-
-# Mix multiple parameter overrides
-python compare.py "SL_MOVE=0.01, TP_MOVE=0.02" "SL_MOVE=0.005, TP_MOVE=0.01"
+#### Method 2: CLI Overrides
+Compare a strategy against specific parameter changes:
+```bash
+# Compare a strategy with different SL values
+./compare --strategy scalper.1.jules SL_MOVE=0.01 SL_MOVE=0.02
 ```
 
 #### Method 2: Config Files
@@ -86,7 +91,9 @@ Press `CTRL+C` at any time to stop the comparison. The bot will print a final si
 
 ## Infrastructure
 
-- **`compare/logs/`**: Contains isolated trade logs for each variant during A/B testing.
+- **`strategies/`**: Orchestration layer for trading logic.
+- **`engine/`**: Core execution and routing logic.
+- **`compare_data/logs/`**: Contains isolated trade logs for each variant during A/B testing.
 - **`market_data.db`**: SQLite database for persistent storage (standard runs only).
 - **`docs/archived/`**: Historical project documentation.
 
