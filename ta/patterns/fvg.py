@@ -62,11 +62,15 @@ def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     gap_top, gap_bottom = 0, 0
 
     if c3['l'] > c1['h']:
-        fvg_type = "buy" # Bullish
-        gap_top, gap_bottom = c3['l'], c1['h']
+        # Bullish: C2 must be contained within C1-C3 expansion (Strict containment)
+        if c2['h'] < c3['h'] and c2['l'] > c1['l']:
+            fvg_type = "buy"
+            gap_top, gap_bottom = c3['l'], c1['h']
     elif c1['l'] > c3['h']:
-        fvg_type = "sell" # Bearish
-        gap_top, gap_bottom = c1['l'], c3['h']
+        # Bearish: C2 must be contained within C1-C3 expansion (Strict containment)
+        if c2['l'] > c3['l'] and c2['h'] < c1['h']:
+            fvg_type = "sell"
+            gap_top, gap_bottom = c1['l'], c3['h']
 
     if not fvg_type:
         return None
@@ -159,23 +163,27 @@ def detect_fvgs(ohlcv: List[dict], depth: int = None) -> Dict:
 
         # Bullish FVG (Gap up: C1 High < C3 Low)
         if c3['l'] > c1['h']:
-            fvgs.append({
-                'type': 'bullish',
-                'top': c3['l'],
-                'bottom': c1['h'],
-                'index': i + scan_start,
-                'state': 'unfilled'
-            })
+            # [HARDENING] C2 must be contained within C1-C3 expansion
+            if c2['h'] < c3['h'] and c2['l'] > c1['l']:
+                fvgs.append({
+                    'type': 'bullish',
+                    'top': c3['l'],
+                    'bottom': c1['h'],
+                    'index': i + scan_start,
+                    'state': 'unfilled'
+                })
 
         # Bearish FVG (Gap down: C1 Low > C3 High)
         elif c1['l'] > c3['h']:
-            fvgs.append({
-                'type': 'bearish',
-                'top': c1['l'],
-                'bottom': c3['h'],
-                'index': i + scan_start,
-                'state': 'unfilled'
-            })
+            # [HARDENING] C2 must be contained within C1-C3 expansion
+            if c2['l'] > c3['l'] and c2['h'] < c1['h']:
+                fvgs.append({
+                    'type': 'bearish',
+                    'top': c1['l'],
+                    'bottom': c3['h'],
+                    'index': i + scan_start,
+                    'state': 'unfilled'
+                })
 
     if not fvgs:
         return {'fvg_count': 0, 'nearest_fvg': None}

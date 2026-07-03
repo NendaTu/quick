@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import time
 from typing import Dict, List, Optional, Any
 from simulator import Simulator
 from engine.base import BaseExchange
