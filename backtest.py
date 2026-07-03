@@ -18,7 +18,7 @@ import config
 from database import Database
 from bitget_client import BitGetClient
 from engine.simulation import SimulationEngine
-from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES
+from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED
 from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
 # --- Backtest Settings ---
@@ -26,14 +26,15 @@ PROXIMITY_LIMIT = 5
 RESET_PROXIMITY_ON_REPEAT = True
 DIRECTION_MODE = "strict" # "strict" or "open"
 
-DEFAULT_ASSETS = ["ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT"]
+# Set to [] to enable automatic discovery by volume
+DEFAULT_ASSETS = ["ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT", "SOLUSDT", "ENAUSDT", "SUIUSDT", "DOGEUSDT"]
 DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
 # June 1, 2022 to June 1, 2026 (Global Range)
 MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
 MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
-# Default to 1 month for speed (May 2026)
-DEFAULT_START_DATE = datetime(2026, 5, 1, tzinfo=pytz.UTC)
+# Default to Dec 2025 - June 2026 as requested by user
+DEFAULT_START_DATE = datetime(2025, 12, 1, tzinfo=pytz.UTC)
 DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
 START_DATE = DEFAULT_START_DATE
@@ -60,6 +61,25 @@ class Progress:
         sys.stdout.flush()
         if self.current >= self.total:
             print()
+
+async def discover_assets(client: BitGetClient) -> List[str]:
+    """Discover top assets by volume, identical to main.py logic."""
+    log.info(f"Discovering top {ASSETS_COUNT} assets by volume...")
+    tickers = await client.get_tickers()
+    # Sort by usdtVolume descending
+    sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
+
+    discovered = []
+    for t in sorted_tickers:
+        sym = t["symbol"]
+        if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+            # Exclude known stables
+            if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
+                continue
+            discovered.append(sym)
+            if len(discovered) >= ASSETS_COUNT:
+                break
+    return discovered
 
 async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False):
     # Filter to only relevant timeframes (entry: 1m, setup: 15m, bias: 1H)
@@ -481,9 +501,6 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] < START_DATE.timestamp():
                 pointers[sym][t] += 1
 
-    # PERFORMANCE: Throttle update processing for confluence timeframes
-    last_processed_ts = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
-
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
@@ -681,8 +698,12 @@ async def main():
     db = Database()
     client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE)
 
+    # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
+    if not assets_to_run:
+        assets_to_run = await discover_assets(client)
+
     # 1. Acquisition of data
-    await download_historical_data(client, db, DEFAULT_ASSETS, DEFAULT_TIMEFRAMES)
+    await download_historical_data(client, db, assets_to_run, DEFAULT_TIMEFRAMES)
 
     # 2. Run backtests
     all_results = []
