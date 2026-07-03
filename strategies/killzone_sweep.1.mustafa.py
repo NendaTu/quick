@@ -146,9 +146,23 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 state = "WAITING_FOR_RETEST"
 
         if state == "WAITING_FOR_RETEST":
-            # Check if last few 1m candles touched/penetrated the FVG
-            # This requires more complex state, but for v1 we'll look for the touch
-            retested = True # Placeholder
+            fvg_data = detect_fvgs(m1)
+            # Standard FVG retest: touch or penetration
+            latest = m1[-1]
+            retested = False
+
+            # Use nearest FVG from detection
+            # Note: in a real HFT strategy, we'd store the FVG price from the BOS1 candle
+            if sweep_side == 'ssl': # Bullish bias
+                # We need a bullish FVG. Its bottom is C1 High.
+                # detect_fvgs doesn't return the full list, so we'll look for any bullish FVG touch
+                # Simplified: if any low is within a recent FVG
+                if fvg_data.get('nearest_fvg_type') == 'bullish' and fvg_data.get('nearest_fvg_state') in ['engaged', 'mitigated']:
+                    retested = True
+            else: # bearish
+                if fvg_data.get('nearest_fvg_type') == 'bearish' and fvg_data.get('nearest_fvg_state') in ['engaged', 'mitigated']:
+                    retested = True
+
             if retested:
                 self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                 state = "WAITING_FOR_BOS2"
@@ -160,24 +174,39 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
                 # --- Phase 4: Entry & Risk Management ---
                 entry_price = m1[-1]['c']
-                fvg_data = detect_fvgs(m1) # Re-get to find SL
 
-                # SL: 1 tick past FVG
-                # (Need actual FVG bounds, detect_fvgs only returns nearest)
-                stop_price = entry_price * (0.995 if sweep_side == 'ssl' else 1.005)
+                # SL: 1 tick past FVG (opposite side)
+                # Bullish: 1 tick below FVG bottom. Bearish: 1 tick above FVG top.
+                fvg_data = detect_fvgs(m1)
+                # Approximation using nearest fvg dist
+                fvg_mid = entry_price / (1 + fvg_data.get('nearest_fvg_dist', 0))
+                stop_price = fvg_mid * (0.998 if sweep_side == 'ssl' else 1.002)
 
                 # TP1/TP2 from 15m liquidity
-                tp1 = entry_price * (1.01 if sweep_side == 'ssl' else 0.99)
-                tp2 = entry_price * (1.02 if sweep_side == 'ssl' else 0.98)
+                # 14. TP1 (50%) at first upcoming 15m liquidity at/beyond 1:1.5 RRR
+                risk = abs(entry_price - stop_price)
+                min_tp1_dist = risk * 1.5
+                min_tp2_dist = risk * 2.5
+
+                tp1 = entry_price + (min_tp1_dist if sweep_side == 'ssl' else -min_tp1_dist)
+                tp2 = entry_price + (min_tp2_dist if sweep_side == 'ssl' else -min_tp2_dist)
+
+                # Refine with actual liquidity levels
+                if sweep_side == 'ssl':
+                    if liq_15m.get('bsl_level', 0) > tp1: tp1 = liq_15m['bsl_level']
+                    if liq_15m.get('internal_bsl', 0) > tp1: tp1 = liq_15m['internal_bsl']
+                else:
+                    if liq_15m.get('ssl_level', 1e12) < tp1: tp1 = liq_15m['ssl_level']
+                    if liq_15m.get('internal_ssl', 1e12) < tp1: tp1 = liq_15m['internal_ssl']
 
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",
                     "entry_price": entry_price,
                     "stop_price": stop_price,
-                    "exit_price": tp2, # Final TP
+                    "exit_price": tp2,
                     "tp1_price": tp1,
                     "tp1_qty_ratio": 0.5,
-                    "qty": 0 # Engine will calculate based on risk
+                    "qty": 0
                 }
 
         return None

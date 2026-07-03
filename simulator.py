@@ -869,7 +869,7 @@ class Simulator:
             log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f} | Margin Reserved: {required_margin:.2f}")
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None):
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf="", drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None):
         now = time.time()
         fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
         self.equity -= fee
@@ -878,11 +878,27 @@ class Simulator:
         margin = (qty * fill_price) / max_lev
         self.used_margin += margin
 
-        self.positions[(symbol, side)] = {
-            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
-            "original_side": original_side, "is_contrarian": is_contrarian, "ts": now,
-            "features": features
-        }
+        pos_key = (symbol, side)
+        if pos_key in self.positions:
+            # Scale up existing position
+            existing = self.positions[pos_key]
+            total_qty = existing["qty"] + qty
+            # Weighted average entry price
+            avg_price = (existing["entry_price"] * existing["qty"] + fill_price * qty) / total_qty
+
+            existing.update({
+                "qty": total_qty,
+                "entry_price": avg_price,
+                "entry_fee": existing["entry_fee"] + fee,
+                "margin": existing["margin"] + margin
+            })
+            log.info(f"SCALED POSITION {symbol} {side.upper()}: qty={total_qty:.3f} avg_price={avg_price:.8f}")
+        else:
+            self.positions[pos_key] = {
+                "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
+                "original_side": original_side, "is_contrarian": is_contrarian, "ts": now,
+                "features": features
+            }
         side_str = side.upper()
         if is_contrarian:
             side_str = f"{(original_side or side).upper()} [Flipped to {side.upper()}]"
