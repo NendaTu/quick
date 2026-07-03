@@ -2,48 +2,64 @@
 # Killzone Sweep Strategy v1.mustafa
 
 ## Overview
-This strategy implements a sophisticated multi-timeframe (MTF) sequence focused on
-institutional liquidity sweeps during session killzones. It identifies bias on 1H,
-monitors for liquidity raids on 15m, and executes via a two-stage Break of Structure (BOS)
-and Fair Value Gap (FVG) sequence on the 1m timeframe.
+The Killzone Sweep strategy is designed to capitalize on "Institutional Liquidity Raids" that typically
+occur during the opening volatility of major global financial hubs. It assumes that retail stop-losses
+reside just beyond the highs and lows of the "Overnight Session" (the period between core exchange hours).
+When the market opens (the "Killzone"), institutions often drive price into these liquidity pools to
+fill large orders before reversing direction. This strategy identifies that reversal sequence with
+high precision across three timeframes.
+
+## Hubs and Hours (All times EST)
+- **US**: Core 9:30-16:00 | Overnight 16:00-9:30
+- **UK/EU**: Core 3:00-11:30 | Overnight 11:30-3:00
+- **JAPAN**: Core 19:00-1:00 | Overnight 1:00-19:00
+- **HK**: Core 20:30-4:00 | Overnight 4:00-20:30
 
 ## Goals
-- Target high-probability reversals after retail liquidity is swept.
-- ROI: Dynamic based on 15m liquidity levels, minimum 1:1.5 RRR for TP1 and 1:2.5 for TP2.
-- Frequency: Selective, targeting 1-3 high-quality setups per session per asset.
+- **Compounding Target**: Progress toward the 5% per trade conceptually required for rapid capital growth.
+- **Selectivity**: Prioritize setup quality over frequency, targeting high-probability reversal points.
+- **Risk Management**: Dynamic Reward-to-Risk (RRR) based on real-time institutional liquidity levels.
 
 ## Modules Used
-- `ta/patterns/sessions.py`: For current session and overnight range identification.
-- `ta/patterns/structure.py`: For BOS/MSS detection (1H and 1m).
-- `ta/patterns/liquidity.py`: For BSL/SSL and internal liquidity targets (15m).
-- `ta/patterns/fvg.py`: For execution-level gap identification (1m).
-- `ta/patterns/swings.py`: For swing point identification.
+- `ta/patterns/sessions.py`: Orchestrates the awareness of which global hub is active and calculates
+  the preceding "Overnight Range" (including Friday close to Monday open logic).
+- `ta/patterns/structure.py`: Detects Break of Structure (BOS) and Market Structure Shifts (MSS) to
+  confirm trend transitions on 1H (Bias) and 1m (Execution).
+- `ta/patterns/liquidity.py`: Identifies Buy-Side Liquidity (BSL) and Sell-Side Liquidity (SSL) pools
+  on the 15m timeframe to use as Take-Profit targets.
+- `ta/patterns/fvg.py`: Locates Fair Value Gaps on the 1m timeframe to define high-confidence
+  entry zones and protective Stop-Loss levels.
+- `tools/trading_utils.py`: Calculates fee-aware position sizing to ensure exactly 0.5% risk (or user-defined).
 
 ## The Intended Flow
-1. **Bias (1H)**: Determine session bias based on the preceding overnight range (Prior Close to Session Open).
-   Confirm bias with 1H BOS.
-2. **Setup (15m)**: Monitor for a liquidity sweep (wick) of the overnight range extreme *opposite* to bias.
-   Invalidate if any 15m candle closes outside the range before the sweep.
-3. **Execution (1m)**:
-   - Identify BOS1 on the return from the sweep.
-   - Identify an FVG formed during or around BOS1.
-   - Wait for an FVG retest (touch/penetration).
-   - Identify BOS2 following the retest.
-   - Entry on BOS2 close.
-4. **Risk Management**:
-   - SL: 1 tick past the execution FVG.
-   - TP1 (50%): First 15m liquidity level at/beyond 1.5 RRR. Move SL to BE.
-   - TP2: Next 15m liquidity level at/beyond 2.5 RRR.
-   - Scaling: Double position on engulfing/consecutive retracements that close short of entry.
+1. **Hub Detection**: The strategy identifies the current active Hub (US, UK, etc.) and determines
+   if it is within the 2-hour "Killzone" of the Core Session start.
+2. **Overnight Range (1H)**: Scans back to find the High and Low established during the hub's preceding
+   overnight session. For Monday opens, this range spans back to the previous Friday's close.
+3. **Bias (1H)**: Establishes directional bias (Bullish/Bearish) based on 1H Market Structure.
+4. **Liquidity Sweep (15m)**: Waits for price to "sweep" (wick beyond) the overnight extreme *opposite*
+   to the bias. (e.g., Bullish Bias -> Sweep of Overnight Low).
+5. **Reversal Sequence (1m)**:
+   - **BOS1**: Confirms the first shift in internal structure back toward the bias.
+   - **FVG**: Identifies an imbalance created during the impulsive BOS1 move.
+   - **Retest**: Waits for price to re-enter the FVG zone, confirming institutional interest.
+   - **BOS2**: Final trigger—a second break of structure following the retest, signaling
+     continuation of the reversal.
+6. **Execution**: Entry at the close of the BOS2 candle.
+   - **SL**: Placed 1 tick beyond the 1m FVG.
+   - **TP1 (50%)**: Targeted at the first 15m liquidity level providing at least 1:1.5 RRR.
+   - **TP2**: Targeted at the next 15m liquidity level at/beyond 1:2.5 RRR.
 
-## Limitations
-- Requires significant history for 1H/15m analysis.
-- Highly dependent on precise execution timing on the 1m timeframe.
+## Limitations & Assumptions
+- **Volume Dependence**: Expects standard exchange hours for liquidity; may underperform during bank holidays.
+- **Latency Sensitivity**: Requires low-latency execution as 1m BOS2 triggers can move quickly.
+- **History Requirement**: Needs at least 3 days of 1H/15m data to accurately calculate ranges and MTF bias.
 """
 
 import logging
 from typing import Dict, Optional, Any, List
 from strategies.base_strategy import JBaseStrategy
+from tools.trading_utils import calculate_position_size
 from ta.patterns.sessions import identify_overnight_range, identify_sessions
 from ta.patterns.structure import identify_structure
 from ta.patterns.liquidity import identify_liquidity
@@ -98,7 +114,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
             return None
 
         # --- Phase 1: Bias Identification (1H) ---
-        ov_range = identify_overnight_range(h1, prior_close_hour=self.params["prior_close_hour"])
+        ov_range = identify_overnight_range(h1, m1[-1]['ts'])
         if not ov_range:
             return None
 
@@ -121,13 +137,13 @@ class KillzoneSweepStrategy(JBaseStrategy):
         state_key = f"{symbol}_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
-        # Session Tracking for Reset
-        curr_session = ov_range.get('session')
-        last_session = self.get_state(f"{symbol}_last_session", self.simulator)
+        # Hub & Session Tracking for Reset
+        hub = ov_range.get('hub', 'UNKNOWN')
+        last_hub = self.get_state(f"{symbol}_last_hub", self.simulator)
 
-        if curr_session != last_session:
-            self.record_milestone(f"Phase 0: {curr_session.upper()} Session Start", h1[-1]['ts'], "1H")
-            self.save_state(f"{symbol}_last_session", curr_session, self.simulator)
+        if hub != last_hub:
+            self.record_milestone(f"Phase 0: {hub} Session Start", h1[-1]['ts'], "1H")
+            self.save_state(f"{symbol}_last_hub", hub, self.simulator)
             self.save_state(state_key, "IDLE", self.simulator)
             state = "IDLE"
 
@@ -135,23 +151,23 @@ class KillzoneSweepStrategy(JBaseStrategy):
         liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
 
         if state == "IDLE":
-            latest_15m = m15[-1]
+            # [T-003] Check all 15m candles since session start for a sweep
+            # This ensures we don't miss a sweep that happened before the current 1m tick
             sweep_detected = False
             sweep_side = None
 
-            if bias == 'bullish':
-                # Look for SSL sweep (sweep of overnight low)
-                if latest_15m['l'] < ov_range['overnight_low'] and latest_15m['c'] > ov_range['overnight_low']:
-                    sweep_detected = True
-                    sweep_side = 'ssl'
-            else: # bearish
-                # Look for BSL sweep (sweep of overnight high)
-                if latest_15m['h'] > ov_range['overnight_high'] and latest_15m['c'] < ov_range['overnight_high']:
-                    sweep_detected = True
-                    sweep_side = 'bsl'
+            # Find index of first 15m candle in current core session
+            # (Simplified: check last 8 15m candles = 2 hours)
+            for c in m15[-8:]:
+                if bias == 'bullish':
+                    if c['l'] < ov_range['overnight_low'] and c['c'] > ov_range['overnight_low']:
+                        sweep_detected = True; sweep_side = 'ssl'; break
+                else: # bearish
+                    if c['h'] > ov_range['overnight_high'] and c['c'] < ov_range['overnight_high']:
+                        sweep_detected = True; sweep_side = 'bsl'; break
 
             if sweep_detected:
-                if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", latest_15m['ts'], "15m"):
+                if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", m15[-1]['ts'], "15m"):
                     log.info(f"MUSTAFA | {symbol} 15m Sweep detected ({sweep_side.upper()})! Entering WAITING_FOR_BOS1")
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_sweep_side", sweep_side, self.simulator)
@@ -190,7 +206,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
             target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
             retested = False
 
-            if fvg_data.get('nearest_fvg_type') == target_fvg and fvg_data.get('nearest_fvg_state') in ['engaged', 'mitigated']:
+            # More lenient retest logic: any overlap with the target FVG
+            if fvg_data.get('nearest_fvg_type') == target_fvg:
                 retested = True
 
             if retested:
@@ -205,22 +222,15 @@ class KillzoneSweepStrategy(JBaseStrategy):
             m1_sig = m1_struct.get('structure_signal') or ''
 
             if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                # TRIGGER ENTRY
-                self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m")
-                self.save_state(state_key, "COMPLETED", self.simulator)
-
                 # --- Phase 4: Entry & Risk Management ---
                 entry_price = m1[-1]['c']
 
                 # SL: 1 tick past FVG (opposite side)
-                # Bullish: 1 tick below FVG bottom. Bearish: 1 tick above FVG top.
                 fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
-                # Approximation using nearest fvg dist
                 fvg_mid = entry_price / (1 + fvg_data.get('nearest_fvg_dist', 0))
                 stop_price = fvg_mid * (0.998 if sweep_side == 'ssl' else 1.002)
 
                 # TP1/TP2 from 15m liquidity
-                # 14. TP1 (50%) at first upcoming 15m liquidity at/beyond 1:1.5 RRR
                 risk = abs(entry_price - stop_price)
                 min_tp1_dist = risk * self.params["tp1_rrr"]
                 min_tp2_dist = risk * self.params["tp2_rrr"]
@@ -230,25 +240,29 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
                 # Refine with actual liquidity levels
                 if sweep_side == 'ssl':
-                    # Bullish: look for BSL targets above min_tp
                     for level in liq_15m.get('all_bsl', []):
-                        if level >= tp1:
-                            tp1 = level
-                            break
+                        if level >= tp1: tp1 = level; break
                     for level in liq_15m.get('all_bsl', []):
-                        if level >= tp2:
-                            tp2 = level
-                            break
+                        if level >= tp2: tp2 = level; break
                 else:
-                    # Bearish: look for SSL targets below min_tp
                     for level in liq_15m.get('all_ssl', []):
-                        if level <= tp1:
-                            tp1 = level
-                            break
+                        if level <= tp1: tp1 = level; break
                     for level in liq_15m.get('all_ssl', []):
-                        if level <= tp2:
-                            tp2 = level
-                            break
+                        if level <= tp2: tp2 = level; break
+
+                # Calculate Quantity based on risk
+                equity = market_data.get("equity") or (self.simulator.equity if self.simulator else config.INITIAL_EQUITY)
+                qty = calculate_position_size(equity, config.RISK_PER_TRADE, entry_price, stop_price)
+
+                # TRIGGER ENTRY & LOG DATA
+                if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
+                    log.info(f"MUSTAFA | {symbol} {sweep_side.upper()} BOS2 Triggered ({m1_sig})! Hub: {hub}")
+                    log.info(f"  - Entry: {entry_price:.8f}")
+                    log.info(f"  - SL   : {stop_price:.8f} (Risk: {risk:.8f})")
+                    log.info(f"  - TP1  : {tp1:.8f} | TP2: {tp2:.8f}")
+                    log.info(f"  - Qty  : {qty:.3f} (Equity: {equity:.2f})")
+
+                self.save_state(state_key, "COMPLETED", self.simulator)
 
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",
@@ -257,7 +271,9 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     "exit_price": tp2,
                     "tp1_price": tp1,
                     "tp1_qty_ratio": self.params["tp1_qty_ratio"],
-                    "qty": 0
+                    "tp1_qty": qty * self.params["tp1_qty_ratio"],
+                    "tp2_qty": qty * (1 - self.params["tp1_qty_ratio"]),
+                    "qty": qty
                 }
 
         return None

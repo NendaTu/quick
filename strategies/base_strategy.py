@@ -59,34 +59,38 @@ class JBaseStrategy(BaseStrategy):
         from ta.utils import convert_to_local
         tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
-        # Sort milestones by the count of occurrences
-        sorted_m = sorted(self.milestones.items(), key=lambda x: len(x[1]), reverse=True)
+        # Define the logical order of milestones for the funnel
+        milestone_order = [
+            "Phase 0:", "Phase 1:", "Phase 2:", "Phase 3:",
+            "Phase 4:", "Phase 5:", "Phase 6:", "Phase 7:"
+        ]
+
+        def get_order(key):
+            for i, prefix in enumerate(milestone_order):
+                if key.startswith(prefix): return i
+            return 999
+
+        sorted_m = sorted(self.milestones.items(), key=lambda x: get_order(x[0]))
 
         lines = []
         for k, occurrences in sorted_m:
             count = len(occurrences)
+            first = occurrences[0]
+            last = occurrences[-1]
 
-            time_parts = []
-            # If many occurrences, show a selection
-            display_occ = occurrences if count <= 3 else occurrences[:2] + [{"sep": "..."}] + occurrences[-1:]
+            def fmt_occ(occ):
+                dt = convert_to_local(occ["ts"])
+                time_str = dt.strftime("%m-%d %H:%M")
+                if occ["tf"] in tf_map:
+                    dt_close = convert_to_local(occ["ts"] + tf_map[occ["tf"]] - 1)
+                    return f"{time_str}-{dt_close.strftime('%H:%M')} ({occ['tf']})"
+                return f"{time_str} ({occ['tf']})"
 
-            for occ in display_occ:
-                if "sep" in occ:
-                    time_parts.append("...")
-                    continue
+            if count == 1:
+                occ_str = fmt_occ(first)
+            else:
+                occ_str = f"First: {fmt_occ(first)} | Last: {fmt_occ(last)}"
 
-                ts = occ["ts"]
-                tf = occ["tf"]
-                dt_open = convert_to_local(ts)
-                open_str = dt_open.strftime("%m-%d %H:%M")
-
-                if tf in tf_map:
-                    dt_close = convert_to_local(ts + tf_map[tf] - 1)
-                    time_parts.append(f"{open_str}-{dt_close.strftime('%H:%M')} ({tf})")
-                else:
-                    time_parts.append(f"{open_str} ({tf})")
-
-            time_str = ", ".join(time_parts)
-            lines.append(f"  - {k:30}: {count:<4} | {time_str}")
+            lines.append(f"  - {k:30}: {count:<4} | {occ_str}")
 
         return "\n".join(lines)
