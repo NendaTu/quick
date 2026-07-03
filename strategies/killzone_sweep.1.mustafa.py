@@ -63,8 +63,28 @@ class KillzoneSweepStrategy(JBaseStrategy):
             config_overrides=config_overrides
         )
         self.simulator = simulator
-        self.fvg_penetration_required = False # Default to touch only
-        self.max_double_downs = 1
+
+        # --- Strategy-Specific Parameters (with overrides) ---
+        self.params = {
+            "fvg_penetration_required": False,
+            "max_double_downs": 1,
+            "h1_strength": 2,
+            "m15_lookback": 50,
+            "m15_swing_strength": 2,
+            "m1_strength": 2,
+            "fvg_depth": 50,
+            "tp1_rrr": 1.5,
+            "tp2_rrr": 2.5,
+            "tp1_qty_ratio": 0.5,
+            "prior_close_hour": 16
+        }
+
+        # Apply parameter overrides from config_overrides if they exist
+        if config_overrides:
+            for k in self.params:
+                if k in config_overrides:
+                    self.params[k] = config_overrides[k]
+                    log.info(f"STRATEGY | Override {k} = {self.params[k]}")
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         symbol = market_data["symbol"]
@@ -78,10 +98,10 @@ class KillzoneSweepStrategy(JBaseStrategy):
             return None
 
         # --- Phase 1: Bias Identification (1H) ---
-        ov_range = identify_overnight_range(h1)
+        ov_range = identify_overnight_range(h1, prior_close_hour=self.params["prior_close_hour"])
         if not ov_range: return None
 
-        h1_struct = identify_structure(h1)
+        h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
         h1_sig = h1_struct.get('structure_signal') or ''
 
         # Bias: bullish if overall range is trending up or bullish BOS
@@ -102,7 +122,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 # For now, we'll check if the latest 15m action is valid
                 pass
 
-        liq_15m = identify_liquidity(m15)
+        liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
         latest_15m = m15[-1]
 
         sweep_detected = False
@@ -128,8 +148,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
         state_key = f"{symbol}_setup_state"
         state = self.get_state(state_key, self.simulator) or "WAITING_FOR_BOS1"
 
-        m1_struct = identify_structure(m1)
-        m1_sig = m1_struct.get('structure_signal', '')
+        m1_struct = identify_structure(m1, strength=self.params["m1_strength"])
+        m1_sig = m1_struct.get('structure_signal') or ''
 
         if state == "WAITING_FOR_BOS1":
             if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
@@ -138,7 +158,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 state = "WAITING_FOR_FVG"
 
         if state == "WAITING_FOR_FVG":
-            fvg_data = detect_fvgs(m1)
+            fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
             if fvg_data.get('fvg_count', 0) > 0:
                 # Store FVG level for retest check
                 # (Simplification: just move to retest)
@@ -146,7 +166,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 state = "WAITING_FOR_RETEST"
 
         if state == "WAITING_FOR_RETEST":
-            fvg_data = detect_fvgs(m1)
+            fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
             # Standard FVG retest: touch or penetration
             latest = m1[-1]
             retested = False
@@ -168,6 +188,10 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 state = "WAITING_FOR_BOS2"
 
         if state == "WAITING_FOR_BOS2":
+            # Re-check structure with latest params
+            m1_struct = identify_structure(m1, strength=self.params["m1_strength"])
+            m1_sig = m1_struct.get('structure_signal') or ''
+
             if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
                 # TRIGGER ENTRY
                 self.save_state(state_key, "COMPLETED", self.simulator)
@@ -177,7 +201,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
                 # SL: 1 tick past FVG (opposite side)
                 # Bullish: 1 tick below FVG bottom. Bearish: 1 tick above FVG top.
-                fvg_data = detect_fvgs(m1)
+                fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
                 # Approximation using nearest fvg dist
                 fvg_mid = entry_price / (1 + fvg_data.get('nearest_fvg_dist', 0))
                 stop_price = fvg_mid * (0.998 if sweep_side == 'ssl' else 1.002)
@@ -185,8 +209,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 # TP1/TP2 from 15m liquidity
                 # 14. TP1 (50%) at first upcoming 15m liquidity at/beyond 1:1.5 RRR
                 risk = abs(entry_price - stop_price)
-                min_tp1_dist = risk * 1.5
-                min_tp2_dist = risk * 2.5
+                min_tp1_dist = risk * self.params["tp1_rrr"]
+                min_tp2_dist = risk * self.params["tp2_rrr"]
 
                 tp1 = entry_price + (min_tp1_dist if sweep_side == 'ssl' else -min_tp1_dist)
                 tp2 = entry_price + (min_tp2_dist if sweep_side == 'ssl' else -min_tp2_dist)
@@ -205,7 +229,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     "stop_price": stop_price,
                     "exit_price": tp2,
                     "tp1_price": tp1,
-                    "tp1_qty_ratio": 0.5,
+                    "tp1_qty_ratio": self.params["tp1_qty_ratio"],
                     "qty": 0
                 }
 
@@ -242,7 +266,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
         if is_retracement:
             dd_count = int(self.get_state(f"{symbol}_dd_count", self.simulator) or 0)
-            if dd_count < self.max_double_downs:
+            if dd_count < self.params["max_double_downs"]:
                 log.info(f"DOUBLE DOWN for {symbol} {side}")
                 self.save_state(f"{symbol}_dd_count", dd_count + 1, self.simulator)
                 # Return update signal to double size

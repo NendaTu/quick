@@ -18,13 +18,10 @@ LOOKBACK = 50
 # Buffer (%) added to swing extremes to define the liquidity zone.
 BUFFER_PCT = 0.001
 
-def identify_liquidity(ohlcv: List[dict], lookback: int = None) -> Dict:
+def identify_liquidity(ohlcv: List[dict], lookback: int = LOOKBACK, swing_strength: int = 2) -> Dict:
     """
     Identifies BSL and SSL levels from recent price action.
     """
-    if lookback is None:
-        lookback = LOOKBACK
-
     if not ENABLED or len(ohlcv) < lookback:
         return {}
 
@@ -38,7 +35,7 @@ def identify_liquidity(ohlcv: List[dict], lookback: int = None) -> Dict:
     max_high = max(highs)
     min_low = min(lows)
 
-    swings = detect_swings(relevant, strength=2)
+    swings = detect_swings(relevant, strength=swing_strength)
 
     immediate_bsl = swings['highs'][-1]['price'] if swings['highs'] else max_high
     immediate_ssl = swings['lows'][-1]['price'] if swings['lows'] else min_low

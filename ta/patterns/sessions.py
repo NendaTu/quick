@@ -123,9 +123,9 @@ def identify_sessions(ohlcv: List[dict]) -> Dict:
 
     return session_data
 
-def identify_overnight_range(ohlcv: List[dict]) -> Dict:
+def identify_overnight_range(ohlcv: List[dict], prior_close_hour: int = 16) -> Dict:
     """
-    Identifies the high/low range between the prior day's close (16:00 EST)
+    Identifies the high/low range between the prior day's close (Default 16:00 EST)
     and the current session's open.
     """
     if not ohlcv:
@@ -176,22 +176,20 @@ def identify_overnight_range(ohlcv: List[dict]) -> Dict:
         # A simple check: if we are in NY (starts at 8), we want candles before 8.
         # But we also want to stop at 16:00 of the "previous" day.
 
-        # If we reached 16:00, we stop.
-        if dt.hour == 16 and dt.minute == 0:
+        # If we reached prior_close_hour, we stop.
+        if dt.hour == prior_close_hour and dt.minute == 0:
             break
 
-        # If we are between 16:00 and session_open_hour
-        # Note: session_open_hour might be 18 (Asia). 16:00 to 18:00 is small.
-
+        # If we are between prior_close_hour and session_open_hour
         is_ov = False
         if session_open_hour == 18: # Asia
-            if dt.hour >= 16 and dt.hour < 18: is_ov = True
+            if dt.hour >= prior_close_hour and dt.hour < 18: is_ov = True
         elif session_open_hour == 2: # London
             # 16:00 yesterday to 02:00 today
-            if dt.hour >= 16 or dt.hour < 2: is_ov = True
+            if dt.hour >= prior_close_hour or dt.hour < 2: is_ov = True
         elif session_open_hour == 8: # NY
             # 16:00 yesterday to 08:00 today
-            if dt.hour >= 16 or dt.hour < 8: is_ov = True
+            if dt.hour >= prior_close_hour or dt.hour < 8: is_ov = True
 
         if is_ov:
             overnight_high = max(overnight_high, c['h'])

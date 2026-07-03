@@ -26,7 +26,7 @@ console_handler.setFormatter(formatter)
 logging.getLogger().addHandler(console_handler)
 log = logging.getLogger("scalper")
 
-def load_strategy(strategy_path: str, simulator=None):
+def load_strategy(strategy_path: str, simulator=None, overrides=None):
     if not strategy_path.endswith(".py"):
         # Discovery mechanism
         name = strategy_path.replace("/", ".")
@@ -46,14 +46,25 @@ def load_strategy(strategy_path: str, simulator=None):
     # We'll look for a class that isn't JBaseStrategy itself
     for name, obj in module.__dict__.items():
         if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
-            return obj(simulator=simulator)
+            return obj(simulator=simulator, config_overrides=overrides)
     return None
 
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy", type=str, default="scalper.1.jules")
     parser.add_argument("--mode", type=str, default=MODE)
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
+
+    # Parse unknown args as config overrides
+    overrides = {}
+    for arg in unknown:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            try:
+                import ast
+                overrides[k] = ast.literal_eval(v)
+            except:
+                overrides[k] = v
 
     # Final configuration safety checks
     if TARGET_NET_ROE >= 1.0:
@@ -62,7 +73,7 @@ async def main():
     engine = Engine()
 
     # Load strategy
-    strategy = load_strategy(args.strategy, simulator=engine.exchange)
+    strategy = load_strategy(args.strategy, simulator=engine.exchange, overrides=overrides)
     if strategy:
         log.info(f"Loaded Strategy: {strategy.name} v{strategy.version} by {strategy.author}")
         engine.strategy = strategy
