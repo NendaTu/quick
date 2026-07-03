@@ -17,6 +17,8 @@ sys.path.append(os.getcwd())
 import config
 from database import Database
 from bitget_client import BitGetClient
+from engine.simulation import SimulationEngine
+from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES
 from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
 # --- Backtest Settings ---
@@ -131,6 +133,11 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                 await asyncio.sleep(0.1)
 
 def find_strategy_file(query: str) -> Optional[str]:
+    # Check strategies/ first
+    for f in os.listdir("strategies"):
+        if query in f and f.endswith(".py"):
+            return os.path.join("strategies", f)
+
     # Recursively search ta/
     matches = []
 
@@ -182,14 +189,15 @@ def find_strategy_file(query: str) -> Optional[str]:
     return None
 
 class StrategyWrapper:
-    def __init__(self, path: str, params: List[str] = None, ignore_direction: bool = False, is_flipped: bool = False):
+    def __init__(self, path: str, params: List[str] = None, ignore_direction: bool = False, is_flipped: bool = False, simulator=None):
         self.path = path
         self.params = params or []
         self.ignore_direction = ignore_direction
         self.is_flipped = is_flipped
-        self.module = self._load_module(path)
+        self.simulator = simulator
+        self.instance = self._load_strategy(path)
 
-    def _load_module(self, path):
+    def _load_strategy(self, path):
         module_name = path.replace("/", ".").replace("\\", ".")
         if module_name.endswith(".py"):
             module_name = module_name[:-3]
@@ -197,10 +205,30 @@ class StrategyWrapper:
         spec = importlib.util.spec_from_file_location(module_name, path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+
+        # Check if it's a new class-based strategy
+        if "strategies/" in path:
+            for name, obj in module.__dict__.items():
+                if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
+                    return obj(simulator=self.simulator)
+
         return module
 
-    def get_signal(self, ohlcv, tf):
-        return self.module.get_signal(ohlcv, tf, params=self.params)
+    def get_signal(self, ohlcv, tf, symbol=None):
+        if hasattr(self.instance, "get_entry_signal"):
+            # New Strategy class
+            # We need to wrap it to match the expected return of backtest.py
+            # Backtest expects ohlcv and tf, Strategy expects market_data
+            # We mock the market_data for the strategy
+            market_data = {
+                "symbol": symbol or "BACKTEST",
+                "book": type('obj', (object,), {'best_bid': ohlcv[-1]['c'], 'best_ask': ohlcv[-1]['c']}),
+                "equity": config.INITIAL_EQUITY,
+                "features": None # Simulator will be used if None
+            }
+            return self.instance.get_entry_signal(market_data)
+
+        return self.instance.get_signal(ohlcv, tf, params=self.params)
 
 class ConfluenceChain:
     def __init__(self, segments: List[List[StrategyWrapper]]):
@@ -220,13 +248,13 @@ class ConfluenceChain:
         self.root_direction = None
         self.chain_active = False
 
-    def check(self, ohlcv, tf):
+    def check(self, ohlcv, tf, symbol=None):
         if not self.segments:
             return None
 
         # 1. Evaluate current segment
         current_segment = self.segments[self.current_segment_idx]
-        segment_results = [s.get_signal(ohlcv, tf) for s in current_segment]
+        segment_results = [s.get_signal(ohlcv, tf, symbol=symbol) for s in current_segment]
 
         # All must signal in the same direction (if not ignored)
         direction = None
@@ -372,11 +400,26 @@ def parse_confluence_command(command: str):
     return ConfluenceChain(segments)
 
 async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf: str):
-    # Load contract specs for precision
+    # BT-002: Reset config to default before each asset/tf run to ensure no leakage from strategies
+    import importlib, config
+    importlib.reload(config)
+
+    # USE THE UNIFIED SIMULATION ENGINE
+    from engine.core import Engine
+    engine = Engine(use_db=False)
+    sim = engine.exchange
+    sim.db = db
+
+    # Warm up with specs
     specs = await client.get_symbols()
-    asset_spec = next((s for s in specs if s['symbol'] == asset), {})
-    vol_place = int(asset_spec.get('volumePlace', 3))
-    price_place = int(asset_spec.get('pricePlace', 2))
+    spec_map = {s['symbol']: s for s in specs}
+    sim.contract_specs = spec_map
+    sim.leverage_limits = {s: float(spec_map[s].get('maxLever', 20)) for s in spec_map if s in [asset, BTC_SYMBOL]}
+    sim.discovered_assets = [asset]
+
+    from orderbook import SimulatedOrderBook
+    for sym in [asset, BTC_SYMBOL]:
+        sim.books[sym] = SimulatedOrderBook(sym, 1.0)
 
     # Load candles from DB within the specified range
     candles = db.get_candles_in_range(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
@@ -386,138 +429,107 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     if len(candles) < 10:
         return None
 
-    equity = config.INITIAL_EQUITY
-    total_trades = 0
-    wins = 0
-    pnl = 0.0
-    total_roe = 0.0
+    # Inject ALL timeframes for this asset and BTC for confluence
+    history_sec = 86400 * 3 # 3 days history for indicators (balance speed/accuracy)
+    asset_history = {}
+    for sym in [asset, BTC_SYMBOL]:
+        sim.ohlcv[sym] = {t: [] for t in AVAILABLE_TIMEFRAMES}
+        sim.confluence_history[sym] = {t: [] for t in ["15m", "1H", "4H", "1D", "1W"]}
+        asset_history[sym] = {}
+        for t in AVAILABLE_TIMEFRAMES:
+            c_data = db.get_candles_in_range(sym, t, START_DATE.timestamp() - history_sec, END_DATE.timestamp())
+            data = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v} for ts, o, h, l, cl, v in c_data]
+            asset_history[sym][t] = data
 
-    # Side-based stats
-    side_stats = {
-        "long": {"trades": 0, "wins": 0, "pnl": 0.0},
-        "short": {"trades": 0, "wins": 0, "pnl": 0.0}
-    }
+            # Pre-populate simulator with history UP TO START_DATE
+            for c in data:
+                if c['ts'] < START_DATE.timestamp():
+                    sim.ohlcv[sym][t].append(c)
+                    if t in sim.confluence_history[sym]:
+                        sim.confluence_history[sym][t].append(c['c'])
+                else:
+                    break
 
-    open_pos = None
+    # Find the starting index for our loop (first candle >= START_DATE)
+    full_history = asset_history[asset][tf]
+    start_idx = 0
+    for i, c in enumerate(full_history):
+        if c['ts'] >= START_DATE.timestamp():
+            start_idx = i
+            break
 
-    # Simple simulation loop
-    # We use a window of candles to pass to the strategy
-    window_size = 200
-
-    ohlcv_history = []
-
-    progress = Progress(len(candles), label=f"Backtesting {asset} {tf}")
+    progress = Progress(len(full_history) - start_idx, label=f"Backtesting {asset} {tf}")
     chain.reset()
 
-    for i in range(len(candles)):
-        c = candles[i]
-        ts, o, h, l, cl, v = c
-        ohlcv_history.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+    # Initialize wrappers with sim
+    for segment in chain.segments:
+        for wrapper in segment:
+            wrapper.simulator = sim
+            wrapper.instance = wrapper._load_strategy(wrapper.path)
 
-        if open_pos:
-            # Check for exit (SL/TP)
-            side = open_pos["side"]
-            entry = open_pos["entry_price"]
-            sl = open_pos["stop_price"]
-            tp = open_pos["exit_price"]
+    # Simulation Loop using unified engine
+    for i in range(start_idx, len(full_history)):
+        c = full_history[i]
+        o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
-            exit_price = None
-            exit_type = None
+        # Update simulator's OHLCV for current candle
+        sim.ohlcv[asset][tf].append(c)
+        if tf in sim.confluence_history[asset]:
+            sim.confluence_history[asset][tf].append(cl)
 
-            if side == "buy":
-                if l <= sl:
-                    exit_price = sl
-                    exit_type = "sl"
-                elif h >= tp:
-                    exit_price = tp
-                    exit_type = "tp"
-            else:
-                if h >= sl:
-                    exit_price = sl
-                    exit_type = "sl"
-                elif l <= tp:
-                    exit_price = tp
-                    exit_type = "tp"
+        # [BT-001] Simulate Intra-Candle Price Action (O -> H/L -> C)
+        for price in [o, h, l, cl]:
+            sim.last_price[asset] = price
+            if asset in sim.books:
+                sim.books[asset].mid_price = price
+                sim.books[asset]._regenerate()
+            await sim._process_orders()
 
-            if exit_price:
-                # Determine if exit hit SL or TP
-                is_tp = exit_type == "tp"
-                # Use TAKER fee for SL, MAKER for TP if limit
-                exit_maker = (is_tp and config.TP_ORDER_TYPE == "limit")
+        # 2. Check for entry signal
+        if len(sim.ohlcv[asset][tf]) >= 2:
+            # Synchronize BTC and other timeframes to the current timestamp
+            current_ts = c['ts']
+            for sym in [asset, BTC_SYMBOL]:
+                for t in AVAILABLE_TIMEFRAMES:
+                    if sym == asset and t == tf: continue
+                    # Add candles from history up to current_ts
+                    while len(sim.ohlcv[sym][t]) < len(asset_history[sym][t]) and asset_history[sym][t][len(sim.ohlcv[sym][t])]['ts'] <= current_ts:
+                        new_c = asset_history[sym][t][len(sim.ohlcv[sym][t])]
+                        sim.ohlcv[sym][t].append(new_c)
+                        if t in sim.confluence_history[sym]:
+                            sim.confluence_history[sym][t].append(new_c['c'])
 
-                net_pnl = calculate_net_pnl(open_pos["qty"], entry, exit_price, side, entry_maker=False, exit_maker=exit_maker)
-
-                # Apply slippage (usually only for taker exits)
-                if not exit_maker:
-                    slippage_loss = exit_price * open_pos["qty"] * config.EXPECTED_SLIPPAGE
-                    net_pnl -= slippage_loss
-
-                # Calculate ROE for this trade (using 20x leverage as baseline for comparison)
-                margin = (open_pos["qty"] * entry) / 20
-                trade_roe = (net_pnl / margin) * 100 if margin > 0 else 0
-                total_roe += trade_roe
-
-                equity += net_pnl
-                pnl += net_pnl
-                total_trades += 1
-
-                side_stats[side]["trades"] += 1
-                side_stats[side]["pnl"] += net_pnl
-
-                if net_pnl > 0:
-                    wins += 1
-                    side_stats[side]["wins"] += 1
-
-                open_pos = None
-
-        else:
-            # Check for entry
-            if len(ohlcv_history) >= 2:
-                signal = chain.check(ohlcv_history[-window_size:], tf)
-                if signal:
-                    # Execute entry
-                    # Using shared calculation for consistency with Engine/Simulator
-                    entry_maker = (config.ENTRY_ORDER_TYPE == "limit")
-                    sl_maker = (config.SL_ORDER_TYPE == "limit")
-
-                    qty = calculate_position_size(
-                        equity,
-                        config.RISK_PER_TRADE,
-                        signal["entry_price"],
-                        signal["stop_price"],
-                        entry_maker=entry_maker,
-                        exit_maker=sl_maker,
-                        fee_aware=config.FEE_AWARE_SIZING
-                    )
-
-                    if qty > 0:
-                        # Apply precision
-                        qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
-
-                        # Re-check qty after precision (might have become 0)
-                        if qty <= 0:
-                            progress.update(1)
-                            continue
-
-                        # Apply slippage on entry if taker
-                        entry_price = signal["entry_price"]
-                        side = signal["side"]
-                        if side == "buy": side = "long"
-                        if side == "sell": side = "short"
-
-                        if not entry_maker:
-                            entry_price *= (1 + config.EXPECTED_SLIPPAGE if side == "long" else 1 - config.EXPECTED_SLIPPAGE)
-                        entry_price = round(entry_price, price_place)
-
-                        open_pos = {
-                            "side": side,
-                            "qty": qty,
-                            "entry_price": entry_price,
-                            "stop_price": signal["stop_price"],
-                            "exit_price": signal["exit_price"]
-                        }
+            signal = chain.check(sim.ohlcv[asset][tf][-200:], tf, symbol=asset)
+            if signal:
+                # Place trade via unified engine
+                res = sim.place_trade_oco(
+                    asset, signal["side"], signal.get("qty", 0),
+                    signal["entry_price"], signal["stop_price"], signal["exit_price"],
+                    features=signal # Pass features so they are available for reporting
+                )
 
         progress.update(1)
+
+    roi = (sim.equity / config.INITIAL_EQUITY - 1) * 100
+
+    # Capture results from Engine
+    ss = engine.asset_stats.get(asset, {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0, "buy_pnl": 0.0, "sell_pnl": 0.0})
+    side_stats = {
+        "long": {"trades": ss["buy_wins"] + ss["buy_losses"], "wins": ss["buy_wins"], "pnl": ss["buy_pnl"]},
+        "short": {"trades": ss["sell_wins"] + ss["sell_losses"], "wins": ss["sell_wins"], "pnl": ss["sell_pnl"]}
+    }
+
+    return {
+        "asset": asset,
+        "tf": tf,
+        "roe": 0,
+        "pnl": ss["pnl"],
+        "roi": roi,
+        "win_rate": (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0,
+        "trades": engine.total_trades,
+        "equity": sim.equity,
+        "side_stats": side_stats
+    }
 
     roi = (equity / config.INITIAL_EQUITY - 1) * 100
     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
@@ -601,20 +613,19 @@ async def main():
     query_parts = []
     import re
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+    dates_found = []
 
     for arg in sys.argv[1:]:
         # Detect dates (YYYY-MM-DD)
         if date_regex.match(arg):
-            try:
-                dt = datetime.strptime(arg, "%Y-%m-%d").replace(tzinfo=pytz.UTC)
-                if START_DATE == DEFAULT_START_DATE:
-                    START_DATE = dt
-                else:
-                    END_DATE = dt
-                continue
-            except ValueError:
-                pass
-        query_parts.append(arg)
+            dates_found.append(arg)
+        else:
+            query_parts.append(arg)
+
+    if len(dates_found) >= 1:
+        START_DATE = datetime.strptime(dates_found[0], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
+    if len(dates_found) >= 2:
+        END_DATE = datetime.strptime(dates_found[1], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
 
     if not query_parts:
         print("Error: No strategy segments provided.")

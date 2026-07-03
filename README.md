@@ -33,9 +33,14 @@ A high-performance algorithmic trading system for Bitget USDT-M Futures, featuri
 ## Usage
 
 ### Standard Run
-Execute the bot using the primary configuration in `config.py`:
+Execute the bot using a specific strategy. Strategies are located in the `strategies/` directory.
+
 ```bash
-python main.py
+# Run with the default strategy
+./main
+
+# Run with a specific strategy and mode
+./main --strategy scalper.1.jules --mode paper
 ```
 
 ### Backtesting
@@ -58,19 +63,19 @@ python backtest.py "candle/engulfing -> fvg 3 25"
 The system will automatically download missing historical data and save it to the shared database.
 
 ### A/B Testing (Comparison)
-The `compare.py` tool allows you to run multiple strategy variants concurrently against the same real-time data feed.
+The `compare` tool allows you to run multiple strategy variants or parameter overrides concurrently.
 
-#### Method 1: CLI Overrides
-Compare the baseline (`config.py`) against specific parameter changes:
+#### Method 1: Strategy Comparison
+Compare two different strategy files side-by-side:
 ```bash
-# Compare root config vs one override
-python compare.py SL_MOVE=0.01
+./compare --strategy-a scalper.1.jules --strategy-b my_new_strat.1.dev
+```
 
-# Compare root config vs multiple different values for the same parameter
-python compare.py SL_MOVE=0.005 SL_MOVE=0.01 SL_MOVE=0.02
-
-# Mix multiple parameter overrides
-python compare.py "SL_MOVE=0.01, TP_MOVE=0.02" "SL_MOVE=0.005, TP_MOVE=0.01"
+#### Method 2: CLI Overrides
+Compare a strategy against specific parameter changes:
+```bash
+# Compare a strategy with different SL values
+./compare --strategy scalper.1.jules SL_MOVE=0.01 SL_MOVE=0.02
 ```
 
 #### Method 2: Config Files
@@ -86,7 +91,9 @@ Press `CTRL+C` at any time to stop the comparison. The bot will print a final si
 
 ## Infrastructure
 
-- **`compare/logs/`**: Contains isolated trade logs for each variant during A/B testing.
+- **`strategies/`**: Orchestration layer for trading logic.
+- **`engine/`**: Core execution and routing logic.
+- **`compare_data/logs/`**: Contains isolated trade logs for each variant during A/B testing.
 - **`market_data.db`**: SQLite database for persistent storage (standard runs only).
 - **`docs/archived/`**: Historical project documentation.
 

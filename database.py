@@ -84,6 +84,37 @@ class Database:
                     FOREIGN KEY(session_id) REFERENCES sessions(id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS model_weights (
+                    indicator TEXT PRIMARY KEY,
+                    weight REAL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_state (
+                    strategy_id TEXT,
+                    key TEXT,
+                    value TEXT,
+                    PRIMARY KEY (strategy_id, key)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER,
+                    strategy_id TEXT,
+                    symbol TEXT,
+                    side TEXT,
+                    entry_ts REAL,
+                    entry_price REAL,
+                    qty REAL,
+                    exit_ts REAL,
+                    exit_price REAL,
+                    pnl REAL,
+                    exit_type TEXT,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id)
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time ON ticks (symbol, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time ON candles (symbol, timeframe, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session_id)")
@@ -169,6 +200,28 @@ class Database:
     def save_signal(self, symbol, side, price, data_dict):
         import json
         self.write_queue.put(("signal", (self.session_id, time.time(), symbol, side, price, json.dumps(data_dict))))
+
+    def save_weight(self, indicator, weight):
+        conn = self.connection
+        conn.execute("INSERT OR REPLACE INTO model_weights (indicator, weight) VALUES (?, ?)", (indicator, weight))
+        conn.commit()
+
+    def get_weights(self):
+        cursor = self.connection.execute("SELECT indicator, weight FROM model_weights")
+        return dict(cursor.fetchall())
+
+    def save_strategy_state(self, strategy_id, key, value):
+        conn = self.connection
+        conn.execute("INSERT OR REPLACE INTO strategy_state (strategy_id, key, value) VALUES (?, ?, ?)", (strategy_id, key, str(value)))
+        conn.commit()
+
+    def get_strategy_state(self, strategy_id, key):
+        cursor = self.connection.execute("SELECT value FROM strategy_state WHERE strategy_id = ? AND key = ?", (strategy_id, key))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def save_trade(self, strategy_id, symbol, side, entry_ts, entry_price, qty, exit_ts=None, exit_price=None, pnl=None, exit_type=None):
+        self.write_queue.put(("trade", (self.session_id, strategy_id, symbol, side, entry_ts, entry_price, qty, exit_ts, exit_price, pnl, exit_type)))
 
     def save_discovered_assets(self, assets_list):
         assets_str = ",".join(assets_list)

@@ -1,0 +1,50 @@
+import logging
+from typing import Dict, Any, Optional
+from engine.base import BaseExchange, BaseStrategy
+from engine.exchanges.bitget import BitgetExchange
+from config import MODE, BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
+
+log = logging.getLogger("engine.router")
+
+class SignalRouter:
+    def __init__(self, mode: str = MODE):
+        self.mode = mode
+        self.exchange: Optional[BaseExchange] = None
+        self._init_exchange()
+
+    def _init_exchange(self):
+        if self.mode == "paper":
+            from engine.simulation import SimulationEngine
+            self.exchange = SimulationEngine()
+        elif self.mode == "demo":
+            # For now, demo uses BitgetExchange but would point to demo endpoints
+            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+        elif self.mode == "live":
+            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}")
+
+    async def route_signal(self, signal: Dict[str, Any]):
+        """
+        Routes an entry/exit signal to the appropriate exchange/simulation handler.
+        """
+        symbol = signal["symbol"]
+        side = signal["side"]
+        qty = signal["qty"]
+        price = signal.get("entry_price") or signal.get("price")
+
+        log.info(f"ROUTER [{self.mode.upper()}]: Routing {side} for {symbol} - {qty} @ {price}")
+
+        # In a real implementation, this would call self.exchange.place_order
+        # For simulation, it might call place_trade_oco
+        if self.mode == "paper":
+            # Special handling for simulation OCO
+            return await self.exchange.place_trade_oco(
+                symbol, side, qty,
+                signal["entry_price"],
+                signal["stop_price"],
+                signal["exit_price"],
+                **signal
+            )
+        else:
+            return await self.exchange.place_order(symbol, side, "limit", qty, price, **signal)

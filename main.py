@@ -1,5 +1,6 @@
-import asyncio, logging
-from engine import Engine
+import asyncio, logging, argparse, importlib.util, os, sys
+from engine.core import Engine
+from engine.entry import SignalRouter
 from config import MODE, RISK_PER_TRADE, TARGET_NET_ROE
 
 class DBLogHandler(logging.Handler):
@@ -25,12 +26,49 @@ console_handler.setFormatter(formatter)
 logging.getLogger().addHandler(console_handler)
 log = logging.getLogger("scalper")
 
+def load_strategy(strategy_path: str, simulator=None):
+    if not strategy_path.endswith(".py"):
+        # Discovery mechanism
+        name = strategy_path.replace("/", ".")
+        strategy_path = f"strategies/{name}.py"
+        if not os.path.exists(strategy_path):
+            # Try to find it
+            for f in os.listdir("strategies"):
+                if f.startswith(name) and f.endswith(".py"):
+                    strategy_path = f"strategies/{f}"
+                    break
+
+    spec = importlib.util.spec_from_file_location("strategy", strategy_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    # Expecting a class that inherits from JBaseStrategy
+    # We'll look for a class that isn't JBaseStrategy itself
+    for name, obj in module.__dict__.items():
+        if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
+            return obj(simulator=simulator)
+    return None
+
 async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--strategy", type=str, default="scalper.1.jules")
+    parser.add_argument("--mode", type=str, default=MODE)
+    args = parser.parse_args()
+
     # Final configuration safety checks
     if TARGET_NET_ROE >= 1.0:
         log.warning(f"HIGH TARGET_NET_ROE DETECTED: {TARGET_NET_ROE}. This is a decimal ROE (0.05 = 5%). Please verify config.")
 
     engine = Engine()
+
+    # Load strategy
+    strategy = load_strategy(args.strategy, simulator=engine.exchange)
+    if strategy:
+        log.info(f"Loaded Strategy: {strategy.name} v{strategy.version} by {strategy.author}")
+        engine.strategy = strategy
+    else:
+        log.error(f"Failed to load strategy: {args.strategy}")
+        return
 
     # Add DB logging
     if hasattr(engine.exchange, "db"):

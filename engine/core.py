@@ -42,13 +42,15 @@ class Engine:
         self.start_time = None
 
         if MODE == "paper":
-            self.exchange = Simulator(use_db=use_db)
+            from engine.simulation import SimulationEngine
+            self.exchange = SimulationEngine(use_db=use_db)
             self.exchange.engine = self
             self.model = LearningModel(self.exchange)
         else:
-            self.exchange = None
+            from engine.exchanges.bitget import BitgetExchange
+            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
             self.model = DummyModel()
-            log.warning("Live/testnet mode not implemented")
+            log.warning("Live/testnet mode support is in foundation.")
 
     async def start(self, preloaded_data=None, external_feed=None):
         self.start_time = time.time()
@@ -175,8 +177,10 @@ class Engine:
         # Track session-wide metrics (always updated)
         self.cumulative_pnl += round_trip_pnl
         if symbol not in self.asset_stats:
-            self.asset_stats[symbol] = {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0, "tp_wins": 0, "be_wins": 0}
+            self.asset_stats[symbol] = {"buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0, "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "buy_pnl": 0.0, "sell_pnl": 0.0}
         self.asset_stats[symbol]["pnl"] += round_trip_pnl
+        if side == "buy": self.asset_stats[symbol]["buy_pnl"] += round_trip_pnl
+        else: self.asset_stats[symbol]["sell_pnl"] += round_trip_pnl
 
         # Track cumulative PnL for this specific trade to determine if it's a win/loss overall
         self.pos_pnl[pos_key] = self.pos_pnl.get(pos_key, 0.0) + round_trip_pnl
@@ -428,7 +432,14 @@ class Engine:
                             continue
 
                         feat = all_features.get(sym)
-                        signal = self.model.predict(sym, book, self.equity, features=feat)
+
+                        # USE PLUGGABLE STRATEGY IF AVAILABLE
+                        market_data = {"symbol": sym, "book": book, "equity": self.equity, "features": feat}
+                        if hasattr(self, "strategy"):
+                            signal = self.strategy.get_entry_signal(market_data)
+                        else:
+                            signal = self.model.predict(sym, book, self.equity, features=feat)
+
                         if signal is None:
                             continue
 
