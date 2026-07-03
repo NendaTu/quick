@@ -180,6 +180,11 @@ class Database:
                             cursor.execute(f"DELETE FROM logs WHERE session_id NOT IN ({placeholders})", recent_ids)
                             cursor.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", recent_ids)
                             log.info(f"Background Purge Sessions: Kept IDs {recent_ids}")
+                    elif type == "trade":
+                        cursor.execute("""
+                            INSERT INTO trades (session_id, strategy_id, symbol, side, entry_ts, entry_price, qty, exit_ts, exit_price, pnl, exit_type)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, data)
                 conn.commit()
                 for _ in range(len(items)):
                     self.write_queue.task_done()
