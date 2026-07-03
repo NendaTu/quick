@@ -42,10 +42,21 @@ class SimulationEngine(BaseExchange, Simulator):
                 **kwargs
             )
 
-        # Fallback for simple orders (like partial exits)
-        # This part will be expanded as we unify the simulation
-        log.warning(f"SimEngine: Simple order {side} {qty} {symbol} not fully implemented yet")
+        # Simple Market/Limit order
+        if order_type == "market":
+            self._execute_entry_direct(symbol, side, qty, self.last_price.get(symbol, 0), "market_simple")
+            return {"code": "00000", "data": {"orderId": "sim_market_123"}}
+
+        log.warning(f"SimEngine: Order {order_type} {side} {qty} {symbol} not fully implemented yet")
         return {"code": "00000", "data": {"orderId": "sim_simple_123"}}
+
+    async def scale_position(self, symbol: str, side: str, qty: float, **kwargs) -> Dict:
+        """
+        Adds to an existing position.
+        """
+        price = self.last_price.get(symbol, 0)
+        self._execute_entry_direct(symbol, side, qty, price, "scale_up")
+        return {"code": "00000", "data": {"orderId": f"scale_{int(time.time())}"}}
 
     # Additional methods to support backtesting loop directly will be added here
     # in Step 4 of the plan.

@@ -37,6 +37,10 @@ class BitgetExchange(BaseExchange):
         log.info(f"Bitget: Placing {order_type} {side} order for {qty} {symbol} @ {price}")
         return {"code": "00000", "msg": "Order placement simulated in foundation", "data": {"orderId": "sim_123"}}
 
+    async def scale_position(self, symbol: str, side: str, qty: float, **kwargs) -> Dict:
+        # For Bitget, scaling up is just another order in the same direction
+        return await self.place_order(symbol, side, "market", qty, **kwargs)
+
     async def close(self):
         await self.client.close()
         if self.ws_client:

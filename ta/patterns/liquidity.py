@@ -46,6 +46,8 @@ def identify_liquidity(ohlcv: List[dict], lookback: int = None) -> Dict:
     return {
         'bsl_level': immediate_bsl * (1 + BUFFER_PCT),
         'ssl_level': immediate_ssl * (1 - BUFFER_PCT),
+        'internal_bsl': swings['highs'][-2]['price'] if len(swings['highs']) > 1 else immediate_bsl,
+        'internal_ssl': swings['lows'][-2]['price'] if len(swings['lows']) > 1 else immediate_ssl,
         'range_high': max_high,
         'range_low': min_low
     }

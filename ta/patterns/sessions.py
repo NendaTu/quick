@@ -91,10 +91,6 @@ def identify_sessions(ohlcv: List[dict]) -> Dict:
     if not ENABLED or not ohlcv:
         return {}
 
-    # This implementation normally needs a large lookback or DB persistence
-    # to be 100% accurate across restarts.
-    # Here we process the available OHLCV.
-
     session_data = {
         'asia_h': 0, 'asia_l': 0, 'asia_o': 0,
         'london_h': 0, 'london_l': 0, 'london_o': 0,
@@ -126,3 +122,87 @@ def identify_sessions(ohlcv: List[dict]) -> Dict:
             session_data['current_session'] = active_sess
 
     return session_data
+
+def identify_overnight_range(ohlcv: List[dict]) -> Dict:
+    """
+    Identifies the high/low range between the prior day's close (16:00 EST)
+    and the current session's open.
+    """
+    if not ohlcv:
+        return {}
+
+    # 1. Determine current session of the latest candle
+    now_dt = convert_to_local(ohlcv[-1]['ts'])
+    now_hour = now_dt.hour
+
+    current_session = None
+    session_open_hour = 0
+    if now_hour >= 18 or now_hour < 2:
+        current_session = 'asia'
+        session_open_hour = 18
+    elif 2 <= now_hour < 8:
+        current_session = 'london'
+        session_open_hour = 2
+    elif 8 <= now_hour < 16:
+        current_session = 'ny'
+        session_open_hour = 8
+
+    if not current_session:
+        return {}
+
+    # 2. Define the start of the overnight range (16:00 EST of the previous "trading day")
+    # For NY, it's 16:00 yesterday to 09:30 today.
+    # For London, it's 16:00 yesterday to 02:00 today.
+    # For Asia, it's 16:00 today (since Asia starts at 18:00) to 18:00 today?
+    # Wait, the prompt says: "prior day's close and current session's open".
+    # Bitget/Crypto 24/7 close is typically 16:00 EST or 00:00 UTC.
+    # The user specifically cited NY: 16:00 yesterday to 09:30 today.
+
+    # Logic: Look back from the latest candle to find the start of the current session,
+    # then look further back to find the 16:00 mark.
+
+    overnight_high = -1.0
+    overnight_low = 1e12
+
+    # To find the overnight range, we need enough data.
+    # We'll scan backwards from the latest candle.
+
+    in_overnight = False
+    for i in range(len(ohlcv)-1, -1, -1):
+        c = ohlcv[i]
+        dt = convert_to_local(c['ts'])
+
+        # Is this candle before current session open?
+        # A simple check: if we are in NY (starts at 8), we want candles before 8.
+        # But we also want to stop at 16:00 of the "previous" day.
+
+        # If we reached 16:00, we stop.
+        if dt.hour == 16 and dt.minute == 0:
+            break
+
+        # If we are between 16:00 and session_open_hour
+        # Note: session_open_hour might be 18 (Asia). 16:00 to 18:00 is small.
+
+        is_ov = False
+        if session_open_hour == 18: # Asia
+            if dt.hour >= 16 and dt.hour < 18: is_ov = True
+        elif session_open_hour == 2: # London
+            # 16:00 yesterday to 02:00 today
+            if dt.hour >= 16 or dt.hour < 2: is_ov = True
+        elif session_open_hour == 8: # NY
+            # 16:00 yesterday to 08:00 today
+            if dt.hour >= 16 or dt.hour < 8: is_ov = True
+
+        if is_ov:
+            overnight_high = max(overnight_high, c['h'])
+            overnight_low = min(overnight_low, c['l'])
+            in_overnight = True
+
+    if not in_overnight:
+        return {}
+
+    return {
+        'overnight_high': overnight_high,
+        'overnight_low': overnight_low,
+        'session': current_session
+    }

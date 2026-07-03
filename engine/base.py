@@ -18,6 +18,10 @@ class BaseExchange(ABC):
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None, **kwargs) -> Dict:
         pass
 
+    @abstractmethod
+    async def scale_position(self, symbol: str, side: str, qty: float, **kwargs) -> Dict:
+        pass
+
 class BaseStrategy(ABC):
     def __init__(self, config_overrides: Optional[Dict] = None):
         self.config_overrides = config_overrides or {}

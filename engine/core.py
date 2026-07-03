@@ -386,6 +386,20 @@ class Engine:
                     except Exception as e:
                         log.error(f"Feature calculation error for {sym}: {e}")
 
+                # 2.5 Pluggable Strategy Management
+                if hasattr(self, "strategy"):
+                    for pos_key in list(self.open_positions.keys()):
+                        pos = self.open_positions[pos_key]
+                        sym = pos_key.split("_")[0]
+                        feat = all_features.get(sym)
+                        market_data = {"symbol": sym, "book": self.books.get(sym), "equity": self.equity, "features": feat}
+
+                        management_sig = self.strategy.manage_position(pos, market_data)
+                        if management_sig:
+                            if management_sig.get("action") == "double_size":
+                                # Scale position
+                                await self.exchange.scale_position(sym, pos["side"], pos["qty"])
+
                 # 3. TTL (Time-to-Live) Exit Check
                 if getattr(config, "USE_TTL", False):
                     # Convert ACTIVE_TIMEFRAME string (e.g., '5m') to seconds
