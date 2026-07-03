@@ -100,8 +100,9 @@ class KillzoneSweepStrategy(JBaseStrategy):
         # --- Phase 1: Bias Identification (1H) ---
         ov_range = identify_overnight_range(h1, prior_close_hour=self.params["prior_close_hour"])
         if not ov_range:
-            # log.debug(f"MUSTAFA | No overnight range found for {symbol}")
             return None
+
+        self.record_milestone("Phase 1: 1H Overnight Range", h1[-1]['ts'], "1H")
 
         h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
         h1_sig = h1_struct.get('structure_signal') or ''
@@ -112,87 +113,89 @@ class KillzoneSweepStrategy(JBaseStrategy):
         elif 'bearish' in h1_sig: bias = 'bearish'
 
         if bias == 'neutral':
-            # log.debug(f"MUSTAFA | No 1H bias found for {symbol} (sig: {h1_sig})")
             return None
+
+        self.record_milestone(f"Phase 2: 1H {bias.upper()} Bias", h1[-1]['ts'], "1H")
+
+        # --- State Management ---
+        state_key = f"{symbol}_setup_state"
+        state = self.get_state(state_key, self.simulator) or "IDLE"
+
+        # Session Tracking for Reset
+        curr_session = ov_range.get('session')
+        last_session = self.get_state(f"{symbol}_last_session", self.simulator)
+
+        if curr_session != last_session:
+            self.record_milestone(f"Phase 0: {curr_session.upper()} Session Start", h1[-1]['ts'], "1H")
+            self.save_state(f"{symbol}_last_session", curr_session, self.simulator)
+            self.save_state(state_key, "IDLE", self.simulator)
+            state = "IDLE"
 
         # --- Phase 2: Sweep Detection (15m) ---
-        # 6. Invalidate if any 15m candle closed outside the overnight range
-        for c in m15:
-            dt = convert_to_local(c['ts'])
-            # Check if this candle is within current session
-            # (Simplification: check last 20 15m candles)
-            if c['c'] > ov_range['overnight_high'] or c['c'] < ov_range['overnight_low']:
-                # If it closed outside before we saw a sweep, we might invalidate
-                # For now, we'll check if the latest 15m action is valid
-                pass
-
         liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
-        latest_15m = m15[-1]
 
-        sweep_detected = False
-        sweep_side = None # 'ssl' or 'bsl'
+        if state == "IDLE":
+            latest_15m = m15[-1]
+            sweep_detected = False
+            sweep_side = None
 
-        if bias == 'bullish':
-            # Look for SSL sweep (sweep of overnight low)
-            if latest_15m['l'] < ov_range['overnight_low'] and latest_15m['c'] > ov_range['overnight_low']:
-                sweep_detected = True
-                sweep_side = 'ssl'
-        else: # bearish
-            # Look for BSL sweep (sweep of overnight high)
-            if latest_15m['h'] > ov_range['overnight_high'] and latest_15m['c'] < ov_range['overnight_high']:
-                sweep_detected = True
-                sweep_side = 'bsl'
+            if bias == 'bullish':
+                # Look for SSL sweep (sweep of overnight low)
+                if latest_15m['l'] < ov_range['overnight_low'] and latest_15m['c'] > ov_range['overnight_low']:
+                    sweep_detected = True
+                    sweep_side = 'ssl'
+            else: # bearish
+                # Look for BSL sweep (sweep of overnight high)
+                if latest_15m['h'] > ov_range['overnight_high'] and latest_15m['c'] < ov_range['overnight_high']:
+                    sweep_detected = True
+                    sweep_side = 'bsl'
 
-        if not sweep_detected:
-            # log.debug(f"MUSTAFA | No sweep detected for {symbol} (bias: {bias})")
-            return None
-
-        log.info(f"MUSTAFA | Sweep detected on 15m for {symbol} {sweep_side.upper()}! Bias: {bias}")
+            if sweep_detected:
+                if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", latest_15m['ts'], "15m"):
+                    log.info(f"MUSTAFA | {symbol} 15m Sweep detected ({sweep_side.upper()})! Entering WAITING_FOR_BOS1")
+                self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
+                self.save_state(f"{symbol}_sweep_side", sweep_side, self.simulator)
+                state = "WAITING_FOR_BOS1"
+            else:
+                return None
 
         # --- Phase 3: Execution Sequence (1m) ---
-        # This part usually requires state tracking because BOS1 -> FVG -> Retest -> BOS2
-        # happens over many 1m candles.
-
-        state_key = f"{symbol}_setup_state"
-        state = self.get_state(state_key, self.simulator) or "WAITING_FOR_BOS1"
-
+        sweep_side = self.get_state(f"{symbol}_sweep_side", self.simulator)
         m1_struct = identify_structure(m1, strength=self.params["m1_strength"])
         m1_sig = m1_struct.get('structure_signal') or ''
 
         if state == "WAITING_FOR_BOS1":
             if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                log.info(f"MUSTAFA | {symbol} BOS1 detected! Looking for FVG...")
+                self.record_milestone("Phase 4: 1m BOS1", m1[-1]['ts'], "1m")
+                log.info(f"MUSTAFA | {symbol} 1m BOS1 detected ({m1_sig})! Entering WAITING_FOR_FVG")
                 self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
-                # Keep going to check FVG in same tick
                 state = "WAITING_FOR_FVG"
 
         if state == "WAITING_FOR_FVG":
             fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
+            # Check for FVG in the direction of our bias
+            target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
+
             if fvg_data.get('fvg_count', 0) > 0:
-                log.info(f"MUSTAFA | {symbol} FVG detected! Waiting for retest...")
-                self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
-                state = "WAITING_FOR_RETEST"
+                # Check if ANY of the detected FVGs match our target type
+                # detect_fvgs only returns 'nearest', let's trust it for now
+                if fvg_data.get('nearest_fvg_type') == target_fvg:
+                    self.record_milestone("Phase 5: 1m FVG Formed", m1[-1]['ts'], "1m")
+                    log.info(f"MUSTAFA | {symbol} 1m {target_fvg.upper()} FVG detected! Entering WAITING_FOR_RETEST")
+                    self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
+                    state = "WAITING_FOR_RETEST"
 
         if state == "WAITING_FOR_RETEST":
             fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
-            # Standard FVG retest: touch or penetration
-            latest = m1[-1]
+            target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
             retested = False
 
-            # Use nearest FVG from detection
-            # Note: in a real HFT strategy, we'd store the FVG price from the BOS1 candle
-            if sweep_side == 'ssl': # Bullish bias
-                # We need a bullish FVG. Its bottom is C1 High.
-                # detect_fvgs doesn't return the full list, so we'll look for any bullish FVG touch
-                # Simplified: if any low is within a recent FVG
-                if fvg_data.get('nearest_fvg_type') == 'bullish' and fvg_data.get('nearest_fvg_state') in ['engaged', 'mitigated']:
-                    retested = True
-            else: # bearish
-                if fvg_data.get('nearest_fvg_type') == 'bearish' and fvg_data.get('nearest_fvg_state') in ['engaged', 'mitigated']:
-                    retested = True
+            if fvg_data.get('nearest_fvg_type') == target_fvg and fvg_data.get('nearest_fvg_state') in ['engaged', 'mitigated']:
+                retested = True
 
             if retested:
-                log.info(f"MUSTAFA | {symbol} FVG Retest complete! Looking for BOS2...")
+                self.record_milestone("Phase 6: 1m FVG Retest", m1[-1]['ts'], "1m")
+                log.info(f"MUSTAFA | {symbol} 1m FVG Retest complete! Entering WAITING_FOR_BOS2")
                 self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                 state = "WAITING_FOR_BOS2"
 
@@ -203,6 +206,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
             if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
                 # TRIGGER ENTRY
+                self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m")
                 self.save_state(state_key, "COMPLETED", self.simulator)
 
                 # --- Phase 4: Entry & Risk Management ---

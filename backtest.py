@@ -61,10 +61,11 @@ class Progress:
         if self.current >= self.total:
             print()
 
-async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str]):
+async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False):
     # Filter to only relevant timeframes (entry: 1m, setup: 15m, bias: 1H)
     target_tfs = [tf for tf in timeframes if tf in ["1m", "15m", "1H"]]
-    log.info(f"Acquiring historical data for {target_tfs}...")
+    if not silent:
+        log.info(f"Acquiring historical data for {target_tfs}...")
 
     target_start_ms = int(START_DATE.timestamp() * 1000)
     target_end_ms = int(END_DATE.timestamp() * 1000)
@@ -79,7 +80,8 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             expected = (END_DATE.timestamp() - START_DATE.timestamp()) / tf_seconds[tf]
 
             if count >= expected * 0.9: # 90% coverage is good enough to skip
-                log.info(f"Data for {asset} {tf} already exists in DB ({count} candles).")
+                if not silent:
+                    log.info(f"Data for {asset} {tf} already exists in DB ({count} candles).")
                 continue
 
             current_end = target_end_ms
@@ -606,6 +608,7 @@ async def main():
     date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
     dates_found = []
     overrides = {}
+    assets_to_run = DEFAULT_ASSETS
 
     for arg in sys.argv[1:]:
         # Detect dates (YYYY-MM-DD)
@@ -613,11 +616,14 @@ async def main():
             dates_found.append(arg)
         elif "=" in arg:
             k, v = arg.split("=", 1)
-            try:
-                import ast
-                overrides[k] = ast.literal_eval(v)
-            except:
-                overrides[k] = v
+            if k == "assets":
+                assets_to_run = v.split(",")
+            else:
+                try:
+                    import ast
+                    overrides[k] = ast.literal_eval(v)
+                except:
+                    overrides[k] = v
         else:
             query_parts.append(arg)
 
@@ -655,11 +661,22 @@ async def main():
     # 2. Run backtests
     all_results = []
 
-    for asset in DEFAULT_ASSETS:
-        # Only run for the entry timeframe (1m) as requested
-        for tf in ["1m"]:
-            res = await run_backtest(chain, db, client, asset, tf)
-            all_results.append(res)
+    for asset in assets_to_run:
+        # Only run for the entry timeframe (1m) as requested by user
+        res = await run_backtest(chain, db, client, asset, "1m")
+        all_results.append(res)
+
+        # Print Milestone Report for this asset
+        found_report = False
+        for segment in chain.segments:
+            for wrapper in segment:
+                if hasattr(wrapper.instance, "get_milestone_report"):
+                    report = wrapper.instance.get_milestone_report()
+                    if report:
+                        if not found_report:
+                            print(f"\n[Milestone Report: {asset}]")
+                            found_report = True
+                        print(report)
 
     # 3. Output Table
     print_results(all_results)

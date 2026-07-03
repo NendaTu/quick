@@ -36,28 +36,28 @@ A high-performance algorithmic trading system for Bitget USDT-M Futures, featuri
 Execute the bot using a specific strategy. Strategies are located in the `strategies/` directory.
 
 ```bash
-# Run with the default strategy
-./main
-
 # Run with a specific strategy and mode
-./main --strategy scalper.1.jules --mode paper
+python3 main.py --strategy killzone_sweep.1.mustafa --mode paper
 ```
 
 ### Backtesting
-Backtest individual technical analysis conditions against historical data.
+Backtest individual strategies or technical analysis conditions against historical data.
 
 ```bash
-# Backtest a specific candle pattern (recursively searches ta/)
-python backtest.py candle/engulfing
+# Backtest a class-based strategy
+python3 backtest.py killzone_sweep.1.mustafa
 
-# Backtest with strategy parameters
-python backtest.py sentiment 10 30
+# Backtest with asset filtering and date range
+python3 backtest.py killzone_sweep.1.mustafa 2026-05-01 2026-06-01 assets=ETHUSDT,UNIUSDT
 
-# Backtest with a specific date range
-python backtest.py candle/engulfing_total 2026-05-01 2026-06-01
+# Backtest with parameter overrides
+python3 backtest.py killzone_sweep.1.mustafa h1_strength=1
+
+# Backtest a specific TA module (recursively searches ta/)
+python3 backtest.py pattern/structure
 
 # Advanced: Confluence Chaining (use -> for sequences)
-python backtest.py "candle/engulfing -> fvg 3 25"
+python3 backtest.py "candle/engulfing -> fvg 3 25"
 ```
 
 The system will automatically download missing historical data and save it to the shared database.
