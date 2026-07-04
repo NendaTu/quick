@@ -7,6 +7,7 @@ or below recent swing lows (SSL).
 
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
+from ta.patterns.sessions import is_core_session
 
 # --- Configuration ---
 # Toggle to enable/disable liquidity detection.
@@ -18,16 +19,25 @@ LOOKBACK = 50
 # Buffer (%) added to swing extremes to define the liquidity zone.
 BUFFER_PCT = 0.001
 
-def identify_liquidity(ohlcv: List[dict], lookback: int = LOOKBACK, swing_strength: int = 2) -> Dict:
+def identify_liquidity(ohlcv: List[dict], lookback: int = LOOKBACK, swing_strength: int = 2, hub_filter: Optional[str] = None) -> Dict:
     """
     Identifies BSL and SSL levels from recent price action.
+
+    [OVERNIGHT SUPPORT]: If hub_filter is provided, only uses candles from that hub's Core session.
     """
     if not ENABLED or len(ohlcv) < lookback:
         return {}
 
     # Use closed candles for level identification to prevent repainting/noise
     closed_ohlcv = ohlcv[:-1] if len(ohlcv) > lookback else ohlcv
-    relevant = closed_ohlcv[-lookback:]
+
+    if hub_filter:
+        relevant = [c for c in closed_ohlcv[-300:] if is_core_session(c['ts'], hub_filter)]
+        if len(relevant) > lookback: relevant = relevant[-lookback:]
+    else:
+        relevant = closed_ohlcv[-lookback:]
+
+    if not relevant: return {}
 
     highs = [c['h'] for c in relevant]
     lows = [c['l'] for c in relevant]
