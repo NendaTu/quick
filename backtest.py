@@ -34,7 +34,7 @@ MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
 MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
 # Default to Dec 2025 - June 2026 as requested by user
-DEFAULT_START_DATE = datetime(2025, 12, 1, tzinfo=pytz.UTC)
+DEFAULT_START_DATE = datetime(2026, 5, 1, tzinfo=pytz.UTC)
 DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
 START_DATE = DEFAULT_START_DATE
