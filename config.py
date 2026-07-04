@@ -13,10 +13,10 @@ BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
 # --- Account & Risk ---
 # The simulated starting balance used for all PnL and risk calculations.
-INITIAL_EQUITY = 1000.0
+INITIAL_EQUITY = 15.0
 
 # Maximum fraction of total balance risked per single trade (0.005 = 0.5%).
-RISK_PER_TRADE = 0.005
+RISK_PER_TRADE = 0.0667
 
 # Maximum number of concurrent positions allowed.
 MAX_CONCURRENT_POSITIONS = 100
