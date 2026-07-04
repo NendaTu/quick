@@ -13,31 +13,33 @@ from typing import List
 
 # --- Configuration ---
 TIMEZONE = "America/Toronto"
+_local_tz = pytz.timezone(TIMEZONE)
 
 def convert_to_local(timestamp_s: float) -> datetime:
     """Converts a Unix timestamp to a localized datetime object."""
+    # PERFORMANCE: Use pre-cached timezone object
     utc_dt = datetime.fromtimestamp(timestamp_s, tz=pytz.UTC)
-    local_tz = pytz.timezone(TIMEZONE)
-    return utc_dt.astimezone(local_tz)
+    return utc_dt.astimezone(_local_tz)
 
 def is_within_time_window(timestamp_s: float, start_hm: str, end_hm: str) -> bool:
     """
     Checks if a timestamp falls within a specific HH:MM window in the local timezone.
-    Args:
-        timestamp_s: Unix timestamp in seconds.
-        start_hm: Start time string 'HH:MM'.
-        end_hm: End time string 'HH:MM'.
+
+    PERFORMANCE: This version avoids strptime by using simple integer comparisons.
     """
     dt = convert_to_local(timestamp_s)
-    current_time = dt.time()
+    current_min = dt.hour * 60 + dt.minute
 
-    start_time = datetime.strptime(start_hm, "%H:%M").time()
-    end_time = datetime.strptime(end_hm, "%H:%M").time()
+    # Parse HH:MM into minutes once
+    h1, m1 = map(int, start_hm.split(':'))
+    h2, m2 = map(int, end_hm.split(':'))
+    start_min = h1 * 60 + m1
+    end_min = h2 * 60 + m2
 
-    if start_time <= end_time:
-        return start_time <= current_time <= end_time
+    if start_min <= end_min:
+        return start_min <= current_min <= end_min
     else: # Crosses midnight
-        return current_time >= start_time or current_time <= end_time
+        return current_min >= start_min or current_min <= end_min
 
 def calculate_sma(data: List[float], period: int) -> float:
     """Simple Moving Average."""

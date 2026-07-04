@@ -14,7 +14,7 @@ from dataclasses import dataclass
 sys.path.append(os.getcwd())
 
 from config import *
-from engine import Engine
+from engine.core import Engine
 from bitget_client import BitGetWSClient, BitGetClient
 
 # Configure logging for the orchestrator
@@ -30,6 +30,7 @@ class Variant:
     id: str
     overrides: Dict[str, Any]
     config_file: str = None
+    strategy: str = None
 
 class DataCoordinator:
     def __init__(self, symbols: List[str], queues: List[multiprocessing.Queue]):
@@ -168,7 +169,7 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
 
     # 3. Setup Logging to File (Sanitize filename)
     safe_id = variant.id.replace(":", "").replace("/", "_").replace(" ", "_")
-    log_file = f"compare/logs/{safe_id}.log"
+    log_file = f"compare_data/logs/{safe_id}.log"
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
 
@@ -181,6 +182,13 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
 
     # 4. Start Engine
     engine = engine_module.Engine(use_db=False)
+
+    # 4.5 Load Strategy if specified
+    if variant.strategy:
+        from main import load_strategy
+        strategy = load_strategy(variant.strategy, simulator=engine.exchange)
+        if strategy:
+            engine.strategy = strategy
 
     async def run_engine():
         # Setup periodic stats reporting
@@ -230,6 +238,26 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
 def parse_args() -> List[Variant]:
     variants = [Variant(id="Baseline", overrides={})]
 
+    # Handle --strategy-a and --strategy-b
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--strategy-a", type=str)
+    parser.add_argument("--strategy-b", type=str)
+    parser.add_argument("--strategy", type=str, action="append")
+    known, remaining = parser.parse_known_args()
+
+    if known.strategy_a:
+        variants[0].strategy = known.strategy_a
+        variants[0].id = f"A: {known.strategy_a}"
+
+    if known.strategy_b:
+        variants.append(Variant(id=f"B: {known.strategy_b}", overrides={}, strategy=known.strategy_b))
+
+    if known.strategy:
+        for s in known.strategy:
+            if s not in [v.strategy for v in variants]:
+                variants.append(Variant(id=f"Strat: {s}", overrides={}, strategy=s))
+
     # Pre-parse overrides for global settings like ASSETS_COUNT
     for arg in sys.argv[1:]:
         if "=" in arg:
@@ -243,11 +271,11 @@ def parse_args() -> List[Variant]:
 
     if len(sys.argv) > 1:
         if sys.argv[1] == "config":
-            # Look in compare/configs/
-            for f in os.listdir("compare/configs"):
+            # Look in compare_data/configs/
+            for f in os.listdir("compare_data/configs"):
                 if f.endswith(".py"):
                     overrides = {}
-                    with open(os.path.join("compare/configs", f), "r") as cf:
+                    with open(os.path.join("compare_data/configs", f), "r") as cf:
                         for line in cf:
                             if "=" in line and not line.startswith("#"):
                                 try:
@@ -302,8 +330,8 @@ async def main():
     log.info(f"Starting comparison with {len(variants)} variants: {[v.id for v in variants]}")
 
     # Ensure required directories exist BEFORE starting variants
-    os.makedirs("compare/configs", exist_ok=True)
-    os.makedirs("compare/logs", exist_ok=True)
+    os.makedirs("compare_data/configs", exist_ok=True)
+    os.makedirs("compare_data/logs", exist_ok=True)
 
     queues = [multiprocessing.Queue() for _ in variants]
     stats_queue = multiprocessing.Queue()

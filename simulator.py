@@ -49,6 +49,7 @@ class Simulator:
         self.pending_orders: List[dict] = []
         self.order_id_counter = 1000
         self.total_realized_pnl = 0.0
+        self.latency_simulation = True
         self.engine = None
         self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
@@ -676,8 +677,9 @@ class Simulator:
 
         for o, et in fills:
             # Simulate realistic network latency and engine processing time
-            latency = random.lognormvariate(math.log(0.035), 0.4)
-            await asyncio.sleep(max(0.01, min(0.3, latency)))
+            if self.latency_simulation:
+                latency = random.lognormvariate(math.log(0.035), 0.4)
+                await asyncio.sleep(max(0.01, min(0.3, latency)))
 
             if et in ["entry", "entry_timeout"]:
                 # Release reserved margin from the pending limit order
@@ -709,12 +711,18 @@ class Simulator:
                 # Once entry is filled, add TP/SL
                 sid = self.order_id_counter; self.order_id_counter += 1
                 tp_orders = []
-                if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2" and o.get("tp1_price"):
+                # Check if we should use TP1+TP2 (either from config or signal presence)
+                use_tp_split = (EXIT_STRATEGY == "BE+TP1+TP2" or o.get("tp1_price") is not None)
+
+                if use_tp_split and o.get("tp1_price"):
                     tid1 = self.order_id_counter; self.order_id_counter += 1
                     tid2 = self.order_id_counter; self.order_id_counter += 1
+                    tp2_price = o.get("tp2_price") or o.get("exit_price") or o.get("tp_price")
+                    tp2_qty = o.get("tp2_qty") or (o["qty"] - o.get("tp1_qty", 0))
+
                     tp_orders.extend([
                         {"id": tid1, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp1_price"], "qty": o["tp1_qty"], "is_tp1": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
-                        {"id": tid2, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp2_price"], "qty": o["tp2_qty"], "is_tp2": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                        {"id": tid2, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
                     ])
                 else:
                     tid = self.order_id_counter; self.order_id_counter += 1
@@ -833,12 +841,17 @@ class Simulator:
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
-            if USE_BREAKEVEN_TRIGGER and EXIT_STRATEGY == "BE+TP1+TP2" and kwargs.get("tp1_price"):
+            use_tp_split = (EXIT_STRATEGY == "BE+TP1+TP2" or kwargs.get("tp1_price") is not None)
+
+            if use_tp_split and kwargs.get("tp1_price"):
                 tid1 = self.order_id_counter; self.order_id_counter += 1
                 tid2 = self.order_id_counter; self.order_id_counter += 1
+                tp2_price = kwargs.get("tp2_price") or tp_price or kwargs.get("exit_price")
+                tp2_qty = kwargs.get("tp2_qty") or (qty - kwargs.get("tp1_qty", 0))
+
                 tp_orders.extend([
                     {"id": tid1, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp1_price"], "qty": kwargs["tp1_qty"], "is_tp1": True, "original_side": original_side, "is_contrarian": is_contrarian},
-                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp2_price"], "qty": kwargs["tp2_qty"], "is_tp2": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contr},
                 ])
             else:
                 tid = self.order_id_counter; self.order_id_counter += 1
@@ -869,7 +882,7 @@ class Simulator:
             log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f} | Margin Reserved: {required_margin:.2f}")
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf, drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None):
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf="", drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None):
         now = time.time()
         fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
         self.equity -= fee
@@ -878,11 +891,27 @@ class Simulator:
         margin = (qty * fill_price) / max_lev
         self.used_margin += margin
 
-        self.positions[(symbol, side)] = {
-            "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
-            "original_side": original_side, "is_contrarian": is_contrarian, "ts": now,
-            "features": features
-        }
+        pos_key = (symbol, side)
+        if pos_key in self.positions:
+            # Scale up existing position
+            existing = self.positions[pos_key]
+            total_qty = existing["qty"] + qty
+            # Weighted average entry price
+            avg_price = (existing["entry_price"] * existing["qty"] + fill_price * qty) / total_qty
+
+            existing.update({
+                "qty": total_qty,
+                "entry_price": avg_price,
+                "entry_fee": existing["entry_fee"] + fee,
+                "margin": existing["margin"] + margin
+            })
+            log.info(f"SCALED POSITION {symbol} {side.upper()}: qty={total_qty:.3f} avg_price={avg_price:.8f}")
+        else:
+            self.positions[pos_key] = {
+                "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
+                "original_side": original_side, "is_contrarian": is_contrarian, "ts": now,
+                "features": features
+            }
         side_str = side.upper()
         if is_contrarian:
             side_str = f"{(original_side or side).upper()} [Flipped to {side.upper()}]"
@@ -936,7 +965,7 @@ class Simulator:
             if not pos.get("initial_qty"): pos["initial_qty"] = pos["qty"]
             pos["qty"] -= qty
 
-            # If TP1 hit, move Stop Loss to halfway between BE and TP1
+            # If TP1 hit, move Stop Loss to halfway between Entry and TP1 (Aggressive BE)
             if is_tp1:
                 # Find the existing STOP order
                 for o in self.pending_orders:
@@ -944,19 +973,20 @@ class Simulator:
                         # Update quantity to remaining
                         o["qty"] = pos["qty"]
 
-                        # Move SL price
-                        be_price = o.get("triggerPrice") # It was already at BE because TP1 only activates after BE
-                        new_sl = (be_price + fill_price) / 2
+                        # Move SL price to halfway between entry and exit (fill_price)
+                        entry_price = pos["entry_price"]
+                        new_sl = (entry_price + fill_price) / 2
 
                         # Respect precision
                         spec = self.contract_specs.get(sym, {})
                         price_place = int(spec.get('pricePlace', 2))
                         o["triggerPrice"] = round(new_sl, price_place)
+                        o["is_breakeven"] = True # Mark as protected
 
-                        log.info(f"TP1 HIT: SL for {sym} {side.upper()} moved to {o['triggerPrice']:.8f} (Halfway BE/TP1)")
+                        log.info(f"TP1 HIT: SL for {sym} {side.upper()} moved to {o['triggerPrice']:.8f} (Halfway Entry/TP1)")
                         break
         else:
             del self.positions[(sym, side)]
             self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
-        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial, features=pos.get("features"))
+        if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial, features=pos.get("features"), margin=margin_release)
