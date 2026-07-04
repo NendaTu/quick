@@ -146,3 +146,41 @@ def get_volatility_forecast(highs: List[float], lows: List[float], closes: List[
         return 'Compressing'
     else:
         return 'Neutral'
+
+def is_expansion_candle(ohlcv: List[dict], multiplier: float, period: int = None, timeframe: str = None) -> Dict:
+    """
+    Checks if the most recently closed candle is an 'Expansion Candle'.
+    An expansion candle is defined as having a range (H-L) that exceeds
+    the ATR of the preceding period by a specific multiplier.
+    """
+    # Standard Wilder's ATR needs period + 1 candles
+    check_period = period if period else (TF_PERIODS.get(timeframe, PERIOD) if timeframe else PERIOD)
+
+    if len(ohlcv) < check_period + 2:
+        return {'is_expansion': False}
+
+    # Use the last CLOSED candle for detection
+    target_c = ohlcv[-2]
+
+    # Calculate ATR of the candles PRECEDING the target candle
+    # ohlcv[-1] is live candle, ohlcv[-2] is the one we check, ohlcv[:-2] is history
+    preceding_ohlcv = ohlcv[:-2]
+
+    h = [c['h'] for c in preceding_ohlcv]
+    l = [c['l'] for c in preceding_ohlcv]
+    c = [c['c'] for c in preceding_ohlcv]
+
+    atr_val = compute_atr(h, l, c, check_period)
+    if atr_val <= 0:
+        return {'is_expansion': False}
+
+    target_range = target_c['h'] - target_c['l']
+    is_expansion = target_range > (atr_val * multiplier)
+
+    return {
+        'is_expansion': is_expansion,
+        'candle': target_c,
+        'range': target_range,
+        'atr': atr_val,
+        'ratio': target_range / atr_val if atr_val > 0 else 0
+    }

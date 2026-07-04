@@ -19,11 +19,12 @@ LOOKBACK = 50
 # Buffer (%) added to swing extremes to define the liquidity zone.
 BUFFER_PCT = 0.001
 
-def identify_liquidity(ohlcv: List[dict], lookback: int = LOOKBACK, swing_strength: int = 2, hub_filter: Optional[str] = None) -> Dict:
+def identify_liquidity(ohlcv: List[dict], lookback: int = LOOKBACK, swing_strength: int = 2, hub_filter: Optional[str] = None, start_ts: Optional[float] = None) -> Dict:
     """
     Identifies BSL and SSL levels from recent price action.
 
     [OVERNIGHT SUPPORT]: If hub_filter is provided, only uses candles from that hub's Core session.
+    [ATR SUPPORT]: If start_ts is provided, only uses candles that occurred on or after this timestamp.
     """
     if not ENABLED or len(ohlcv) < lookback:
         return {}
@@ -33,9 +34,13 @@ def identify_liquidity(ohlcv: List[dict], lookback: int = LOOKBACK, swing_streng
 
     if hub_filter:
         relevant = [c for c in closed_ohlcv[-300:] if is_core_session(c['ts'], hub_filter)]
-        if len(relevant) > lookback: relevant = relevant[-lookback:]
+    elif start_ts:
+        relevant = [c for c in closed_ohlcv if c['ts'] >= start_ts]
     else:
         relevant = closed_ohlcv[-lookback:]
+
+    if len(relevant) > lookback:
+        relevant = relevant[-lookback:]
 
     if not relevant: return {}
 
