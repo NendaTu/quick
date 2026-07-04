@@ -36,12 +36,20 @@ HUBS = {
 }
 
 _ov_range_cache = {}
+_core_range_cache = {}
 
 def is_time_in_range(target_min: int, start_min: int, end_min: int) -> bool:
     if start_min <= end_min:
         return start_min <= target_min < end_min
     else: # Crosses midnight
         return target_min >= start_min or target_min < end_min
+
+def is_core_session(timestamp_s: float, hub: str) -> bool:
+    if hub not in HUBS: return False
+    dt = convert_to_local(timestamp_s)
+    if dt.weekday() >= 5: return False # Weekend
+    current_min = dt.hour * 60 + dt.minute
+    return is_time_in_range(current_min, *HUBS[hub]['core'])
 
 def get_current_hub_context(timestamp_s: float) -> Dict:
     """
@@ -66,7 +74,7 @@ def get_current_hub_context(timestamp_s: float) -> Dict:
 def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
     """
     Identifies the high/low range of the most recent overnight session for the current hub.
-    Uses caching to avoid redundant heavy scans.
+    Targeted for Day Trading (trading the Core session).
     """
     if not ohlcv: return {}
 
@@ -74,11 +82,11 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
     ctx = get_current_hub_context(now_ts)
     now_hour_ts = (now_ts // 3600) * 3600
 
-    # Determine target hub for current killzone
+    # Determine target hub for current Core Session monitoring
     now_min = ctx['dt'].hour * 60 + ctx['dt'].minute
     target_hub = None
     for hub_name, sessions in HUBS.items():
-        if is_time_in_range(now_min, sessions['core'][0], sessions['core'][0] + 120):
+        if is_time_in_range(now_min, sessions['core'][0], sessions['core'][1]):
             target_hub = hub_name
             break
 
@@ -95,7 +103,6 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
     found = False
 
     # Target period: candles where hub was in 'overnight' status AND before now_ts
-    # Scan limit: 120 candles (5 days of 1H) is enough to cover weekends
     for c in reversed(ohlcv[-120:]):
         if c['ts'] >= now_ts: continue
 
@@ -122,6 +129,66 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
 
     if len(_ov_range_cache) > 500: _ov_range_cache.clear()
     _ov_range_cache[cache_key] = res
+
+    return res
+
+def identify_core_range(ohlcv: List[dict], now_ts: float) -> Dict:
+    """
+    Identifies the high/low range of the most recent Core session for the current hub.
+    Targeted for Overnight Trading (trading the Overnight session).
+    """
+    if not ohlcv: return {}
+
+    ctx = get_current_hub_context(now_ts)
+    now_hour_ts = (now_ts // 3600) * 3600
+
+    # Determine target hub for current overnight trading
+    target_hub = None
+    for hub in ctx['active_hubs']:
+        if hub['type'] == 'overnight':
+            target_hub = hub['hub']
+            break
+
+    if not target_hub:
+        return {}
+
+    cache_key = f"{now_hour_ts}_{target_hub}"
+    if cache_key in _core_range_cache:
+        return _core_range_cache[cache_key]
+
+    # Find the most recent continuous block of 'core' session candles for this hub
+    core_high = -1.0
+    core_low = 1e12
+    found = False
+
+    for c in reversed(ohlcv[-120:]):
+        if c['ts'] >= now_ts: continue
+
+        c_dt = convert_to_local(c['ts'])
+        c_min = c_dt.hour * 60 + c_dt.minute
+
+        hub_core = is_time_in_range(c_min, HUBS[target_hub]['core'][0], HUBS[target_hub]['core'][1])
+        # Weekend candles are never 'core'
+        if c_dt.weekday() >= 5: hub_core = False
+
+        if hub_core:
+            core_high = max(core_high, c['h'])
+            core_low = min(core_low, c['l'])
+            found = True
+        elif found:
+            # We found the start of the core session block, stop scanning
+            break
+
+    if not found: return {}
+
+    res = {
+        'core_high': core_high,
+        'core_low': core_low,
+        'hub': target_hub
+    }
+
+    if len(_core_range_cache) > 500: _core_range_cache.clear()
+    _core_range_cache[cache_key] = res
 
     return res
 

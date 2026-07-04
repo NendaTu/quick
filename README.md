@@ -38,6 +38,9 @@ Execute the bot using a specific strategy. Strategies are located in the `strate
 ```bash
 # Run with a specific strategy and mode
 python3 main.py --strategy killzone_sweep.1.mustafa --mode paper
+
+# Run with the ATR-based range strategy
+python3 main.py --strategy range_sweep_ATR.1.mustafa --mode paper
 ```
 
 ### Backtesting

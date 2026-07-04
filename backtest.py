@@ -82,8 +82,8 @@ async def discover_assets(client: BitGetClient) -> List[str]:
     return discovered
 
 async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False):
-    # Filter to only relevant timeframes (entry: 1m, setup: 15m, bias: 1H)
-    target_tfs = [tf for tf in timeframes if tf in ["1m", "15m", "1H"]]
+    # Filter to only relevant timeframes (entry: 1m, setup: 15m, bias: 1H, plus any custom like 4H)
+    target_tfs = timeframes
     if not silent:
         log.info(f"Acquiring historical data for {target_tfs}...")
 
@@ -429,6 +429,15 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     import importlib, config
     importlib.reload(config)
 
+    # Clear strategy state for this asset to ensure clean run
+    if db:
+        for segment in chain.segments:
+            for wrapper in segment:
+                strat_id = getattr(wrapper.instance, "file_name", None) or getattr(wrapper.instance, "name", "")
+                if strat_id:
+                    db.connection.execute("DELETE FROM strategy_state WHERE strategy_id = ? AND key LIKE ?", (strat_id, f"{asset}%"))
+                    db.connection.commit()
+
     # USE THE UNIFIED SIMULATION ENGINE
     from engine.core import Engine
     engine = Engine(use_db=False)
@@ -456,9 +465,22 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         return None
 
     # Inject relevant timeframes for this asset and BTC for confluence
-    history_sec = 86400 * 3 # 3 days history for indicators (balance speed/accuracy)
+    history_sec = 86400 * 14 # 14 days history for indicators (especially for 4H ATR)
     asset_history = {}
-    relevant_tfs = ["1m", "15m", "1H"] # Only these are used by the strategy
+
+    # Discovery of relevant timeframes from the strategy chain
+    relevant_tfs_set = {"1m", "15m", "1H"}
+    for segment in chain.segments:
+        for wrapper in segment:
+            if hasattr(wrapper.instance, "params") and "range_tf" in wrapper.instance.params:
+                relevant_tfs_set.add(wrapper.instance.params["range_tf"])
+            # Also check if range_tf is in config overrides
+            if "range_tf" in wrapper.overrides:
+                relevant_tfs_set.add(wrapper.overrides["range_tf"])
+
+    relevant_tfs = list(relevant_tfs_set)
+    log.info(f"Backtest using timeframes: {relevant_tfs}")
+
     for sym in [asset, BTC_SYMBOL]:
         sim.ohlcv[sym] = {t: [] for t in relevant_tfs}
         sim.confluence_history[sym] = {t: [] for t in ["15m", "1H", "4H", "1D", "1W"]}
@@ -488,11 +510,17 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     progress = Progress(len(full_history) - start_idx, label=f"Backtesting {asset} {tf}")
     chain.reset()
 
-    # Initialize wrappers with sim
+    # Initialize wrappers with sim and FRESH instances to avoid state leakage between assets
     for segment in chain.segments:
         for wrapper in segment:
             wrapper.simulator = sim
+            # Re-load instance with fresh state
             wrapper.instance = wrapper._load_strategy(wrapper.path)
+            # Re-apply overrides if any
+            if wrapper.overrides:
+                for k, v in wrapper.overrides.items():
+                    if hasattr(wrapper.instance, "params") and k in wrapper.instance.params:
+                        wrapper.instance.params[k] = v
 
     # Track pointers into history for each timeframe/symbol to avoid re-scanning
     pointers = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
@@ -555,11 +583,16 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
             if signal:
                 # Place trade via unified engine
+                # Remove keys that are passed as positional arguments to avoid "multiple values for argument" error
+                kwargs = signal.copy()
+                for key in ["side", "qty", "entry_price", "stop_price", "exit_price"]:
+                    kwargs.pop(key, None)
+
                 res = sim.place_trade_oco(
                     asset, signal["side"], signal.get("qty", 0),
                     signal["entry_price"], signal["stop_price"], signal["exit_price"],
                     features=signal, # Pass features so they are available for reporting
-                    **signal
+                    **kwargs
                 )
 
         progress.update(1)
@@ -718,8 +751,19 @@ async def main():
         print(f"Error parsing command: {e}")
         return
 
+    # Determine all required timeframes for the strategy chain
+    required_tfs = set(DEFAULT_TIMEFRAMES)
+    for segment in chain.segments:
+        for wrapper in segment:
+            if hasattr(wrapper.instance, "params") and "range_tf" in wrapper.instance.params:
+                required_tfs.add(wrapper.instance.params["range_tf"])
+            # Also check if range_tf is in config overrides or direct params
+            for p in wrapper.params:
+                if "range_tf=" in p:
+                    required_tfs.add(p.split("=")[1])
+
     # 1. Acquisition of data
-    await download_historical_data(client, db, assets_to_run, DEFAULT_TIMEFRAMES)
+    await download_historical_data(client, db, assets_to_run, list(required_tfs))
 
     # 2. Run backtests
     all_results = []

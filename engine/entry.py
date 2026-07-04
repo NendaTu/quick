@@ -40,12 +40,20 @@ class SignalRouter:
         # For simulation, it might call place_trade_oco
         if self.mode == "paper":
             # Special handling for simulation OCO
-            return await self.exchange.place_trade_oco(
+            # Remove keys that are passed as positional arguments
+            kwargs = signal.copy()
+            for key in ["side", "qty", "entry_price", "stop_price", "exit_price"]:
+                kwargs.pop(key, None)
+
+            res = self.exchange.place_trade_oco(
                 symbol, side, qty,
                 signal["entry_price"],
                 signal["stop_price"],
                 signal["exit_price"],
-                **signal
+                **kwargs
             )
+            # Ensure return is awaitable if needed, though for now Engine just awaits route_signal
+            return res
         else:
+            # Live/Demo exchange calls are usually async
             return await self.exchange.place_order(symbol, side, "limit", qty, price, **signal)

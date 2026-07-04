@@ -717,9 +717,12 @@ class Simulator:
                 if use_tp_split and o.get("tp1_price"):
                     tid1 = self.order_id_counter; self.order_id_counter += 1
                     tid2 = self.order_id_counter; self.order_id_counter += 1
+                    tp2_price = o.get("tp2_price") or o.get("exit_price") or o.get("tp_price")
+                    tp2_qty = o.get("tp2_qty") or (o["qty"] - o.get("tp1_qty", 0))
+
                     tp_orders.extend([
                         {"id": tid1, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp1_price"], "qty": o["tp1_qty"], "is_tp1": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
-                        {"id": tid2, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": o["tp2_price"], "qty": o["tp2_qty"], "is_tp2": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                        {"id": tid2, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
                     ])
                 else:
                     tid = self.order_id_counter; self.order_id_counter += 1
@@ -843,9 +846,12 @@ class Simulator:
             if use_tp_split and kwargs.get("tp1_price"):
                 tid1 = self.order_id_counter; self.order_id_counter += 1
                 tid2 = self.order_id_counter; self.order_id_counter += 1
+                tp2_price = kwargs.get("tp2_price") or tp_price or kwargs.get("exit_price")
+                tp2_qty = kwargs.get("tp2_qty") or (qty - kwargs.get("tp1_qty", 0))
+
                 tp_orders.extend([
                     {"id": tid1, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp1_price"], "qty": kwargs["tp1_qty"], "is_tp1": True, "original_side": original_side, "is_contrarian": is_contrarian},
-                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp2_price"], "qty": kwargs["tp2_qty"], "is_tp2": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contr},
                 ])
             else:
                 tid = self.order_id_counter; self.order_id_counter += 1
