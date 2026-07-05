@@ -41,11 +41,18 @@ START_DATE = DEFAULT_START_DATE
 END_DATE = DEFAULT_END_DATE
 
 # [TECH-001] Suppress third-party and technical DEBUG logs from console
+# Clear any root handlers that might have been added by imports (e.g. from main.py)
+root = logging.getLogger()
+for handler in root.handlers[:]:
+    root.removeHandler(handler)
+
 logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[logging.StreamHandler(sys.stdout)])
 # Explicitly disable propagation of debug logs to console
 logging.getLogger("scalper.models").setLevel(logging.WARNING)
 logging.getLogger("scalper.simulator").setLevel(logging.INFO)
+logging.getLogger("scalper.engine").setLevel(logging.INFO)
 log = logging.getLogger("backtest")
+log.setLevel(logging.INFO)
 
 class Progress:
     def __init__(self, total, label="Progress"):
@@ -105,14 +112,20 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
     # Determine if warm-up is required
-    requires_warmup = not getattr(config, "BYPASS_GLOBAL_FILTERS", False)
-    if not requires_warmup and chain:
-        # Check if any strategy in the chain explicitly requires warm-up (i.e. has a bypass toggle set to False)
+    requires_warmup = False
+
+    if chain:
         for segment in chain.segments:
             for wrapper in segment:
                 strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
                 for strat in strategies:
-                    if hasattr(strat, "params") and not strat.params.get("bypass_external_filters", True):
+                    # Warm-up is required if:
+                    # 1. Strategy opts-IN to external filters (bypass=False)
+                    # 2. OR Strategy name implies it uses indicators (e.g. sweeps require FVG/Structure)
+                    bypass = getattr(strat, "params", {}).get("bypass_external_filters", True)
+                    is_indicator_heavy = any(x in getattr(strat, "name", "").lower() for x in ["sweep", "scalper", "fvg"])
+
+                    if not bypass or is_indicator_heavy:
                         requires_warmup = True
                         break
                 if requires_warmup: break

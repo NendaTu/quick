@@ -320,14 +320,16 @@ class Database:
         for i in range(len(rows) - 1):
             curr_ts = rows[i][0]
             next_ts = rows[i+1][0]
-            if next_ts > curr_ts + step * 1.1: # Small buffer for floating point / missing one candle
+            # [TECH-001] Only record gap if it's at least one full candle wide
+            if next_ts > curr_ts + step * 1.5:
                 gaps.append((curr_ts + step, next_ts - step))
 
         # Check trailing gap
         if rows[-1][0] < end_ts - step:
             gaps.append((rows[-1][0] + step, end_ts))
 
-        return gaps
+        # Filter out "zero or negative" gaps caused by overlapping boundaries
+        return [g for g in gaps if g[1] > g[0] + (step * 0.1)]
 
     def check_candle_exists(self, symbol, timeframe, timestamp):
         cursor = self.connection.execute("""
