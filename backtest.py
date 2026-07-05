@@ -133,14 +133,15 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                     log.debug(f"Data for {asset} {tf} complete in DB.")
                 continue
 
+            # Total expected candles across all gaps
+            total_expected = sum((g[1] - g[0]) for g in gaps) / tf_seconds[tf]
+            progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
+
             for gap_start, gap_end in gaps:
-                log.info(f"Downloading gap for {asset} {tf}: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} to {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
+                log.debug(f"Downloading gap for {asset} {tf}: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} to {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
 
                 current_end = int(gap_end * 1000)
                 target_start_ms = int(gap_start * 1000)
-
-                expected = (gap_end - gap_start) / tf_seconds[tf]
-                progress = Progress(max(1, int(expected)), label=f"{asset}: {tf}")
 
                 while current_end > target_start_ms:
                     # Double check if we already filled this sub-range during a previous iteration

@@ -104,15 +104,16 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
     if not gaps:
         return
 
+    # Total expected candles across all gaps
+    total_expected = sum((g[1] - g[0]) for g in gaps) / step
+    progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
+
     for gap_start, gap_end in gaps:
         async with semaphore:
-            log.info(f"Downloading {asset} {tf} gap: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} -> {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
+            log.debug(f"Downloading {asset} {tf} gap: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} -> {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
 
             current_end_ms = int(gap_end * 1000)
             target_start_ms = int(gap_start * 1000)
-
-            expected = (gap_end - gap_start) / step
-            progress = Progress(max(1, int(expected)), label=f"{asset}: {tf}")
 
             while current_end_ms > target_start_ms:
                 try:
