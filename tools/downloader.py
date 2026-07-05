@@ -50,7 +50,7 @@ class Progress:
             return
 
         self.last_update = now
-        pct = (self.current / self.total) * 100 if self.total > 0 else 100
+        pct = min(100.0, (self.current / self.total) * 100) if self.total > 0 else 100.0
         elapsed = now - self.start_time
         rate = self.current / elapsed if elapsed > 0 else 0
         eta = (self.total - self.current) / rate if rate > 0 else 0
@@ -113,7 +113,8 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
         return
 
     # Total expected candles across all gaps
-    total_expected = sum((g[1] - g[0]) for g in gaps) / step
+    # [TECH-001] Add +step to make the range inclusive
+    total_expected = sum((g[1] - g[0] + step) for g in gaps) / step
     progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
 
     for gap_start, gap_end in gaps:
@@ -161,7 +162,7 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                     if valid_count == 0:
                         break
 
-                    progress.update(len(data))
+                    progress.update(valid_count)
                 except Exception as e:
                     log.error(f"Error downloading {asset} {tf} at {current_end_ms}: {e}")
                     await asyncio.sleep(2.0)

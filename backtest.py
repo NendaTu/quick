@@ -63,7 +63,7 @@ class Progress:
             return
 
         self.last_update = now
-        pct = (self.current / self.total) * 100 if self.total > 0 else 100
+        pct = min(100.0, (self.current / self.total) * 100) if self.total > 0 else 100.0
         elapsed = now - self.start_time
         rate = self.current / elapsed if elapsed > 0 else 0
         eta = (self.total - self.current) / rate if rate > 0 else 0
@@ -155,7 +155,8 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                 continue
 
             # Total expected candles across all gaps
-            total_expected = sum((g[1] - g[0]) for g in gaps) / tf_seconds[tf]
+            # [TECH-001] Add +1 to make the range inclusive (start to end inclusive)
+            total_expected = sum((g[1] - g[0] + tf_seconds[tf]) for g in gaps) / tf_seconds[tf]
             progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
 
             for gap_start, gap_end in gaps:
@@ -198,7 +199,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                     if valid_count == 0:
                         break
 
-                    progress.update(len(data))
+                    progress.update(valid_count)
                     await asyncio.sleep(0.1) # Rate limit safety
 
 def find_strategy_file(query: str) -> Optional[str]:
