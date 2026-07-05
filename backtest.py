@@ -633,7 +633,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
             for signal in active_signals:
                 # [TECH-001] Collision check for backtest loop
-                if not engine._asset_is_tradable(asset, signal["side"], features=None):
+                if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
                     continue
 
                 # Place trade via unified engine

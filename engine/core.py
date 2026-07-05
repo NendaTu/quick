@@ -44,7 +44,7 @@ class Engine:
         self._last_activity = {} # symbol -> timestamp
 
         self.stop_event = asyncio.Event()
-        self.start_time = None
+        self.start_time = time.time()
 
         if MODE == "paper":
             from engine.simulation import SimulationEngine
@@ -416,12 +416,18 @@ class Engine:
         counts = {r: list(self.asset_regimes.values()).count(r) for r in ['major', 'high_beta', 'stable']}
         log.info(f"REGIMES | Classification Complete: {counts}")
 
-    def _asset_is_tradable(self, symbol: str, side: str, features: dict = None) -> bool:
+    def _asset_is_tradable(self, symbol: str, side: str, features: dict = None, signal: dict = None) -> bool:
         """
         [TECH-001] Updated tradability logic to support Strategy Families.
         Families allow hedging (Long + Short) but not redundant same-side positions
         unless explicitly managed by scaling logic.
         """
+        # [TECH-001] BYPASS OPTION (Global or per-signal)
+        if getattr(config, 'BYPASS_GLOBAL_FILTERS', False):
+            return True
+        if signal and signal.get("bypass_global_filters"):
+            return True
+
         # 1. Statistical Arbitrage Filter (Correlation & Mean Reversion)
         if hasattr(self.exchange, "asset_correlations"):
             corrs = self.exchange.asset_correlations.get(symbol, {})
@@ -625,7 +631,7 @@ class Engine:
                             if f"{sym}_{side}" in self.open_positions:
                                 continue
 
-                            if not self._asset_is_tradable(sym, side, features=feat):
+                            if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
                                 continue
 
                             qty = signal["qty"]
@@ -673,6 +679,13 @@ class Engine:
 
                             # Add regime to features for predict logic
                             feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
+
+                            # [TECH-001] Merge all calculated features into the signal
+                            # to satisfy requirement (g) for full metrics reporting.
+                            if feat:
+                                for k, v in feat.items():
+                                    if k not in signal:
+                                        signal[k] = v
 
                             # Inject extra info for router/exchange
                             signal.update({

@@ -85,6 +85,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
 
         # --- Strategy-Specific Parameters ---
         self.params = {
+            "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "h1_strength": 2,
             "m15_lookback": 100, # More lookback to capture day liquidity
             "m15_swing_strength": 2,
@@ -261,7 +262,8 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                     "tp1_price": tp1,
                     "tp1_qty": tp1_qty,
                     "tp2_qty": qty - tp1_qty,
-                    "qty": qty
+                    "qty": qty,
+                    "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 
         return None

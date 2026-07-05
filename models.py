@@ -36,7 +36,6 @@ class LearningModel:
                 for k, v in shared.items():
                     if k in self.weights:
                         self.weights[k] = v
-                log.info(f"LEARNING | Loaded shared weights: {self.weights}")
 
     def _save_shared_weights(self):
         if hasattr(self.simulator, "db") and self.simulator.db:
@@ -84,7 +83,6 @@ class LearningModel:
             self.weights[k] = max(0.1, min(5.0, self.weights[k]))
 
         self._save_shared_weights()
-        log.info(f"LEARNING | {symbol} {side.upper()} PnL={pnl:.4f} | Adjusted Weights: {self.weights}")
 
     def train_on_tick(self, symbol, prev_features, actual_up):
         # online learning toggle check

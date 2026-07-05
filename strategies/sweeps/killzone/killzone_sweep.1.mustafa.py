@@ -86,6 +86,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
         # --- Strategy-Specific Parameters (with overrides) ---
         self.params = {
+            "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "fvg_penetration_required": False,
             "max_double_downs": 1,
             "h1_strength": 2,
@@ -311,7 +312,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     "tp1_qty_ratio": self.params["tp1_qty_ratio"],
                     "tp1_qty": tp1_qty,
                     "tp2_qty": tp2_qty,
-                    "qty": qty
+                    "qty": qty,
+                    "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 
         return None

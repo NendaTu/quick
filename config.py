@@ -15,7 +15,7 @@ BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 # The simulated starting balance used for all PnL and risk calculations.
 INITIAL_EQUITY = 15.0
 
-# [TECH-001] Compound every trade via 100% reinvestment.
+# [TECH-001] Compound every trade (1.0 = 100% reinvestment).
 REINVESTMENT_PERCENTAGE = 1.0
 
 # Maximum fraction of total balance risked per single trade (0.005 = 0.5%).
@@ -109,6 +109,7 @@ RESTRICT_BTC_MOMENTUM = False
 BTC_MOMENTUM_THRESHOLD = 0.001
 
 # Multi-timeframe trend alignment gates.
+BYPASS_GLOBAL_FILTERS = False # Set to True to disable Layer 1 safety (Correlation, Cooldown)
 RESTRICT_BTC_CONFLUENCE = False
 RESTRICT_ASSET_CONFLUENCE = False
 BTC_CONF_15M_MIN = 0.0002

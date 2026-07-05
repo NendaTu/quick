@@ -208,6 +208,7 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
                     "be_wins": engine.be_wins,
                     "cumulative_pnl": engine.cumulative_pnl,
                     "open_positions": len(engine.open_positions),
+                    "strategy_stats": engine.strategy_stats
                 }
                 stats_queue.put(stats)
                 await asyncio.sleep(5)
@@ -247,17 +248,21 @@ def parse_args() -> List[Variant]:
     variants = []
 
     # Handle positional "strategies" keyword
+    is_family = False
     if len(sys.argv) > 1 and sys.argv[1] == "strategies":
+        is_family = True
         # Run all or a group of strategies as a collective
         target = "strategies"
+        strat_query = "strategies"
         if len(sys.argv) > 2 and not sys.argv[2].startswith("-") and "=" not in sys.argv[2]:
             target = os.path.join("strategies", sys.argv[2])
+            strat_query = sys.argv[2]
 
-        variants.append(Variant(id=f"Family: {sys.argv[2] if len(sys.argv) > 2 else 'All'}", overrides={}, strategy=sys.argv[2] if len(sys.argv) > 2 else "strategies"))
-        return variants
+        variants.append(Variant(id=f"Family: {strat_query}", overrides={}, strategy=strat_query))
 
-    # Standard parser
-    variants = [Variant(id="Baseline", overrides={})]
+    # Standard parser (if not family)
+    if not is_family:
+        variants = [Variant(id="Baseline", overrides={})]
     import argparse
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--strategy-a", type=str)
@@ -265,14 +270,14 @@ def parse_args() -> List[Variant]:
     parser.add_argument("--strategy", type=str, action="append")
     known, remaining = parser.parse_known_args()
 
-    if known.strategy_a:
+    if not is_family and known.strategy_a:
         variants[0].strategy = known.strategy_a
         variants[0].id = f"A: {known.strategy_a}"
 
-    if known.strategy_b:
+    if not is_family and known.strategy_b:
         variants.append(Variant(id=f"B: {known.strategy_b}", overrides={}, strategy=known.strategy_b))
 
-    if known.strategy:
+    if not is_family and known.strategy:
         for s in known.strategy:
             if s not in [v.strategy for v in variants]:
                 variants.append(Variant(id=f"Strat: {s}", overrides={}, strategy=s))
@@ -289,7 +294,7 @@ def parse_args() -> List[Variant]:
                     pass
 
     if len(sys.argv) > 1:
-        if sys.argv[1] == "config":
+        if not is_family and sys.argv[1] == "config":
             # Look in compare_data/configs/
             for f in os.listdir("compare_data/configs"):
                 if f.endswith(".py"):
@@ -417,6 +422,17 @@ async def main():
 
             prefix = "🏆 " if vid == winner_id else "   "
             print(f"{prefix}{vid:<17} | {pnl:>12.2f} | {roi:>7.1f}% | {win_rate:>5.1f}% ({tp_win_rate:>4.1f}%) | {trades:>8} | {open_p:>5} | {equity:>12.2f}")
+
+            # [TECH-001] Show per-strategy breakdown if family run
+            strat_stats = s.get("strategy_stats", {})
+            if len(strat_stats) > 1:
+                for strat_id, info in strat_stats.items():
+                    s_trades = info.get("trades", 0)
+                    s_pnl = info.get("pnl", 0)
+                    s_wins = info.get("wins", 0)
+                    s_wr = (s_wins / s_trades * 100) if s_trades > 0 else 0
+                    s_ls = f"L:{info.get('longs',0)} S:{info.get('shorts',0)}"
+                    print(f"     > {strat_id[:15]:<14} | {s_pnl:>12.2f} | {'':>8} | {s_wr:>5.1f}% {'':>7} | {s_trades:>8} | {s_ls:>18}")
         print("="*110 + "\n")
 
     stop_event = asyncio.Event()

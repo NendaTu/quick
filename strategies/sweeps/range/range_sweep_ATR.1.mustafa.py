@@ -83,6 +83,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         # --- Strategy-Specific Parameters ---
         self.params = {
+            "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "range_tf": "4H",
             "atr_multiplier": 5.0,
             "atr_period": 14,
@@ -304,7 +305,8 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     "tp1_price": tp1,
                     "tp1_qty": tp1_qty,
                     "tp2_qty": qty - tp1_qty,
-                    "qty": qty
+                    "qty": qty,
+                    "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 
         return None
