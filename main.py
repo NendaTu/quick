@@ -17,36 +17,7 @@ class DBLogHandler(logging.Handler):
 
 log = logging.getLogger("scalper")
 
-def setup_logging(db=None):
-    """
-    [TECH-001] Centralized logging setup to prevent global escalation
-    and duplicate handlers when main.py is imported by other tools.
-    """
-    # Configure root logger to DEBUG to capture everything for the DB
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-
-    # Remove existing handlers to prevent duplicates
-    for handler in root.handlers[:]:
-        root.removeHandler(handler)
-
-    formatter = logging.Formatter("%(asctime)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-
-    # Console handler (Only INFO and above)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    root.addHandler(console_handler)
-
-    # DB handler if provided
-    if db:
-        db_handler = DBLogHandler(db)
-        db_handler.setFormatter(formatter)
-        root.addHandler(db_handler)
-
-    # Suppress internal system noise from console
-    logging.getLogger("scalper.models").setLevel(logging.WARNING)
-    logging.getLogger("scalper.simulator").setLevel(logging.INFO)
+from tools.logger import setup_logging
 
 def load_strategy(strategy_path: str, simulator=None, overrides=None):
     """

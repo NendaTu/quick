@@ -83,8 +83,13 @@ class KillzoneSweepStrategy(JBaseStrategy):
             config_overrides=config_overrides
         )
         self.simulator = simulator
+        self._cache = {} # [PERF-005] Cache for expensive calculations
 
         # --- Strategy-Specific Parameters (with overrides) ---
+        # [TECH-001] bypass_external_filters:
+        # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
+        # This strategy will still calculate its INTERNAL requirements (FVG, Structure, Sessions)
+        # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
             "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
             "fvg_penetration_required": False,
@@ -118,20 +123,28 @@ class KillzoneSweepStrategy(JBaseStrategy):
         if not h1 or not m15 or not m1:
             return None
 
-        # --- Phase 1: Bias Identification (1H) ---
-        ov_range = identify_overnight_range(h1, m1[-1]['ts'])
-        if not ov_range:
-            return None
+        # --- Phase 1: Bias Identification (1H) [CACHED] ---
+        last_h1_ts = h1[-1]['ts']
+        cache_key = f"{symbol}_bias_1h"
+        if self._cache.get(cache_key, {}).get('ts') == last_h1_ts:
+            bias = self._cache[cache_key]['bias']
+            ov_range = self._cache[cache_key]['ov_range']
+        else:
+            ov_range = identify_overnight_range(h1, m1[-1]['ts'])
+            if not ov_range:
+                return None
 
-        self.record_milestone("Phase 1: 1H Overnight Range", h1[-1]['ts'], "1H")
+            self.record_milestone("Phase 1: 1H Overnight Range", h1[-1]['ts'], "1H")
 
-        h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
-        h1_sig = h1_struct.get('structure_signal') or ''
+            h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
+            h1_sig = h1_struct.get('structure_signal') or ''
 
-        # Bias: bullish if overall range is trending up or bullish BOS
-        bias = 'neutral'
-        if 'bullish' in h1_sig: bias = 'bullish'
-        elif 'bearish' in h1_sig: bias = 'bearish'
+            # Bias: bullish if overall range is trending up or bullish BOS
+            bias = 'neutral'
+            if 'bullish' in h1_sig: bias = 'bullish'
+            elif 'bearish' in h1_sig: bias = 'bearish'
+
+            self._cache[cache_key] = {'ts': last_h1_ts, 'bias': bias, 'ov_range': ov_range}
 
         if bias == 'neutral':
             return None

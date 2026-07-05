@@ -80,8 +80,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
             config_overrides=config_overrides
         )
         self.simulator = simulator
+        self._cache = {} # [PERF-005] Cache for expensive calculations
 
         # --- Strategy-Specific Parameters ---
+        # [TECH-001] bypass_external_filters:
+        # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
+        # This strategy will still calculate its INTERNAL requirements (ATR Expansion, BOS)
+        # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
             "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
             "range_tf": "4H",
@@ -114,7 +119,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         if not h4 or not h1 or not m15 or not m1: return None
 
-        # --- Phase 1: Expansion Detection ---
+        # --- Phase 1: Expansion Detection [CACHED] ---
         state_key = f"{symbol}_atr_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
@@ -131,12 +136,18 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 anchor = None
 
         # Check for NEW expansion candle
-        expansion = is_expansion_candle(
-            h4,
-            multiplier=self.params["atr_multiplier"],
-            period=self.params["atr_period"],
-            timeframe=range_tf
-        )
+        last_h4_ts = h4[-1]['ts']
+        cache_key_exp = f"{symbol}_expansion_h4"
+        if self._cache.get(cache_key_exp, {}).get('ts') == last_h4_ts:
+            expansion = self._cache[cache_key_exp]['expansion']
+        else:
+            expansion = is_expansion_candle(
+                h4,
+                multiplier=self.params["atr_multiplier"],
+                period=self.params["atr_period"],
+                timeframe=range_tf
+            )
+            self._cache[cache_key_exp] = {'ts': last_h4_ts, 'expansion': expansion}
 
         # DEBUG
         # if len(h4) % 10 == 0:
@@ -171,13 +182,20 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         if not anchor: return None
 
-        # --- Phase 2: Bias (1H) ---
-        h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
-        h1_sig = h1_struct.get('structure_signal') or ''
+        # --- Phase 2: Bias (1H) [CACHED] ---
+        last_h1_ts = h1[-1]['ts']
+        cache_key = f"{symbol}_bias_1h"
+        if self._cache.get(cache_key, {}).get('ts') == last_h1_ts:
+            bias = self._cache[cache_key]['bias']
+        else:
+            h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
+            h1_sig = h1_struct.get('structure_signal') or ''
 
-        bias = 'neutral'
-        if 'bullish' in h1_sig: bias = 'bullish'
-        elif 'bearish' in h1_sig: bias = 'bearish'
+            bias = 'neutral'
+            if 'bullish' in h1_sig: bias = 'bullish'
+            elif 'bearish' in h1_sig: bias = 'bearish'
+
+            self._cache[cache_key] = {'ts': last_h1_ts, 'bias': bias}
 
         if bias == 'neutral': return None
 

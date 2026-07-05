@@ -40,6 +40,7 @@ class Progress:
         self.label = label
         self.start_time = time.time()
         self.last_update = 0
+        self._last_line_len = 0
 
     def update(self, amount=1):
         self.current += amount
@@ -55,8 +56,14 @@ class Progress:
         eta = (self.total - self.current) / rate if rate > 0 else 0
 
         # Format: ASSET: TF (PCT% / ETA s)
-        sys.stdout.write(f"\r{self.label} ({int(pct)}% / {int(eta)}s)    ")
+        msg = f"\r{self.label} ({int(pct)}% / {int(eta)}s)"
+        padding = max(0, self._last_line_len - len(msg))
+        full_msg = msg + (" " * padding)
+
+        sys.stdout.write(full_msg)
         sys.stdout.flush()
+        self._last_line_len = len(msg)
+
         if self.current >= self.total:
             print()
 
@@ -102,6 +109,7 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
     # Find gaps in DB
     gaps = db.get_data_gaps(asset, tf, start_ts, end_ts)
     if not gaps:
+        log.debug(f"No gaps for {asset} {tf}")
         return
 
     # Total expected candles across all gaps

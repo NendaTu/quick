@@ -40,19 +40,11 @@ DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 START_DATE = DEFAULT_START_DATE
 END_DATE = DEFAULT_END_DATE
 
-# [TECH-001] Suppress third-party and technical DEBUG logs from console
-# Clear any root handlers that might have been added by imports (e.g. from main.py)
-root = logging.getLogger()
-for handler in root.handlers[:]:
-    root.removeHandler(handler)
+# [TECH-001] Use centralized logging
+from tools.logger import setup_logging
+setup_logging(level=logging.INFO)
 
-logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[logging.StreamHandler(sys.stdout)])
-# Explicitly disable propagation of debug logs to console
-logging.getLogger("scalper.models").setLevel(logging.WARNING)
-logging.getLogger("scalper.simulator").setLevel(logging.INFO)
-logging.getLogger("scalper.engine").setLevel(logging.INFO)
 log = logging.getLogger("backtest")
-log.setLevel(logging.INFO)
 
 class Progress:
     def __init__(self, total, label="Progress"):
@@ -61,6 +53,7 @@ class Progress:
         self.label = label
         self.start_time = time.time()
         self.last_update = 0
+        self._last_line_len = 0
 
     def update(self, amount=1):
         self.current += amount
@@ -76,8 +69,16 @@ class Progress:
         eta = (self.total - self.current) / rate if rate > 0 else 0
 
         # Format: ASSET: TF (PCT% / ETA s)
-        sys.stdout.write(f"\r{self.label} ({int(pct)}% / {int(eta)}s)    ")
+        msg = f"\r{self.label} ({int(pct)}% / {int(eta)}s)"
+
+        # Clear tail of previous longer lines
+        padding = max(0, self._last_line_len - len(msg))
+        full_msg = msg + (" " * padding)
+
+        sys.stdout.write(full_msg)
         sys.stdout.flush()
+        self._last_line_len = len(msg)
+
         if self.current >= self.total:
             print()
 
@@ -107,11 +108,15 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     """
     target_tfs = timeframes
     if not silent:
-        log.info(f"Acquiring historical data for {target_tfs}...")
+        log.debug(f"Acquiring historical data for {target_tfs}...")
 
     tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
     # Determine if warm-up is required
+    # [TECH-001] Even if Engine-level filters are bypassed (bypass_external_filters=True),
+    # certain strategies (like Sweeps) require historical context for their INTERNAL logic
+    # (e.g. 1H structure, 4H ATR anchors). Without this context, backtest results would
+    # be inauthentic for the first few days.
     requires_warmup = False
 
     if chain:
@@ -119,9 +124,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             for wrapper in segment:
                 strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
                 for strat in strategies:
-                    # Warm-up is required if:
-                    # 1. Strategy opts-IN to external filters (bypass=False)
-                    # 2. OR Strategy name implies it uses indicators (e.g. sweeps require FVG/Structure)
+                    # Warm-up is triggered if the strategy opts-in OR is known to be indicator-heavy.
                     bypass = getattr(strat, "params", {}).get("bypass_external_filters", True)
                     is_indicator_heavy = any(x in getattr(strat, "name", "").lower() for x in ["sweep", "scalper", "fvg"])
 
@@ -132,6 +135,11 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             if requires_warmup: break
 
     # Data range for download (optionally with warm-up)
+    # [TECH-001] Rationale for 14-Day Warm-up:
+    # SOPHISTICATED STRATEGIES (like Mustafa's sweeps) rely on multi-timeframe structure (1H/4H).
+    # To detect a structural break or calculate a 14-period ATR on the first minute of
+    # the backtest, we must have historical context. Without this buffer, the first few
+    # days of the backtest would be mathematically inauthentic.
     dl_start_ts = START_DATE.timestamp()
     if requires_warmup:
         dl_start_ts -= (86400 * 14) # 14 days warm-up
@@ -531,16 +539,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     asset_history = {}
 
     # Discovery of relevant timeframes from the strategy chain
-    relevant_tfs_set = {"1m", "15m", "1H"}
-    for segment in chain.segments:
-        for wrapper in segment:
-            if hasattr(wrapper.instance, "params") and "range_tf" in wrapper.instance.params:
-                relevant_tfs_set.add(wrapper.instance.params["range_tf"])
-            # Also check if range_tf is in config overrides
-            if "range_tf" in wrapper.overrides:
-                relevant_tfs_set.add(wrapper.overrides["range_tf"])
-
-    relevant_tfs = list(relevant_tfs_set)
+    relevant_tfs = get_required_timeframes(chain)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in [asset, BTC_SYMBOL]:
@@ -603,6 +602,11 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         c = full_history[i]
         o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
+        # [PERF-004] Skip sub-candle simulation if idle to boost speed
+        intra_candle_prices = [o, h, l, cl]
+        if not sim.positions and not sim.pending_orders:
+            intra_candle_prices = [cl] # Only simulate close if idle
+
         # [PERF-001] Update simulator's OHLCV with sliding window
         sim.ohlcv[asset][tf].append(c)
         if len(sim.ohlcv[asset][tf]) > 1000: sim.ohlcv[asset][tf].pop(0)
@@ -611,8 +615,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             sim.confluence_history[asset][tf].append(cl)
             if len(sim.confluence_history[asset][tf]) > 1000: sim.confluence_history[asset][tf].pop(0)
 
-        # [BT-001] Simulate Intra-Candle Price Action (O -> H/L -> C)
-        for price in [o, h, l, cl]:
+        # [BT-001] Simulate Price Action
+        for price in intra_candle_prices:
             sim.last_price[asset] = price
             if asset in sim.books:
                 sim.books[asset].mid_price = price
@@ -800,6 +804,34 @@ def print_results(results):
 
     print("="*165 + "\n")
 
+def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
+    """[TECH-001] Unified timeframe discovery logic."""
+    tfs = {"1m"} # Always include execution timeframe
+    for segment in chain.segments:
+        for wrapper in segment:
+            # Handle list of strategies (Family)
+            strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+            for strat in strategies:
+                if hasattr(strat, "params") and "range_tf" in strat.params:
+                    tfs.add(strat.params["range_tf"])
+
+            # Also check if range_tf is in config overrides or direct params
+            for p in wrapper.params:
+                if "range_tf=" in p:
+                    tfs.add(p.split("=")[1])
+            if "range_tf" in wrapper.overrides:
+                tfs.add(wrapper.overrides["range_tf"])
+
+    # If using indicators heavy strategies (mustafa), ensure 15m and 1H are included
+    # (Hardcoded for now as these strategies rely on them but don't define them in params)
+    for segment in chain.segments:
+        for wrapper in segment:
+             strat_name = getattr(wrapper.instance[0] if isinstance(wrapper.instance, list) else wrapper.instance, "name", "").lower()
+             if any(x in strat_name for x in ["mustafa", "sweep", "scalper"]):
+                 tfs.update(["15m", "1H"])
+
+    return list(tfs)
+
 async def main():
     global START_DATE, END_DATE
 
@@ -874,23 +906,9 @@ async def main():
         print(f"Error parsing command: {e}")
         return
 
-    # Determine all required timeframes for the strategy chain
-    required_tfs = {"1m"} # Always include execution timeframe
-    for segment in chain.segments:
-        for wrapper in segment:
-            # Handle list of strategies (Family)
-            strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
-            for strat in strategies:
-                if hasattr(strat, "params") and "range_tf" in strat.params:
-                    required_tfs.add(strat.params["range_tf"])
-
-            # Also check if range_tf is in config overrides or direct params
-            for p in wrapper.params:
-                if "range_tf=" in p:
-                    required_tfs.add(p.split("=")[1])
-
-    # 1. Acquisition of data
-    await download_historical_data(client, db, assets_to_run, list(required_tfs), chain=chain)
+    # 1. Acquisition of data (Using unified discovery)
+    required_tfs = get_required_timeframes(chain)
+    await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
 
     # 2. Run backtests
     all_results = []
