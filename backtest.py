@@ -53,15 +53,23 @@ class Progress:
         self.current = 0
         self.label = label
         self.start_time = time.time()
+        self.last_update = 0
 
     def update(self, amount=1):
         self.current += amount
-        pct = (self.current / self.total) * 100
-        elapsed = time.time() - self.start_time
+        now = time.time()
+        # Throttle to 5 seconds unless complete
+        if now - self.last_update < 5 and self.current < self.total:
+            return
+
+        self.last_update = now
+        pct = (self.current / self.total) * 100 if self.total > 0 else 100
+        elapsed = now - self.start_time
         rate = self.current / elapsed if elapsed > 0 else 0
         eta = (self.total - self.current) / rate if rate > 0 else 0
 
-        sys.stdout.write(f"\r{self.label}: [{self.current}/{self.total}] {pct:.1f}% | ETA: {int(eta)}s  ")
+        # Format: ASSET: TF (PCT% / ETA s)
+        sys.stdout.write(f"\r{self.label} ({int(pct)}% / {int(eta)}s)    ")
         sys.stdout.flush()
         if self.current >= self.total:
             print()
@@ -85,9 +93,10 @@ async def discover_assets(client: BitGetClient) -> List[str]:
                 break
     return discovered
 
-async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False):
+async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False, chain=None):
     """
     [TECH-001] Robust historical data acquisition using range-based gap detection.
+    Includes a 14-day warm-up buffer if indicators are required.
     """
     target_tfs = timeframes
     if not silent:
@@ -95,9 +104,29 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
 
     tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
+    # Determine if warm-up is required
+    requires_warmup = not getattr(config, "BYPASS_GLOBAL_FILTERS", False)
+    if not requires_warmup and chain:
+        # Check if any strategy in the chain explicitly requires warm-up (i.e. has a bypass toggle set to False)
+        for segment in chain.segments:
+            for wrapper in segment:
+                strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+                for strat in strategies:
+                    if hasattr(strat, "params") and not strat.params.get("bypass_external_filters", True):
+                        requires_warmup = True
+                        break
+                if requires_warmup: break
+            if requires_warmup: break
+
+    # Data range for download (optionally with warm-up)
+    dl_start_ts = START_DATE.timestamp()
+    if requires_warmup:
+        dl_start_ts -= (86400 * 14) # 14 days warm-up
+        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=pytz.UTC)}")
+
     for asset in assets:
         for tf in target_tfs:
-            gaps = db.get_data_gaps(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
+            gaps = db.get_data_gaps(asset, tf, dl_start_ts, END_DATE.timestamp())
 
             if not gaps:
                 if not silent:
@@ -111,7 +140,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                 target_start_ms = int(gap_start * 1000)
 
                 expected = (gap_end - gap_start) / tf_seconds[tf]
-                progress = Progress(max(1, int(expected)), label=f"Gap {asset} {tf}")
+                progress = Progress(max(1, int(expected)), label=f"{asset}: {tf}")
 
                 while current_end > target_start_ms:
                     # Double check if we already filled this sub-range during a previous iteration
@@ -526,7 +555,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             start_idx = i
             break
 
-    progress = Progress(len(full_history) - start_idx, label=f"Backtesting {asset} {tf}")
+    progress = Progress(len(full_history) - start_idx, label=f"BT {asset}: {tf}")
     chain.reset()
 
     # Initialize wrappers with sim and FRESH instances to avoid state leakage between assets
@@ -832,18 +861,22 @@ async def main():
         return
 
     # Determine all required timeframes for the strategy chain
-    required_tfs = set(DEFAULT_TIMEFRAMES)
+    required_tfs = {"1m"} # Always include execution timeframe
     for segment in chain.segments:
         for wrapper in segment:
-            if hasattr(wrapper.instance, "params") and "range_tf" in wrapper.instance.params:
-                required_tfs.add(wrapper.instance.params["range_tf"])
+            # Handle list of strategies (Family)
+            strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+            for strat in strategies:
+                if hasattr(strat, "params") and "range_tf" in strat.params:
+                    required_tfs.add(strat.params["range_tf"])
+
             # Also check if range_tf is in config overrides or direct params
             for p in wrapper.params:
                 if "range_tf=" in p:
                     required_tfs.add(p.split("=")[1])
 
     # 1. Acquisition of data
-    await download_historical_data(client, db, assets_to_run, list(required_tfs))
+    await download_historical_data(client, db, assets_to_run, list(required_tfs), chain=chain)
 
     # 2. Run backtests
     all_results = []

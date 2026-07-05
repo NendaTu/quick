@@ -492,6 +492,19 @@ class Engine:
         await asyncio.sleep(5)
         log.info("Trading loop started.")
 
+        # Determine if we should bypass engine-level indicator calculation
+        # Global bypass OR if all active strategies opt-out
+        engine_indicators_bypassed = getattr(config, 'BYPASS_GLOBAL_FILTERS', False)
+        if not engine_indicators_bypassed and self.strategies:
+            all_bypassed = True
+            for strat in self.strategies:
+                 if not getattr(strat, 'params', {}).get('bypass_external_filters', False):
+                     all_bypassed = False
+                     break
+            if all_bypassed:
+                engine_indicators_bypassed = True
+                log.info("Engine indicators bypassed by all active strategies.")
+
         # Continue loop even after stop_event until positions clear
         while not self.stop_event.is_set() or self.open_positions or self.pending_entries:
             try:
@@ -535,7 +548,12 @@ class Engine:
                                  if is_full:
                                      continue
 
-                                 feat = self.exchange.get_features(sym)
+                                 # [TECH-001] Only calculate engine-level features if not bypassed
+                                 # Strategies will still use Simulator.get_features as needed.
+                                 if engine_indicators_bypassed and sym != BTC_SYMBOL:
+                                     feat = {}
+                                 else:
+                                     feat = self.exchange.get_features(sym)
                                  self._last_features[sym] = feat
                                  all_features[sym] = feat
                     except Exception as e:

@@ -29,7 +29,6 @@ logging.basicConfig(
 log = logging.getLogger("downloader")
 
 # Configuration
-MAX_LOOKBACK_YEARS = 4
 CONCURRENCY_LIMIT = 2
 GLOBAL_RATE_LIMIT = 8 # Increased slightly, but added 429 backoff logic
 BATCH_SIZE = 200
@@ -40,15 +39,23 @@ class Progress:
         self.current = 0
         self.label = label
         self.start_time = time.time()
+        self.last_update = 0
 
     def update(self, amount=1):
         self.current += amount
+        now = time.time()
+        # Throttle to 5 seconds unless complete
+        if now - self.last_update < 5 and self.current < self.total:
+            return
+
+        self.last_update = now
         pct = (self.current / self.total) * 100 if self.total > 0 else 100
-        elapsed = time.time() - self.start_time
+        elapsed = now - self.start_time
         rate = self.current / elapsed if elapsed > 0 else 0
         eta = (self.total - self.current) / rate if rate > 0 else 0
 
-        sys.stdout.write(f"\r{self.label}: [{self.current}/{self.total}] {pct:.1f}% | ETA: {int(eta)}s  ")
+        # Format: ASSET: TF (PCT% / ETA s)
+        sys.stdout.write(f"\r{self.label} ({int(pct)}% / {int(eta)}s)    ")
         sys.stdout.flush()
         if self.current >= self.total:
             print()
@@ -84,14 +91,13 @@ class RateLimiter:
             self.last_call = time.time()
 
 async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter):
+    from backtest import MAX_START_DATE, MAX_END_DATE
+
     tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
     step = tf_seconds.get(tf, 60)
 
-    end_dt = datetime.now(pytz.UTC)
-    start_dt = end_dt - timedelta(days=365 * MAX_LOOKBACK_YEARS)
-
-    start_ts = start_dt.timestamp()
-    end_ts = end_dt.timestamp()
+    start_ts = MAX_START_DATE.timestamp()
+    end_ts = MAX_END_DATE.timestamp()
 
     # Find gaps in DB
     gaps = db.get_data_gaps(asset, tf, start_ts, end_ts)
@@ -106,7 +112,7 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
             target_start_ms = int(gap_start * 1000)
 
             expected = (gap_end - gap_start) / step
-            progress = Progress(max(1, int(expected)), label=f"  {asset} {tf}")
+            progress = Progress(max(1, int(expected)), label=f"{asset}: {tf}")
 
             while current_end_ms > target_start_ms:
                 try:
