@@ -1,5 +1,5 @@
 import asyncio, time, logging, math
-from typing import Dict, Set
+from typing import Dict, Set, List
 import config
 from config import *
 from orderbook import OrderBook
@@ -621,76 +621,74 @@ class Engine:
 
                         for signal in active_signals:
                             side = signal["side"]
-                        # Skip if a position in this direction is already open
-                        if f"{sym}_{side}" in self.open_positions:
-                            continue
+                            # Skip if a position in this direction is already open
+                            if f"{sym}_{side}" in self.open_positions:
+                                continue
 
-                        if not self._asset_is_tradable(sym, side, features=feat):
-                            continue
+                            if not self._asset_is_tradable(sym, side, features=feat):
+                                continue
 
-                        qty = signal["qty"]
-                        entry = signal["entry_price"]
-                        stop = signal["stop_price"]
-                        tp = signal["exit_price"]
-                        btc_conf = signal["btc_confluence"]
-                        drt = signal.get("drt", 0.5)
-                        orig_side = signal.get("original_side", side)
-                        is_contr = signal.get("is_contrarian", False)
+                            qty = signal["qty"]
+                            entry = signal["entry_price"]
+                            stop = signal["stop_price"]
+                            tp = signal["exit_price"]
+                            btc_conf = signal["btc_confluence"]
+                            orig_side = signal.get("original_side", side)
+                            is_contr = signal.get("is_contrarian", False)
 
-                        # Immediate local registration to prevent race condition
-                        pos_key = f"{sym}_{side}"
-                        # [CS-002] CENTRALIZED STATE: We no longer pre-populate open_positions here.
-                        # _report_entry (triggered by Fill callback) is the only source of truth.
-                        self.pending_entries.add(pos_key)
+                            # Immediate local registration to prevent race condition
+                            pos_key = f"{sym}_{side}"
+                            self.pending_entries.add(pos_key)
 
-                        side_str = side.upper()
-                        if is_contr:
-                            side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
+                            side_str = side.upper()
+                            if is_contr:
+                                side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
 
-                        # Extract all feature keys (excluding common ones handled manually in log)
-                        exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct']
-                        extra_features = {k: v for k, v in signal.items() if k not in exclude and v is not None}
-                        feat_msg = " ".join([f"{k}={v}" for k, v in extra_features.items()])
+                            # Extract all feature keys (excluding common ones handled manually in log)
+                            exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct']
+                            extra_features = {k: v for k, v in signal.items() if k not in exclude and v is not None}
+                            feat_msg = " ".join([f"{k}={v}" for k, v in extra_features.items()])
 
-                        signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
-                                      f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
-                                      f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
-                                      f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")
+                            signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
+                                          f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
+                                          f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
+                                          f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")
 
-                        # Save to database
-                        if getattr(self.exchange, "db", None):
-                            self.exchange.db.save_signal(sym, side, entry, signal)
+                            # Save to database
+                            if getattr(self.exchange, "db", None):
+                                self.exchange.db.save_signal(sym, side, entry, signal)
 
-                        # Always log for DB, but conditionally for console
-                        if LOG_SIGNALS:
-                            log.info(signal_msg)
-                        else:
-                            log.debug(signal_msg)
+                            # Always log for DB, but conditionally for console
+                            if LOG_SIGNALS:
+                                log.info(signal_msg)
+                            else:
+                                # [TECH-001] Keep signal details in Shadow Log/DB only
+                                log.debug(signal_msg)
 
-                        # Final collision check immediately before router call
-                        if not self._asset_is_tradable(sym, side, features=feat):
-                            if pos_key in self.open_positions: del self.open_positions[pos_key]
-                            if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
-                            continue
+                            # Final collision check immediately before router call
+                            if not self._asset_is_tradable(sym, side, features=feat):
+                                if pos_key in self.open_positions: del self.open_positions[pos_key]
+                                if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
+                                continue
 
-                        # Add regime to features for predict logic
-                        feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
+                            # Add regime to features for predict logic
+                            feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
 
-                        # Inject extra info for router/exchange
-                        signal.update({
-                            "symbol": sym,
-                            "features": feat
-                        })
+                            # Inject extra info for router/exchange
+                            signal.update({
+                                "symbol": sym,
+                                "features": feat
+                            })
 
-                        resp = await self.router.route_signal(signal)
-                        if resp.get("code") == "00000" and not LOG_SIGNALS:
-                            # Show signal with fill/place if LOG_SIGNALS is False
-                            log.info(f"Entry Triggered | {signal_msg}")
+                            resp = await self.router.route_signal(signal)
+                            if resp.get("code") == "00000" and not LOG_SIGNALS:
+                                # Show signal with fill/place if LOG_SIGNALS is False
+                                log.info(f"Entry Triggered | {signal_msg}")
 
-                        if resp.get("code") != "00000":
-                            # Reject local registration if exchange fails
-                            if pos_key in self.open_positions: del self.open_positions[pos_key]
-                            if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
+                            if resp.get("code") != "00000":
+                                # Reject local registration if exchange fails
+                                if pos_key in self.open_positions: del self.open_positions[pos_key]
+                                if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
 
                 await asyncio.sleep(0.1)
             except Exception as e:

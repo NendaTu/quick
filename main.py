@@ -24,6 +24,11 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 logging.getLogger().addHandler(console_handler)
+
+# [TECH-001] Suppress internal system noise from console
+logging.getLogger("scalper.models").setLevel(logging.WARNING)
+logging.getLogger("scalper.simulator").setLevel(logging.INFO)
+
 log = logging.getLogger("scalper")
 
 def load_strategy(strategy_path: str, simulator=None, overrides=None):
@@ -43,24 +48,17 @@ def load_strategy(strategy_path: str, simulator=None, overrides=None):
     # 1. Directory-based Discovery (Recursive Families)
     if os.path.isdir(potential_dir):
         strategies = []
-        for f in sorted(os.listdir(potential_dir)):
-            if f.startswith("__") or f.startswith("."):
-                continue
-
-            sub_rel_path = os.path.join(strategy_path, f)
-            full_sub_path = os.path.join(potential_dir, f)
-
-            if os.path.isdir(full_sub_path):
-                # Recursive call for directory
-                res = load_strategy(sub_rel_path, simulator=simulator, overrides=overrides)
-                if res and isinstance(res, list):
-                    strategies.extend(res)
-            elif f.endswith(".py") and "base_strategy" not in f:
-                # Direct load for file
-                res = load_strategy(sub_rel_path, simulator=simulator, overrides=overrides)
-                if res and not isinstance(res, list):
-                    strategies.append(res)
-        return strategies
+        # Support recursive discovery
+        for root, dirs, files in os.walk(potential_dir):
+            for f in sorted(files):
+                if f.endswith(".py") and not f.startswith("__") and "base_strategy" not in f:
+                    # Construct relative path for loader
+                    full_f_path = os.path.join(root, f)
+                    res = load_strategy(full_f_path, simulator=simulator, overrides=overrides)
+                    if res:
+                        if isinstance(res, list): strategies.extend(res)
+                        else: strategies.append(res)
+        return strategies if strategies else None
 
     # 2. Single File Discovery
     full_path = strategy_path

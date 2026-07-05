@@ -144,19 +144,16 @@ class LearningModel:
         trend_offset = abs(drt - 0.5)
         # Use locally namespaced threshold from drt_pat
         if getattr(config, 'RESTRICT_DRT', False) and trend_offset < drt_pat.STRENGTH_MIN:
-            log.debug(f"REJECT {symbol}: Trend strength {trend_offset:.4f} < {drt_pat.STRENGTH_MIN}")
             return None
 
         imb = features.get("imbalance", 0)
         # 2. Imbalance filter
         if getattr(config, 'RESTRICT_IMBALANCE', True) and abs(imb) < flow_ind.MIN_IMBALANCE:
-            log.debug(f"REJECT {symbol}: Imbalance {imb:.4f} < {flow_ind.MIN_IMBALANCE}")
             return None
 
         # 3. Liquidity/Volume filter
         vol_pct = features.get("vol_pct", 0)
         if getattr(config, 'RESTRICT_VOL_PCT', False) and vol_pct < flow_ind.VOL_PCT_MIN:
-            log.debug(f"REJECT {symbol}: Volatility pct {vol_pct:.4f} < {flow_ind.VOL_PCT_MIN}")
             return None
 
         # 4. Spread filter
@@ -164,13 +161,11 @@ class LearningModel:
         book_bid, book_ask = book.best_bid, book.best_ask
         spread_pct = (book_ask - book_bid) / mid if mid > 0 else 0
         if getattr(config, 'RESTRICT_SPREAD', False) and spread_pct > getattr(config, 'MAX_SPREAD_PCT', 0.002):
-            log.debug(f"REJECT {symbol}: Spread pct {spread_pct:.4f} > {getattr(config, 'MAX_SPREAD_PCT', 0.002)}")
             return None
 
         # 5. ATR filter
         atr = features.get("atr", 0)
         if getattr(config, 'RESTRICT_ATR', False) and atr < atr_ind.MIN_VOLATILITY:
-            log.debug(f"REJECT {symbol}: ATR {atr:.8f} < {atr_ind.MIN_VOLATILITY}")
             return None
 
         # --- SCORING WITH LEARNED WEIGHTS ---
@@ -231,35 +226,30 @@ class LearningModel:
         if features.get("poi_active"):
             poi_score = features.get("poi_confluence_score", 0)
             score += (poi_score / 20.0) # Scale 40 points -> +2 score
-            log.debug(f"POI Confluence active for {symbol}: +{poi_score/20.0:.1f} score")
 
         # 7. Trade Delta (Order Flow) contribution
         trade_delta = features.get("trade_delta", 0.0)
         if trade_delta != 0:
             score += trade_delta * 1.5 # High weight for aggressive flow
-            log.debug(f"Trade Delta (Order Flow) for {symbol}: {trade_delta:.2f} (added to score)")
 
         # [OP-001] Imbalance Delta contribution
         imb_delta = features.get("imb_delta", 0.0)
         if imb_delta != 0:
             import ta.indicators.book_delta as bd
             score += imb_delta * bd.SCORE_WEIGHT
-            log.debug(f"Imbalance Delta for {symbol}: {imb_delta:.4f} (added to score)")
 
         # [OP Roadmap] Lead/Lag Imbalance Velocity logic
         # If price slope is flat/neutral but imbalance is spiking, front-run the turn
-        price_slope = features.get("mid_slope", 0.0) # We need to ensure mid_slope exists in features
+        price_slope = features.get("mid_slope", 0.0)
         if abs(price_slope) < 0.0001 and abs(imb_delta) > 0.05:
             bonus = 1.0 if imb_delta > 0 else -1.0
             score += bonus
-            log.debug(f"IMBALANCE LEAD (Price Flat): adding {bonus} bonus to score")
 
         # 8. Market Structure (BOS vs MSS) contribution
         struct = features.get("structure_signal")
         if struct:
             if "bos" in struct: score += 1.5
             elif "mss" in struct: score += 0.5
-            log.debug(f"Market Structure signal {struct} for {symbol}: added bonus score")
 
 
         # Check for trade signal
@@ -269,7 +259,6 @@ class LearningModel:
             required_min_score += 0.5
 
         if getattr(config, 'RESTRICT_SCORE', False) and abs(score) < required_min_score:
-            log.debug(f"REJECT {symbol}: Score {score:.1f} < {required_min_score}")
             return None
 
         # [OP-006] Session-Specific Logic Profiles
@@ -277,22 +266,18 @@ class LearningModel:
         if session == 'asia':
             # Be more selective in Asian session (range bound)
             if abs(score) < (required_min_score + 1.0):
-                log.debug(f"REJECT {symbol}: Asian session requires higher score ({required_min_score + 1.0})")
                 return None
 
         # Confidence calculation
         confidence = min(1.0, (abs(score) + 1) / 10)
         if getattr(config, 'RESTRICT_CONFIDENCE', False) and confidence < getattr(config, 'MIN_CONFIDENCE', 0.66):
-            log.debug(f"REJECT {symbol}: Confidence {confidence:.2f} < {getattr(config, 'MIN_CONFIDENCE', 0.66)}")
             return None
 
         # Direction check: ensure scoring matches the DRT trend
         if getattr(config, 'RESTRICT_DIRECTIONAL_SANITY', False):
             if score > 0 and drt < 0.5:
-                log.debug(f"REJECT {symbol}: Long score with bearish DRT {drt:.4f}")
                 return None
             if score < 0 and drt > 0.5:
-                log.debug(f"REJECT {symbol}: Short score with bullish DRT {drt:.4f}")
                 return None
 
         # If everything is False, we still need a direction
@@ -321,10 +306,8 @@ class LearningModel:
                 # Bonus if trade side points TOWARD a session magnet within 1%
                 if direction == "buy" and dist_h > 0 and dist_h < 0.01:
                     score += 0.5
-                    log.debug(f"SESSION MAGNET (Bullish): Targeting {prev_session}_h")
                 elif direction == "sell" and dist_l > 0 and dist_l < 0.01:
                     score -= 0.5
-                    log.debug(f"SESSION MAGNET (Bearish): Targeting {prev_session}_l")
 
         # --- CONTRARIAN FILTER LOGIC ---
         # If CONTRARIAN_FILTER is True, we flip the INTENDED direction for all hard gates
@@ -336,39 +319,30 @@ class LearningModel:
         # [OP-007] Structure-First Trigger Logic
         if getattr(config, 'RESTRICT_STRUCTURE', False):
             if not struct:
-                log.debug(f"REJECT {symbol}: No market structure signal detected")
                 return None
             if gate_direction == "buy" and "bullish" not in struct:
-                log.debug(f"REJECT {symbol}: Bullish entry requested but structure is {struct}")
                 return None
             if gate_direction == "sell" and "bearish" not in struct:
-                log.debug(f"REJECT {symbol}: Bearish entry requested but structure is {struct}")
                 return None
 
         # Hard Gates for restricted indicators
         # Supertrend filter (Conditional Hard Gate)
         if getattr(config, 'RESTRICT_SUPERTREND', False) and supertrend_dir != 0:
             if gate_direction == "buy" and supertrend_dir != 1:
-                log.debug(f"REJECT {symbol}: Supertrend bearish for {gate_direction}")
                 return None
             if gate_direction == "sell" and supertrend_dir != -1:
-                log.debug(f"REJECT {symbol}: Supertrend bullish for {gate_direction}")
                 return None
 
         if getattr(config, 'RESTRICT_MACD', False):
             if gate_direction == "buy" and macd_hist <= 0:
-                log.debug(f"REJECT {symbol}: MACD bearish for {gate_direction}")
                 return None
             if gate_direction == "sell" and macd_hist >= 0:
-                log.debug(f"REJECT {symbol}: MACD bullish for {gate_direction}")
                 return None
 
         if getattr(config, 'RESTRICT_15M_TREND', False):
             if gate_direction == "buy" and asset_15m <= 0:
-                log.debug(f"REJECT {symbol}: 15m trend bearish for {gate_direction}")
                 return None
             if gate_direction == "sell" and asset_15m >= 0:
-                log.debug(f"REJECT {symbol}: 15m trend bullish for {gate_direction}")
                 return None
 
         # RSI Restrictions and Momentum Rider Logic
@@ -388,33 +362,27 @@ class LearningModel:
 
             if gate_direction == "buy":
                 if rsi > lower_limit:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} > {lower_limit} (Adaptive {gate_direction})")
                     return None
                 # [OP-004] ADX-Based Momentum Rider
                 adx = features.get("adx", 0.0)
                 if rsi < rsi_ind.BUY_FLOOR and adx > STRONG_TREND_THRESHOLD:
                     # Instead of blocking, trigger Momentum Rider
                     is_momentum_rider = True
-                    log.debug(f"MOMENTUM RIDER ACTIVE for {symbol} (Long): RSI {rsi:.1f} < {rsi_ind.BUY_FLOOR} and ADX {adx:.1f}")
             if gate_direction == "sell":
                 if rsi < upper_limit:
-                    log.debug(f"REJECT {symbol}: RSI {rsi:.1f} < {upper_limit} (Adaptive {gate_direction})")
                     return None
                 adx = features.get("adx", 0.0)
                 if getattr(config, 'RESTRICT_RSI_SHORT_CEILING', False) and rsi > rsi_ind.SHORT_CEILING and adx > STRONG_TREND_THRESHOLD:
                     # Instead of blocking, trigger Momentum Rider
                     is_momentum_rider = True
-                    log.debug(f"MOMENTUM RIDER ACTIVE for {symbol} (Short): RSI {rsi:.1f} > {rsi_ind.SHORT_CEILING} and ADX {adx:.1f}")
 
         # DRT Velocity Check
         if getattr(config, 'USE_DRT_VELOCITY', False):
             drt_active = features.get("drt", 0.5)
             drt_fast = features.get("drt_fast", 0.5)
             if gate_direction == "buy" and drt_active <= drt_fast:
-                log.debug(f"REJECT {symbol}: DRT velocity negative for {gate_direction} ({drt_active:.4f} <= {drt_fast:.4f})")
                 return None
             if gate_direction == "sell" and drt_active >= drt_fast:
-                log.debug(f"REJECT {symbol}: DRT velocity positive for {gate_direction} ({drt_active:.4f} >= {drt_fast:.4f})")
                 return None
 
         # BTC Confluence Restrictions
@@ -422,10 +390,8 @@ class LearningModel:
             btc_15m = features.get("btc_15m", 0)
             btc_mom_thresh = getattr(config, 'BTC_MOMENTUM_THRESHOLD', 0.001)
             if gate_direction == "buy" and btc_15m < -btc_mom_thresh:
-                log.debug(f"REJECT {symbol}: BTC 15m bearish {btc_15m:.4f} < -{btc_mom_thresh}")
                 return None
             if gate_direction == "sell" and btc_15m > btc_mom_thresh:
-                log.debug(f"REJECT {symbol}: BTC 15m bullish {btc_15m:.4f} > {btc_mom_thresh}")
                 return None
 
         if getattr(config, 'RESTRICT_BTC_CONFLUENCE', False):
@@ -436,11 +402,9 @@ class LearningModel:
             btc_conf_1h_min = getattr(config, 'BTC_CONF_1H_MIN', 0.0002)
             if gate_direction == "buy":
                 if btc_15m < btc_conf_15m_min or btc_1h < btc_conf_1h_min:
-                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] < {btc_conf_15m_min} for {gate_direction}")
                     return None
             else: # sell
                 if btc_15m > -btc_conf_15m_min or btc_1h > -btc_conf_1h_min:
-                    log.debug(f"REJECT {symbol}: BTC 15m/1h [{btc_15m:.4f}/{btc_1h:.4f}] > {-btc_conf_15m_min} for {gate_direction}")
                     return None
 
         # Volume Influx Confirmation Gate
@@ -448,7 +412,6 @@ class LearningModel:
             vol_influx = features.get("volume_influx", False)
             vol_spike = features.get("volume_spike", False)
             if not vol_influx and not vol_spike:
-                log.debug(f"REJECT {symbol}: No volume influx or spike confirmed")
                 return None
 
         # HTF Bias Alignment Gate
@@ -457,20 +420,16 @@ class LearningModel:
             bias = features.get("bias", "neutral")
             if bias != "neutral" or not NEUTRAL_ALLOWS_TRADES:
                 if gate_direction == "buy" and bias == "bearish":
-                    log.debug(f"REJECT {symbol}: Long entry against BEARISH HTF bias")
                     return None
                 if gate_direction == "sell" and bias == "bullish":
-                    log.debug(f"REJECT {symbol}: Short entry against BULLISH HTF bias")
                     return None
 
         # Asset Confluence (15m alignment)
         if getattr(config, 'RESTRICT_ASSET_CONFLUENCE', False):
             asset_15m = features.get("asset_15m", 0)
             if gate_direction == "buy" and asset_15m < 0:
-                log.debug(f"REJECT {symbol}: Asset 15m negative momentum {asset_15m:.4f} for {gate_direction}")
                 return None
             if gate_direction == "sell" and asset_15m > 0:
-                log.debug(f"REJECT {symbol}: Asset 15m positive momentum {asset_15m:.4f} for {gate_direction}")
                 return None
 
         # --- CONTRARIAN GLOBAL EXECUTION ---
@@ -522,7 +481,6 @@ class LearningModel:
             drt_offset = abs(features.get("drt", 0.5) - 0.5)
             if drt_offset < getattr(config, 'TP_RELAXATION_THRESHOLD', 0.05):
                 tp_move = (net_sl_cost * 1.5) + entry_fee_rate + tp_exit_fee_rate + getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
-                log.debug(f"TP RELAXED for {symbol}: using 1.5:1 RRR due to flat DRT ({drt_offset:.4f})")
 
         # [OP Roadmap] Regime-Specific Scaling
         # Adjust targets and caps based on the asset's identified bucket
@@ -574,7 +532,6 @@ class LearningModel:
             atr_pct = features.get("atr", 0) / entry if entry > 0 else 0
             if atr_pct > atr_ind.VOL_ADJUST_THRESHOLD:
                 risk_fraction = getattr(config, 'RISK_PER_TRADE', 0.005) * atr_ind.REDUCED_RISK_FRACTION
-                log.debug(f"RISK REDUCED for {symbol}: ATR {atr_pct:.4f} > {atr_ind.VOL_ADJUST_THRESHOLD}")
 
         kz = features.get("killzone")
         if kz in ["london", "ny_am"]:
@@ -610,7 +567,6 @@ class LearningModel:
 
         qty = math.floor(qty * (10 ** vol_place)) / (10 ** vol_place)
         if qty <= 0:
-            log.debug(f"REJECT {symbol}: Position size rounded to zero at precision {vol_place}")
             return None
 
         entry = round(entry, price_place)

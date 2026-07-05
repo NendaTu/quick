@@ -30,7 +30,8 @@ log = logging.getLogger("downloader")
 
 # Configuration
 MAX_LOOKBACK_YEARS = 4
-CONCURRENCY_LIMIT = 5 # Strict to allow concurrent bot usage
+CONCURRENCY_LIMIT = 1 # [TECH-001] Strict sequential asset processing to avoid rate limit bursts
+GLOBAL_RATE_LIMIT = 3 # Max requests per second (conservative for stability)
 BATCH_SIZE = 200 # Bitget limit per request
 
 class Progress:
@@ -129,6 +130,81 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                     log.error(f"Error downloading {asset} {tf} at {current_end_ms}: {e}")
                     await asyncio.sleep(1.0)
 
+class RateLimiter:
+    def __init__(self, rps):
+        self.interval = 1.0 / rps
+        self.last_call = 0
+        self.lock = asyncio.Lock()
+
+    async def wait(self):
+        async with self.lock:
+            now = time.time()
+            wait_time = self.last_call + self.interval - now
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self.last_call = time.time()
+
+async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter):
+    tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+    step = tf_seconds.get(tf, 60)
+
+    end_dt = datetime.now(pytz.UTC)
+    start_dt = end_dt - timedelta(days=365 * MAX_LOOKBACK_YEARS)
+
+    start_ts = start_dt.timestamp()
+    end_ts = end_dt.timestamp()
+
+    # Find gaps in DB
+    gaps = db.get_data_gaps(asset, tf, start_ts, end_ts)
+    if not gaps:
+        return
+
+    for gap_start, gap_end in gaps:
+        async with semaphore:
+            log.info(f"Downloading {asset} {tf} gap: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} -> {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
+
+            current_end_ms = int(gap_end * 1000)
+            target_start_ms = int(gap_start * 1000)
+
+            expected = (gap_end - gap_start) / step
+            progress = Progress(max(1, int(expected)), label=f"  {asset} {tf}")
+
+            while current_end_ms > target_start_ms:
+                try:
+                    await limiter.wait() # [TECH-001] Strict global rate limiting
+                    candles = await client.request("GET", "/api/v2/mix/market/history-candles", params={
+                        "symbol": asset,
+                        "productType": "usdt-futures",
+                        "granularity": tf,
+                        "endTime": str(current_end_ms),
+                        "limit": str(BATCH_SIZE)
+                    })
+
+                    data = candles.get("data", [])
+                    if not data:
+                        break
+
+                    valid_count = 0
+                    for c in data:
+                        ts_ms = int(c[0])
+                        o, h, l, cl, v = map(float, c[1:6])
+
+                        if ts_ms < target_start_ms:
+                            current_end_ms = 0
+                            continue
+
+                        db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
+                        valid_count += 1
+                        current_end_ms = min(current_end_ms, ts_ms - 1)
+
+                    if valid_count == 0:
+                        break
+
+                    progress.update(len(data))
+                except Exception as e:
+                    log.error(f"Error downloading {asset} {tf} at {current_end_ms}: {e}")
+                    await asyncio.sleep(2.0) # Longer sleep on error
+
 async def main():
     db = Database()
     client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
@@ -138,12 +214,13 @@ async def main():
         log.info(f"Starting download for {len(assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
 
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+        limiter = RateLimiter(GLOBAL_RATE_LIMIT)
 
         # Download candles (High priority)
         tasks = []
         for asset in assets:
             for tf in AVAILABLE_TIMEFRAMES:
-                tasks.append(download_asset_tf(client, db, asset, tf, semaphore))
+                tasks.append(download_asset_tf(client, db, asset, tf, semaphore, limiter))
 
         await asyncio.gather(*tasks)
 

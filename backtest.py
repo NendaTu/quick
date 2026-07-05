@@ -40,7 +40,11 @@ DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 START_DATE = DEFAULT_START_DATE
 END_DATE = DEFAULT_END_DATE
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+# [TECH-001] Suppress third-party and technical DEBUG logs from console
+logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+# Explicitly disable propagation of debug logs to console
+logging.getLogger("scalper.models").setLevel(logging.WARNING)
+logging.getLogger("scalper.simulator").setLevel(logging.INFO)
 log = logging.getLogger("backtest")
 
 class Progress:
