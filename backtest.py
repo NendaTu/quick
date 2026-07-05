@@ -140,18 +140,24 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     # 1. First Pass: Identify all gaps to build a global progress bar
     all_gaps = []
     total_candles = 0
+    skipped_count = 0
     for asset in assets:
         for tf in target_tfs:
             gaps = db.get_data_gaps(asset, tf, dl_start_ts, END_DATE.timestamp())
             if gaps:
                 all_gaps.append((asset, tf, gaps))
                 total_candles += sum((g[1] - g[0] + tf_seconds[tf]) for g in gaps) / tf_seconds[tf]
+            else:
+                skipped_count += 1
 
     if not all_gaps:
-        log.info("Historical data already complete in DB.")
+        log.info(f"Historical data complete for all {len(assets)} assets. Elapsed: {int(time.time() - session_start)}s")
         return
 
     # [TECH-001] Unified Global Progress Bar
+    if skipped_count > 0:
+        log.info(f"Acquisition: Skipping {skipped_count} segments (already complete).")
+
     global_progress = Progress(int(total_candles), label=f"Acquisition: {len(assets)} Assets")
     assets_completed = 0
 
@@ -171,7 +177,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                         "symbol": asset, "productType": "usdt-futures", "granularity": tf,
                         "endTime": str(current_end), "limit": "200"
                     })
-                    if response.get("code") in ["429", "400031"]:
+                    if response.get("code") in ["429", "400031", "40053"]:
                         await asyncio.sleep(5.0); continue
                     data = response.get("data", [])
                     if not data: break
@@ -640,17 +646,6 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                         pointers[sym][t] += 1
 
-            # [TECH-001] AUTHENTICITY GUARD: Check if strategies are ready
-            symbol_ready = True
-            for strat in engine.strategies:
-                if hasattr(strat, "is_ready") and not strat.is_ready(asset):
-                    symbol_ready = False
-                    break
-
-            if not symbol_ready:
-                progress.update(1)
-                continue
-
             # [TECH-001] Support Strategy Families in Backtests
             active_signals = []
             if engine.strategies:
@@ -662,6 +657,10 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                     "features": None # Simulator will be used if None
                 }
                 for strat in engine.strategies:
+                    # [TECH-001] AUTHENTICITY GUARD: Check if this specific strategy is ready
+                    if hasattr(strat, "is_ready") and not strat.is_ready(asset):
+                        continue
+
                     if hasattr(strat, "get_entry_signal"):
                         # Ensure strategy has access to current simulation state
                         if hasattr(strat, "model") and hasattr(strat.model, "simulator"):

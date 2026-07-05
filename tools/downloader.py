@@ -134,8 +134,8 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                         "endTime": str(current_end_ms), "limit": "200"
                     })
 
-                    # [TECH-001] Explicit 429 handling with backoff
-                    if response.get("code") == "429" or response.get("code") == "400031":
+                    # [TECH-001] Explicit 429/Limit handling with backoff
+                    if response.get("code") in ["429", "400031", "40053"]:
                         log.warning(f"Rate limit hit for {asset} {tf}, backing off...")
                         await asyncio.sleep(5.0)
                         continue

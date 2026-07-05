@@ -175,6 +175,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
         if self._cache.get(cache_key_liq, {}).get('ts') == last_m15_ts:
             liq_15m = self._cache[cache_key_liq]['liq']
         else:
+            # Expensive structural scan on 15m
             liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
             self._cache[cache_key_liq] = {'ts': last_m15_ts, 'liq': liq_15m}
 

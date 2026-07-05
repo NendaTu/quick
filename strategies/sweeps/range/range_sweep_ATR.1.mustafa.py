@@ -139,7 +139,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
             except:
                 anchor = None
 
-        # Check for NEW expansion candle
+        # Check for NEW expansion candle [CACHED]
         last_h4_ts = h4[-1]['ts']
         cache_key_exp = f"{symbol}_expansion_h4"
         if self._cache.get(cache_key_exp, {}).get('ts') == last_h4_ts:
