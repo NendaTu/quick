@@ -26,6 +26,44 @@ class JBaseStrategy(BaseStrategy):
         print(f"Strategy: {self.name} v{self.version} by {self.author}")
         print(f"Description: {self.__doc__}")
 
+    def is_ready(self, symbol: str) -> bool:
+        """
+        [TECH-001] Checks if the strategy has enough historical data for authenticity.
+        Returns True if all required history buckets are filled.
+        """
+        if not hasattr(self, "required_history"):
+            return True # Legacy / Simple strategies are always ready
+
+        for tf, count in self.required_history.items():
+            h = self._get_ohlcv(symbol, tf)
+            if len(h) < count:
+                return False
+        return True
+
+    def get_readiness_eta(self, symbol: str) -> str:
+        """[TECH-001] Estimates wait time for warmup."""
+        if self.is_ready(symbol): return "READY"
+
+        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+        max_eta = 0
+        status = []
+
+        for tf, count in self.required_history.items():
+            h = self._get_ohlcv(symbol, tf)
+            missing = count - len(h)
+            if missing > 0:
+                eta = missing * tf_map.get(tf, 60)
+                max_eta = max(max_eta, eta)
+                status.append(f"{missing} {tf}")
+
+        return f"Warming up (Need {', '.join(status)}) | ETA: {int(max_eta)}s"
+
+    def _get_ohlcv(self, symbol: str, tf: str):
+        # Default implementation, to be overriden or used via self.simulator
+        if hasattr(self, "simulator") and self.simulator:
+            return self.simulator.ohlcv.get(symbol, {}).get(tf, [])
+        return []
+
     def get_config(self, key: str, default: Any = None) -> Any:
         return getattr(config, key, default)
 

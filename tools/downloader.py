@@ -52,11 +52,16 @@ class Progress:
         self.last_update = now
         pct = min(100.0, (self.current / self.total) * 100) if self.total > 0 else 100.0
         elapsed = now - self.start_time
-        rate = self.current / elapsed if elapsed > 0 else 0
-        eta = (self.total - self.current) / rate if rate > 0 else 0
+
+        # EMA rate smoothing
+        current_rate = self.current / elapsed if elapsed > 0 else 0
+        if not hasattr(self, "_last_rate"): self._last_rate = current_rate
+        self._last_rate = (self._last_rate * 0.9) + (current_rate * 0.1)
+
+        eta = (self.total - self.current) / self._last_rate if self._last_rate > 0 else 0
 
         # Format: ASSET: TF (PCT% / ETA s)
-        msg = f"\r{self.label} ({int(pct)}% / {int(eta)}s)"
+        msg = f"\r{self.label} ({int(pct)}% / {int(eta)}s) Elapsed: {int(elapsed)}s"
         padding = max(0, self._last_line_len - len(msg))
         full_msg = msg + (" " * padding)
 

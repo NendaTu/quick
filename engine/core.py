@@ -630,6 +630,23 @@ class Engine:
                         # USE PLUGGABLE STRATEGY IF AVAILABLE
                         market_data = {"symbol": sym, "book": book, "equity": self.equity, "features": feat}
 
+                        # [TECH-001] AUTHENTICITY GUARD: Check if strategies are ready
+                        # If any active strategy for this symbol is still warming up, skip signal generation
+                        symbol_ready = True
+                        if self.strategies:
+                            for strat in self.strategies:
+                                if hasattr(strat, "is_ready") and not strat.is_ready(sym):
+                                    symbol_ready = False
+                                    if not hasattr(self, "_warmup_logged"): self._warmup_logged = {}
+                                    now = time.time()
+                                    if now - self._warmup_logged.get(f"{sym}_{strat.name}", 0) > 60: # Log every minute
+                                        log.info(f"{sym}: {strat.get_readiness_eta(sym)}")
+                                        self._warmup_logged[f"{sym}_{strat.name}"] = now
+                                    break
+
+                        if not symbol_ready:
+                            continue
+
                         # [TECH-001] Support for multiple strategies in a Family
                         active_signals = []
                         if self.strategies:

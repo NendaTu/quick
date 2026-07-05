@@ -82,6 +82,10 @@ class RangeSweepATRStrategy(JBaseStrategy):
         self.simulator = simulator
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths
+        self.required_history = {"4H": 30, "1H": 120, "15m": 50, "1m": 100}
+
         # --- Strategy-Specific Parameters ---
         # [TECH-001] bypass_external_filters:
         # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
