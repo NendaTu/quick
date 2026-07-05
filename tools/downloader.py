@@ -109,18 +109,14 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
     # Find gaps in DB
     gaps = db.get_data_gaps(asset, tf, start_ts, end_ts)
     if not gaps:
-        log.debug(f"No gaps for {asset} {tf}")
         return
 
     # Total expected candles across all gaps
-    # [TECH-001] Add +step to make the range inclusive
     total_expected = sum((g[1] - g[0] + step) for g in gaps) / step
     progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
 
     for gap_start, gap_end in gaps:
         async with semaphore:
-            log.debug(f"Downloading {asset} {tf} gap: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} -> {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
-
             current_end_ms = int(gap_end * 1000)
             target_start_ms = int(gap_start * 1000)
 
@@ -129,11 +125,8 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                     await limiter.wait()
 
                     response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
-                        "symbol": asset,
-                        "productType": "usdt-futures",
-                        "granularity": tf,
-                        "endTime": str(current_end_ms),
-                        "limit": str(BATCH_SIZE)
+                        "symbol": asset, "productType": "usdt-futures", "granularity": tf,
+                        "endTime": str(current_end_ms), "limit": "200"
                     })
 
                     # [TECH-001] Explicit 429 handling with backoff
@@ -143,25 +136,19 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                         continue
 
                     data = response.get("data", [])
-                    if not data:
-                        break
+                    if not data: break
 
                     valid_count = 0
                     for c in data:
                         ts_ms = int(c[0])
-                        o, h, l, cl, v = map(float, c[1:6])
-
                         if ts_ms < target_start_ms:
-                            current_end_ms = 0
-                            continue
+                            current_end_ms = 0; break
 
-                        db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
+                        db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
                         valid_count += 1
                         current_end_ms = min(current_end_ms, ts_ms - 1)
 
-                    if valid_count == 0:
-                        break
-
+                    if valid_count == 0: break
                     progress.update(valid_count)
                 except Exception as e:
                     log.error(f"Error downloading {asset} {tf} at {current_end_ms}: {e}")

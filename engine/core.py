@@ -421,6 +421,13 @@ class Engine:
         [TECH-001] Updated tradability logic to support Strategy Families.
         Families allow hedging (Long + Short) but not redundant same-side positions
         unless explicitly managed by scaling logic.
+
+        [TECH-001] BYPASS LOGIC:
+        - If 'bypass_external_filters' is True in strategy params, this Engine-level
+          check (Layer 1) is skipped entirely (Correlations, Cooldowns, Regimes).
+        - However, the STRATEGY itself may still require technical indicators for its
+          INTERNAL logic (e.g. Sweeps need FVG/Structure), which is why the 14-day
+          warm-up buffer in backtest.py may still trigger.
         """
         # [TECH-001] BYPASS OPTION (Global or per-signal)
         if getattr(config, 'BYPASS_GLOBAL_FILTERS', False):

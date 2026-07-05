@@ -274,13 +274,19 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 tp1 = entry_price + (risk * self.params["tp1_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp1_rrr"])
                 tp2 = entry_price + (risk * self.params["tp2_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp2_rrr"])
 
-                # Refine with Liquidity formed SINCE Expansion
-                liq_15m = identify_liquidity(
-                    m15,
-                    lookback=self.params["m15_lookback"],
-                    swing_strength=self.params["m15_swing_strength"],
-                    start_ts=anchor['ts']
-                )
+                # Refine with Liquidity formed SINCE Expansion [CACHED]
+                last_m15_ts = m15[-1]['ts']
+                cache_key_liq_anchor = f"{symbol}_liq_15m_{anchor['ts']}"
+                if self._cache.get(cache_key_liq_anchor, {}).get('ts') == last_m15_ts:
+                    liq_15m = self._cache[cache_key_liq_anchor]['liq']
+                else:
+                    liq_15m = identify_liquidity(
+                        m15,
+                        lookback=self.params["m15_lookback"],
+                        swing_strength=self.params["m15_swing_strength"],
+                        start_ts=anchor['ts']
+                    )
+                    self._cache[cache_key_liq_anchor] = {'ts': last_m15_ts, 'liq': liq_15m}
                 if sweep_side == 'ssl':
                     for level in liq_15m.get('all_bsl', []):
                         if level >= tp1: tp1 = level; break

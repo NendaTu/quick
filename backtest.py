@@ -69,7 +69,8 @@ class Progress:
         eta = (self.total - self.current) / rate if rate > 0 else 0
 
         # Format: ASSET: TF (PCT% / ETA s)
-        msg = f"\r{self.label} ({int(pct)}% / {int(eta)}s)"
+        elapsed = now - self.start_time
+        msg = f"\r{self.label} ({int(pct)}% / {int(eta)}s) Elapsed: {int(elapsed)}s"
 
         # Clear tail of previous longer lines
         padding = max(0, self._last_line_len - len(msg))
@@ -103,7 +104,7 @@ async def discover_assets(client: BitGetClient) -> List[str]:
 
 async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False, chain=None):
     """
-    [TECH-001] Robust historical data acquisition using range-based gap detection.
+    [TECH-001] Accelerated historical data acquisition using concurrency and large batches.
     Includes a 14-day warm-up buffer if indicators are required.
     """
     target_tfs = timeframes
@@ -111,12 +112,15 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
         log.debug(f"Acquiring historical data for {target_tfs}...")
 
     tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+    session_start = time.time()
 
     # Determine if warm-up is required
-    # [TECH-001] Even if Engine-level filters are bypassed (bypass_external_filters=True),
-    # certain strategies (like Sweeps) require historical context for their INTERNAL logic
-    # (e.g. 1H structure, 4H ATR anchors). Without this context, backtest results would
-    # be inauthentic for the first few days.
+    # [TECH-001] Rationale: Even if 'bypass_external_filters' is True (which stops the
+    # core Engine from calculating global Layer 1 indicators like asset-correlations),
+    # the STRATEGY itself may have mandatory internal indicator requirements.
+    # For example, Mustafa's Sweeps require 1H Market Structure and 4H ATR anchors.
+    # These internal dependencies require historical data context to be mathematically
+    # authentic on Day 1 of the backtest.
     requires_warmup = False
 
     if chain:
@@ -143,64 +147,59 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     dl_start_ts = START_DATE.timestamp()
     if requires_warmup:
         dl_start_ts -= (86400 * 14) # 14 days warm-up
-        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=pytz.UTC)}")
+        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=pytz.UTC)}. Elapsed: {int(time.time() - session_start)}s")
 
-    for asset in assets:
-        for tf in target_tfs:
+    # [TECH-001] Accelerated downloading with Concurrency and Rate Limiting
+    semaphore = asyncio.Semaphore(5)
+    from tools.downloader import RateLimiter
+    limiter = RateLimiter(15) # 15 requests per second total
+
+    async def download_asset_tf_gap(asset, tf):
+        async with semaphore:
             gaps = db.get_data_gaps(asset, tf, dl_start_ts, END_DATE.timestamp())
+            if not gaps: return
 
-            if not gaps:
-                if not silent:
-                    log.debug(f"Data for {asset} {tf} complete in DB.")
-                continue
-
-            # Total expected candles across all gaps
-            # [TECH-001] Add +1 to make the range inclusive (start to end inclusive)
             total_expected = sum((g[1] - g[0] + tf_seconds[tf]) for g in gaps) / tf_seconds[tf]
             progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
 
             for gap_start, gap_end in gaps:
-                log.debug(f"Downloading gap for {asset} {tf}: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} to {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
-
                 current_end = int(gap_end * 1000)
                 target_start_ms = int(gap_start * 1000)
 
                 while current_end > target_start_ms:
-                    # Double check if we already filled this sub-range during a previous iteration
-                    if db.check_candle_exists(asset, tf, current_end / 1000):
-                        current_end -= tf_seconds[tf] * 1000
-                        continue
-
-                    candles = await client.request("GET", "/api/v2/mix/market/history-candles", params={
-                        "symbol": asset,
-                        "productType": "usdt-futures",
-                        "granularity": tf,
-                        "endTime": str(current_end),
-                        "limit": "200"
+                    await limiter.wait()
+                    # Bitget V2 limit is 200 for history-candles
+                    response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
+                        "symbol": asset, "productType": "usdt-futures", "granularity": tf,
+                        "endTime": str(current_end), "limit": "200"
                     })
 
-                    data = candles.get("data", [])
-                    if not data:
-                        break
+                    if response.get("code") in ["429", "400031"]:
+                        log.warning(f"Rate limit hit for {asset} {tf}, backing off...")
+                        await asyncio.sleep(5.0)
+                        continue
+
+                    data = response.get("data", [])
+                    if not data: break
 
                     valid_count = 0
                     for c in data:
                         ts_ms = int(c[0])
-                        o, h, l, cl, v = map(float, c[1:6])
-
                         if ts_ms < target_start_ms:
-                            current_end = 0 # Break outer loop
-                            continue
-
-                        db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
+                            current_end = 0; break
+                        db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
                         valid_count += 1
                         current_end = min(current_end, ts_ms - 1)
 
-                    if valid_count == 0:
-                        break
-
+                    if valid_count == 0: break
                     progress.update(valid_count)
-                    await asyncio.sleep(0.1) # Rate limit safety
+
+    tasks = []
+    for asset in assets:
+        for tf in target_tfs:
+            tasks.append(download_asset_tf_gap(asset, tf))
+
+    await asyncio.gather(*tasks)
 
 def find_strategy_file(query: str) -> Optional[str]:
     # [TECH-001] Support directory-based discovery (Families)

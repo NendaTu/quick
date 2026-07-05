@@ -154,7 +154,17 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             self.save_state(state_key, "IDLE", self.simulator)
             state = "IDLE"
 
-        # --- Phase 3: Day Extreme Sweep (15m) ---
+        # --- Phase 3: Day Extreme Sweep (15m) [CACHED] ---
+        last_m15_ts = m15[-1]['ts']
+        cache_key_liq = f"{symbol}_liq_15m"
+        if self._cache.get(cache_key_liq, {}).get('ts') == last_m15_ts:
+            liq_15m = self._cache[cache_key_liq]['liq']
+        else:
+            # We don't necessarily use liq_15m in IDLE state for sweep detection,
+            # but we use it later for TP targets. Let's cache it anyway.
+            # (Note: identify_liquidity with hub_filter=hub is what we use later)
+            liq_15m = None
+
         if state == "IDLE":
             sweep_detected = False
             sweep_side = None
@@ -232,8 +242,13 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                 tp1 = entry_price + (risk * self.params["tp1_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp1_rrr"])
                 tp2 = entry_price + (risk * self.params["tp2_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp2_rrr"])
 
-                # Refine with Day Session Liquidity
-                liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"], hub_filter=hub)
+                # Refine with Day Session Liquidity [CACHED]
+                cache_key_liq_hub = f"{symbol}_liq_15m_{hub}"
+                if self._cache.get(cache_key_liq_hub, {}).get('ts') == last_m15_ts:
+                    liq_15m = self._cache[cache_key_liq_hub]['liq']
+                else:
+                    liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"], hub_filter=hub)
+                    self._cache[cache_key_liq_hub] = {'ts': last_m15_ts, 'liq': liq_15m}
                 if sweep_side == 'ssl':
                     for level in liq_15m.get('all_bsl', []):
                         if level >= tp1: tp1 = level; break

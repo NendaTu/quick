@@ -165,8 +165,14 @@ class KillzoneSweepStrategy(JBaseStrategy):
             self.save_state(state_key, "IDLE", self.simulator)
             state = "IDLE"
 
-        # --- Phase 2: Sweep Detection (15m) ---
-        liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
+        # --- Phase 2: Sweep Detection (15m) [CACHED] ---
+        last_m15_ts = m15[-1]['ts']
+        cache_key_liq = f"{symbol}_liq_15m"
+        if self._cache.get(cache_key_liq, {}).get('ts') == last_m15_ts:
+            liq_15m = self._cache[cache_key_liq]['liq']
+        else:
+            liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
+            self._cache[cache_key_liq] = {'ts': last_m15_ts, 'liq': liq_15m}
 
         if state == "IDLE":
             # [T-003] Check all 15m candles since session start for a sweep
