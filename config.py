@@ -15,6 +15,9 @@ BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 # The simulated starting balance used for all PnL and risk calculations.
 INITIAL_EQUITY = 15.0
 
+# [TECH-001] Compound every trade via 100% reinvestment.
+REINVESTMENT_PERCENTAGE = 1.0
+
 # Maximum fraction of total balance risked per single trade (0.005 = 0.5%).
 RISK_PER_TRADE = 0.0667
 

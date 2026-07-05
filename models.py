@@ -129,6 +129,10 @@ class LearningModel:
             self.weights[k] = max(0.1, min(5.0, self.weights[k]))
 
     def predict(self, symbol, book, equity, features=None):
+        """
+        [TECH-001] Predicts direction and calculates risk-adjusted position size.
+        Incorporates REINVESTMENT_PERCENTAGE for compounding control.
+        """
         if features is None:
             features = self.simulator.get_features(symbol)
 
@@ -576,9 +580,22 @@ class LearningModel:
         if kz in ["london", "ny_am"]:
             risk_fraction *= getattr(config, 'SESSION_MULTIPLIER', 1.5)
 
+        # [TECH-001] Compounding Logic: Calculate riskable equity based on reinvestment settings
+        starting_equity = getattr(config, 'INITIAL_EQUITY', 15.0)
+        reinvest_pct = getattr(config, 'REINVESTMENT_PERCENTAGE', 1.0)
+
+        # If 100% reinvestment, use current equity.
+        # If 0%, use starting equity (no compounding).
+        # Between 0-100%, compound only a fraction of the growth.
+        if equity > starting_equity:
+            riskable_equity = starting_equity + (equity - starting_equity) * reinvest_pct
+        else:
+            # On drawdown, we always use current equity to reduce size proportionally
+            riskable_equity = equity
+
         # Centralized Position Sizing
         qty = calculate_position_size(
-            equity,
+            riskable_equity,
             risk_fraction,
             entry,
             stop_price,

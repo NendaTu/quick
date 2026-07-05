@@ -27,26 +27,73 @@ logging.getLogger().addHandler(console_handler)
 log = logging.getLogger("scalper")
 
 def load_strategy(strategy_path: str, simulator=None, overrides=None):
-    if not strategy_path.endswith(".py"):
-        # Discovery mechanism
-        name = strategy_path.replace("/", ".")
-        strategy_path = f"strategies/{name}.py"
-        if not os.path.exists(strategy_path):
-            # Try to find it
-            for f in os.listdir("strategies"):
-                if f.startswith(name) and f.endswith(".py"):
-                    strategy_path = f"strategies/{f}"
-                    break
+    """
+    [TECH-001] Enhanced strategy loader with full recursive directory support.
+    Calling a parent directory will now correctly load all strategies in all
+    nested subdirectories.
+    """
+    # Normalize strategy_path - remove leading strategies/ if present
+    if strategy_path.startswith("strategies/"):
+        strategy_path = strategy_path[11:]
+    elif strategy_path == "strategies":
+        strategy_path = ""
 
-    spec = importlib.util.spec_from_file_location("strategy", strategy_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    potential_dir = os.path.join("strategies", strategy_path)
 
-    # Expecting a class that inherits from JBaseStrategy
-    # We'll look for a class that isn't JBaseStrategy itself
-    for name, obj in module.__dict__.items():
-        if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
-            return obj(simulator=simulator, config_overrides=overrides)
+    # 1. Directory-based Discovery (Recursive Families)
+    if os.path.isdir(potential_dir):
+        strategies = []
+        for f in sorted(os.listdir(potential_dir)):
+            if f.startswith("__") or f.startswith("."):
+                continue
+
+            sub_rel_path = os.path.join(strategy_path, f)
+            full_sub_path = os.path.join(potential_dir, f)
+
+            if os.path.isdir(full_sub_path):
+                # Recursive call for directory
+                res = load_strategy(sub_rel_path, simulator=simulator, overrides=overrides)
+                if res and isinstance(res, list):
+                    strategies.extend(res)
+            elif f.endswith(".py") and "base_strategy" not in f:
+                # Direct load for file
+                res = load_strategy(sub_rel_path, simulator=simulator, overrides=overrides)
+                if res and not isinstance(res, list):
+                    strategies.append(res)
+        return strategies
+
+    # 2. Single File Discovery
+    full_path = strategy_path
+    if not os.path.exists(full_path):
+        # Try relative to strategies/
+        full_path = os.path.join("strategies", strategy_path)
+        if not full_path.endswith(".py"):
+            full_path += ".py"
+
+    if not os.path.exists(full_path):
+        # Fuzzy match in strategies/
+        name = strategy_path.replace("/", ".").replace(".py", "")
+        for f in os.listdir("strategies"):
+            if f.startswith(name) and f.endswith(".py"):
+                full_path = os.path.join("strategies", f)
+                break
+
+    if not os.path.exists(full_path) or os.path.isdir(full_path):
+        return None
+
+    try:
+        spec = importlib.util.spec_from_file_location("strategy", full_path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        for name, obj in module.__dict__.items():
+            if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
+                return obj(simulator=simulator, config_overrides=overrides)
+    except Exception as e:
+        log.error(f"Error loading strategy file {full_path}: {e}")
+
     return None
 
 async def main():
@@ -73,10 +120,17 @@ async def main():
     engine = Engine()
 
     # Load strategy
-    strategy = load_strategy(args.strategy, simulator=engine.exchange, overrides=overrides)
-    if strategy:
-        log.info(f"Loaded Strategy: {strategy.name} v{strategy.version} by {strategy.author}")
-        engine.strategy = strategy
+    strategies = load_strategy(args.strategy, simulator=engine.exchange, overrides=overrides)
+    if strategies:
+        if isinstance(strategies, list):
+            log.info(f"Loaded Strategy Family: {args.strategy} ({len(strategies)} members)")
+            engine.strategies = strategies
+            # Backwards compatibility for single strategy check
+            engine.strategy = strategies[0]
+        else:
+            log.info(f"Loaded Strategy: {strategies.name} v{strategies.version} by {strategies.author}")
+            engine.strategy = strategies
+            engine.strategies = [strategies]
     else:
         log.error(f"Failed to load strategy: {args.strategy}")
         return

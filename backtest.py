@@ -82,81 +82,78 @@ async def discover_assets(client: BitGetClient) -> List[str]:
     return discovered
 
 async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False):
-    # Filter to only relevant timeframes (entry: 1m, setup: 15m, bias: 1H, plus any custom like 4H)
+    """
+    [TECH-001] Robust historical data acquisition using range-based gap detection.
+    """
     target_tfs = timeframes
     if not silent:
         log.info(f"Acquiring historical data for {target_tfs}...")
 
-    target_start_ms = int(START_DATE.timestamp() * 1000)
-    target_end_ms = int(END_DATE.timestamp() * 1000)
+    tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
     for asset in assets:
         for tf in target_tfs:
-            # Check what we already have in the required range
-            min_ts, max_ts, count = db.get_candle_range_stats(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
+            gaps = db.get_data_gaps(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
 
-            # Calculate expected count (approximate)
-            tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
-            expected = (END_DATE.timestamp() - START_DATE.timestamp()) / tf_seconds[tf]
-
-            if count >= expected * 0.9: # 90% coverage is good enough to skip
+            if not gaps:
                 if not silent:
-                    log.debug(f"Data for {asset} {tf} already exists in DB ({count} candles).")
+                    log.debug(f"Data for {asset} {tf} complete in DB.")
                 continue
 
-            current_end = target_end_ms
-            log.info(f"Downloading {asset} {tf} from {START_DATE} to {END_DATE}...")
+            for gap_start, gap_end in gaps:
+                log.info(f"Downloading gap for {asset} {tf}: {datetime.fromtimestamp(gap_start, tz=pytz.UTC)} to {datetime.fromtimestamp(gap_end, tz=pytz.UTC)}")
 
-            progress = Progress(int(expected), label=f"Downloading {asset} {tf}")
+                current_end = int(gap_end * 1000)
+                target_start_ms = int(gap_start * 1000)
 
-            while current_end > target_start_ms:
-                # [OPT-001] Check for existing data block to avoid redundant API calls
-                if db.check_candle_exists(asset, tf, current_end / 1000):
-                    # We have this candle. Now find the earliest candle in this continuous block.
-                    # We'll use a simpler heuristic: skip back 200 candles and check again.
-                    jump_ms = tf_seconds[tf] * 200 * 1000
-                    if db.check_candle_exists(asset, tf, (current_end - jump_ms) / 1000):
-                        current_end -= jump_ms
-                        progress.update(200)
+                expected = (gap_end - gap_start) / tf_seconds[tf]
+                progress = Progress(max(1, int(expected)), label=f"Gap {asset} {tf}")
+
+                while current_end > target_start_ms:
+                    # Double check if we already filled this sub-range during a previous iteration
+                    if db.check_candle_exists(asset, tf, current_end / 1000):
+                        current_end -= tf_seconds[tf] * 1000
                         continue
 
-                candles = await client.request("GET", "/api/v2/mix/market/history-candles", params={
-                    "symbol": asset,
-                    "productType": "usdt-futures",
-                    "granularity": tf,
-                    "endTime": str(current_end),
-                    "limit": "200"
-                })
+                    candles = await client.request("GET", "/api/v2/mix/market/history-candles", params={
+                        "symbol": asset,
+                        "productType": "usdt-futures",
+                        "granularity": tf,
+                        "endTime": str(current_end),
+                        "limit": "200"
+                    })
 
-                data = candles.get("data", [])
-                if not data:
-                    log.warning(f"No more data returned for {asset} {tf} at {current_end}")
-                    break
+                    data = candles.get("data", [])
+                    if not data:
+                        break
 
-                valid_count = 0
-                for c in data:
-                    ts_ms = int(c[0])
-                    o, h, l, cl, v = map(float, c[1:6])
-                    if ts_ms < target_start_ms:
-                        current_end = 0
-                        # Don't break yet, process remaining in this batch if they are >= target
-                        if ts_ms >= target_start_ms:
-                             db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
-                             valid_count += 1
-                        continue
+                    valid_count = 0
+                    for c in data:
+                        ts_ms = int(c[0])
+                        o, h, l, cl, v = map(float, c[1:6])
 
-                    db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
-                    valid_count += 1
-                    current_end = min(current_end, ts_ms - 1)
+                        if ts_ms < target_start_ms:
+                            current_end = 0 # Break outer loop
+                            continue
 
-                if valid_count == 0:
-                    break
+                        db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
+                        valid_count += 1
+                        current_end = min(current_end, ts_ms - 1)
 
-                progress.update(len(data))
-                # Small sleep to respect rate limits
-                await asyncio.sleep(0.1)
+                    if valid_count == 0:
+                        break
+
+                    progress.update(len(data))
+                    await asyncio.sleep(0.1) # Rate limit safety
 
 def find_strategy_file(query: str) -> Optional[str]:
+    # [TECH-001] Support directory-based discovery (Families)
+    if query == "strategies":
+        return "strategies"
+    potential_dir = os.path.join("strategies", query)
+    if os.path.isdir(potential_dir):
+        return potential_dir
+
     # Check strategies/ first
     for f in os.listdir("strategies"):
         if query in f and f.endswith(".py"):
@@ -223,37 +220,43 @@ class StrategyWrapper:
         self.instance = self._load_strategy(path)
 
     def _load_strategy(self, path):
-        module_name = path.replace("/", ".").replace("\\", ".")
-        if module_name.endswith(".py"):
-            module_name = module_name[:-3]
+        # [TECH-001] Use the enhanced load_strategy from main.py
+        from main import load_strategy
+        # Extract relative path if inside strategies/
+        rel_path = path
+        if path.startswith("strategies/"):
+             rel_path = path[11:]
+        if rel_path.endswith(".py"):
+             rel_path = rel_path[:-3]
 
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        # Check if it's a new class-based strategy
-        if "strategies/" in path:
-            for name, obj in module.__dict__.items():
-                if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
-                    return obj(simulator=self.simulator, config_overrides=self.overrides)
-
-        return module
+        return load_strategy(rel_path, simulator=self.simulator, overrides=self.overrides)
 
     def get_signal(self, ohlcv, tf, symbol=None):
-        if hasattr(self.instance, "get_entry_signal"):
-            # New Strategy class
-            # We need to wrap it to match the expected return of backtest.py
-            # Backtest expects ohlcv and tf, Strategy expects market_data
-            # We mock the market_data for the strategy
+        """
+        [TECH-001] Handle both single strategy instances and Families (lists).
+        """
+        if isinstance(self.instance, list):
+            # Family: In backtest.py, we only return the FIRST strategy signal for the chain check.
+            # TRUE multi-strategy execution happens in the run_backtest simulation loop
+            # where Engine.strategies is processed.
+            if not self.instance: return None
+            target = self.instance[0]
+        else:
+            target = self.instance
+
+        if target is None:
+            return None
+
+        if hasattr(target, "get_entry_signal"):
             market_data = {
                 "symbol": symbol or "BACKTEST",
                 "book": type('obj', (object,), {'best_bid': ohlcv[-1]['c'], 'best_ask': ohlcv[-1]['c']}),
                 "equity": config.INITIAL_EQUITY,
                 "features": None # Simulator will be used if None
             }
-            return self.instance.get_entry_signal(market_data)
+            return target.get_entry_signal(market_data)
 
-        return self.instance.get_signal(ohlcv, tf, params=self.params)
+        return target.get_signal(ohlcv, tf, params=self.params)
 
 class ConfluenceChain:
     def __init__(self, segments: List[List[StrategyWrapper]]):
@@ -441,6 +444,17 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # USE THE UNIFIED SIMULATION ENGINE
     from engine.core import Engine
     engine = Engine(use_db=False)
+    engine.start_time = time.time()
+
+    # [TECH-001] Load Strategy Family into Engine
+    engine.strategies = []
+    for segment in chain.segments:
+        for wrapper in segment:
+            if isinstance(wrapper.instance, list):
+                engine.strategies.extend(wrapper.instance)
+            else:
+                engine.strategies.append(wrapper.instance)
+
     sim = engine.exchange
     sim.db = db
 
@@ -452,9 +466,10 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     engine.leverage_limits = sim.leverage_limits
     sim.discovered_assets = [asset]
 
-    from orderbook import SimulatedOrderBook
+    from orderbook import SimulatedOrderBook, OrderBook
     for sym in [asset, BTC_SYMBOL]:
         sim.books[sym] = SimulatedOrderBook(sym, 1.0)
+        engine.books[sym] = OrderBook(sym)
 
     # Load candles from DB within the specified range
     candles = db.get_candles_in_range(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
@@ -555,6 +570,12 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             if asset in sim.books:
                 sim.books[asset].mid_price = price
                 sim.books[asset]._regenerate()
+
+                # Sync Engine's shadow books for tradability checks
+                if asset in engine.books:
+                    engine.books[asset].bids = list(sim.books[asset].bids)
+                    engine.books[asset].asks = list(sim.books[asset].asks)
+
             # [PERF-002] Order processing is only needed if we have positions or pending orders
             if sim.positions or sim.pending_orders:
                 await sim._process_orders()
@@ -579,19 +600,49 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                         pointers[sym][t] += 1
 
-            # [PERF-004] Pass the limited sliding window to pattern detection
-            signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
-            if signal:
+            # [TECH-001] Support Strategy Families in Backtests
+            active_signals = []
+            if engine.strategies:
+                # Mock market_data for class-based strategies
+                market_data = {
+                    "symbol": asset,
+                    "book": sim.books[asset],
+                    "equity": sim.equity,
+                    "features": None # Simulator will be used if None
+                }
+                for strat in engine.strategies:
+                    if hasattr(strat, "get_entry_signal"):
+                        # Ensure strategy has access to current simulation state
+                        if hasattr(strat, "model") and hasattr(strat.model, "simulator"):
+                            strat.model.simulator = sim
+
+                        sig = strat.get_entry_signal(market_data)
+                        if sig:
+                            sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "name", "unknown")
+                            active_signals.append(sig)
+            else:
+                # Legacy Confluence Chain
+                signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
+                if signal:
+                    signal["strategy_id"] = "chain"
+                    active_signals.append(signal)
+
+            for signal in active_signals:
+                # [TECH-001] Collision check for backtest loop
+                if not engine._asset_is_tradable(asset, signal["side"], features=None):
+                    continue
+
                 # Place trade via unified engine
-                # Remove keys that are passed as positional arguments to avoid "multiple values for argument" error
                 kwargs = signal.copy()
-                for key in ["side", "qty", "entry_price", "stop_price", "exit_price"]:
+                # Explicitly filter out keys that are passed as positional arguments
+                for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
                     kwargs.pop(key, None)
 
                 res = sim.place_trade_oco(
                     asset, signal["side"], signal.get("qty", 0),
-                    signal["entry_price"], signal["stop_price"], signal["exit_price"],
-                    features=signal, # Pass features so they are available for reporting
+                    signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
+                    features=signal,
+                    strategy_id=signal.get("strategy_id"),
                     **kwargs
                 )
 
@@ -620,6 +671,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         "trades": engine.total_trades,
         "equity": sim.equity,
         "side_stats": side_stats,
+        "strategy_stats": engine.strategy_stats, # [TECH-001] Include strategy breakdown
         "no_data": False
     }
 
@@ -678,6 +730,27 @@ def print_results(results):
 
         print(f"{'OVERALL':<22} | {'ALL':<10} | {'MIX':<5} | {ov_win_ls:>12} | {ov_pnl_ls:>15} | {'N/A':>8} | {total_pnl:>10.2f} | {ov_roi:>7.1f}% | {total_trades:>8} | {'N/A':>12}")
 
+    # [TECH-001] Strategy Breakdown Summary Table
+    strat_aggregates = {}
+    for r in results:
+        if not r or r.get("no_data"): continue
+        for sid, stats in r.get("strategy_stats", {}).items():
+            if sid not in strat_aggregates:
+                strat_aggregates[sid] = {"pnl": 0, "trades": 0, "wins": 0}
+            strat_aggregates[sid]["pnl"] += stats["pnl"]
+            strat_aggregates[sid]["trades"] += stats["total_trades"]
+            strat_aggregates[sid]["wins"] += (stats["buy_wins"] + stats["sell_wins"])
+
+    if strat_aggregates:
+        print("\nSTRATEGY BREAKDOWN")
+        print("-" * 60)
+        print(f"{'Strategy':<25} | {'PnL':>10} | {'Win%':>8} | {'Trades':>8}")
+        print("-" * 60)
+        for sid, agg in strat_aggregates.items():
+            wr = (agg["wins"] / agg["trades"] * 100) if agg["trades"] > 0 else 0
+            print(f"{sid:<25} | {agg['pnl']:>10.2f} | {wr:>7.1f}% | {agg['trades']:>8}")
+        print("-" * 60)
+
     print("="*165 + "\n")
 
 async def main():
@@ -730,7 +803,10 @@ async def main():
 
     # Join with -> if segments were passed as separate arguments
     # This allows: python backtest.py "A + B" "C" -> A + B -> C
-    query_cmd = " -> ".join(query_parts)
+    if query_parts[0] == "strategies":
+        query_cmd = "strategies"
+    else:
+        query_cmd = " -> ".join(query_parts)
 
     db = Database()
     client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE)

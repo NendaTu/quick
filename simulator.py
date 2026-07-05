@@ -143,58 +143,49 @@ class Simulator:
                 # Add a small staggered delay to prevent burst 429s
                 await asyncio.sleep(0.1 * random.random())
                 # 1. Fetch OHLCV for all relevant timeframes
+                tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+
                 for tf in AVAILABLE_TIMEFRAMES:
                     # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
                     required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 100)
+                    lookback_sec = required_limit * tf_map.get(tf, 60)
+                    start_ts = time.time() - lookback_sec
+                    end_ts = time.time()
 
-                    # Try to load from DB first to avoid redundant API calls
-                    db_candles = []
+                    # [TECH-001] Use range-based gap detection
+                    gaps = []
                     if self.db:
+                        gaps = self.db.get_data_gaps(sym, tf, start_ts, end_ts)
+                    else:
+                        gaps = [(start_ts, end_ts)]
+
+                    if not gaps:
+                        # Data is complete in DB
+                        log.debug(f"Using cached {tf} candles for {sym}")
                         db_candles = self.db.get_recent_candles(sym, tf, limit=required_limit)
-
-                    # Check if DB data is sufficient and recent
-                    is_recent = False
-                    if db_candles:
-                        last_ts = db_candles[-1][0]
-                        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
-                        # If the gap between now and last candle is less than 2 candle durations, consider it recent
-                        if (time.time() - last_ts) < (tf_map.get(tf, 60) * 2):
-                            is_recent = True
-
-                    if len(db_candles) >= required_limit and is_recent:
-                        # [OPT-001] Use DB data exclusively
-                        log.debug(f"Using {len(db_candles)} cached {tf} candles for {sym}")
                         for c in db_candles:
                             ts, o, h, l, cl, v = c
                             self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
                             self.last_candle_ts[sym][tf] = ts
-
-                        if tf == ACTIVE_TIMEFRAME:
-                            price = db_candles[-1][4]
-                            self.books[sym].mid_price = price
-                            self.last_price[sym] = price
-                            self.books[sym]._regenerate()
-                        continue
-
-                    # Fallback to API if DB is insufficient or stale
-                    max_db_ts = db_candles[-1][0] if db_candles else 0
-                    data = await self.client.get_candles(sym, tf, limit=required_limit)
-                    if isinstance(data, list):
-                        for c in reversed(data):
-                            ts = float(c[0]) / 1000
-                            o, h, l, cl, v = map(float, c[1:6])
-                            if self.db and ts > max_db_ts:
-                                self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
-                            self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-                            self.last_candle_ts[sym][tf] = ts
-
-                        if tf == ACTIVE_TIMEFRAME and data:
-                            price = float(data[0][4])
-                            self.books[sym].mid_price = price
-                            self.last_price[sym] = price
-                            self.books[sym]._regenerate()
                     else:
-                        log.warning(f"Failed to fetch {tf} candles for {sym}")
+                        # We have gaps, fetch from API
+                        data = await self.client.get_candles(sym, tf, limit=required_limit)
+                        if isinstance(data, list):
+                            for c in reversed(data):
+                                ts = float(c[0]) / 1000
+                                o, h, l, cl, v = map(float, c[1:6])
+                                if self.db:
+                                    self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
+                                self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                                self.last_candle_ts[sym][tf] = ts
+                        else:
+                            log.warning(f"Failed to fetch {tf} candles for {sym}")
+
+                    if tf == ACTIVE_TIMEFRAME and self.ohlcv[sym][tf]:
+                        price = self.ohlcv[sym][tf][-1]['c']
+                        self.books[sym].mid_price = price
+                        self.last_price[sym] = price
+                        self.books[sym]._regenerate()
 
                 # 2. Fetch confluence history (closes only)
                 for tf in ["15m", "1H", "4H", "1D", "1W"]:
@@ -706,7 +697,7 @@ class Simulator:
                                 self.engine.pending_entries.remove(pos_key)
                         continue
 
-                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type, o.get("original_side"), o.get("is_contrarian", False), features=o.get("features"))
+                self._execute_entry_direct(o["symbol"], o["pos_side"], o["qty"], fill_price, o.get("btc_conf", ""), o.get("drt", 0.5), order_type, o.get("original_side"), o.get("is_contrarian", False), features=o.get("features"), strategy_id=o.get("strategy_id"))
 
                 # Once entry is filled, add TP/SL
                 sid = self.order_id_counter; self.order_id_counter += 1
@@ -804,9 +795,18 @@ class Simulator:
         return round(avg_price, price_place)
 
     def place_trade_oco(self, symbol, side, qty, entry_price, stop_price, tp_price, btc_conf="", drt=0.5, original_side=None, is_contrarian=False, features=None, **kwargs):
+        """
+        [TECH-001] Enhanced OCO placement with dynamic minimum notional enforcement.
+        """
         spec = self.contract_specs.get(symbol, {})
-        min_usdt = float(spec.get('minTradeUSDT', 5.0))
+
+        # Bitget V2 API provides minTradeUSDT. Fallback to 1.0 if missing,
+        # but prioritize the exchange's actual reported minimum.
+        min_usdt = float(spec.get('minTradeUSDT', 1.0))
+
         if RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
+            # [TECH-001] Log rejected trade due to notional limits (helpful for small accounts)
+            log.debug(f"REJECTED {symbol} {side.upper()}: Notional {qty * entry_price:.2f} < Min {min_usdt:.2f}")
             return {"code": "3", "msg": f"order value below min {min_usdt}"}
 
         max_lev = self.leverage_limits.get(symbol, 20)
@@ -837,7 +837,7 @@ class Simulator:
                     log.debug(rej_msg) # Log as debug so it goes to DB but not console
                 return {"code": "2", "msg": "high slippage"}
 
-            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian, features=features)
+            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian, features=features, strategy_id=kwargs.get("strategy_id"))
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
@@ -882,7 +882,7 @@ class Simulator:
             log.info(f"PLACED LIMIT ENTRY {symbol} {side_str} {qty:.3f} @ {entry_price:.8f} | Margin Reserved: {required_margin:.2f}")
             return {"code": "00000", "data": {"orderId": str(eid)}}
 
-    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf="", drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None):
+    def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf="", drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None, strategy_id=None):
         now = time.time()
         fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
         self.equity -= fee
@@ -919,7 +919,7 @@ class Simulator:
         log.info(f"FILLED ENTRY {symbol} {side_str} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         if self.engine:
-            self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian, ts=now)
+            self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian, ts=now, strategy_id=strategy_id, features=features)
 
     def _execute_exit(self, order, fill_price, exit_type, order_type="market"):
         sym = order["symbol"]

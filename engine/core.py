@@ -21,6 +21,7 @@ class Engine:
         # open_positions key is 'SYMBOL_buy' or 'SYMBOL_sell'
         self.open_positions: Dict[str, dict] = {}
         self.enabled_assets: List[str] = []
+        self.strategies: List[any] = [] # [TECH-001] Multiple active strategies
 
         self.total_trades = 0
         self.winning_trades = 0 # Cumulative Wins (TP + BE)
@@ -31,6 +32,9 @@ class Engine:
 
         # Performance tracking
         self.asset_stats: Dict[str, Dict[str, any]] = {}
+        self.strategy_stats: Dict[str, Dict[str, any]] = {} # [TECH-001] Per-strategy performance
+        self.equity_history: List[dict] = [] # [TECH-001] Chronological compounding curve
+
         self.asset_regimes: Dict[str, str] = {} # symbol -> 'major', 'high_beta', 'stable'
         self.last_exit_time: Dict[str, float] = {}
         self.pos_pnl: Dict[str, float] = {} # Cumulative PnL per symbol_side
@@ -157,7 +161,36 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
-    def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False, ts: float = None):
+    def _write_metrics_log(self, symbol: str, side: str, strategy_id: str, features: dict):
+        """
+        [TECH-001] Writes full technical module metrics to a shadow log.
+        """
+        import os, json
+        from datetime import datetime
+
+        log_dir = "docs/temp"
+        os.makedirs(log_dir, exist_ok=True)
+
+        # Determine filename based on start time
+        start_dt = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(log_dir, f"{start_dt}.metrics-log.txt")
+
+        now = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+        # Flatten and sanitize features for logging
+        sanitized = {}
+        for k, v in features.items():
+            if isinstance(v, (int, float, str, bool)) or v is None:
+                sanitized[k] = v
+            else:
+                sanitized[k] = str(v)
+
+        metrics_json = json.dumps(sanitized)
+
+        with open(filepath, "a") as f:
+            f.write(f"[{now}] ENTRY {symbol} {side.upper()} | Strategy: {strategy_id} | Metrics: {metrics_json}\n")
+
+    def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False, ts: float = None, strategy_id: str = None, features: dict = None):
         pos_key = f"{symbol}_{side}"
         # If orig_side not passed (e.g. from simulator), default to current
         if orig_side is None: orig_side = side
@@ -167,20 +200,29 @@ class Engine:
         margin = (qty * entry) / leverage
 
         entry_ts = ts if ts is not None else time.time()
+
+        # [TECH-001] Determine Strategy ID for attribution
+        if strategy_id is None:
+             strat_id = getattr(self, "strategy", None)
+             strategy_id = strat_id.name if strat_id else "model"
+
         self.open_positions[pos_key] = {
             "side": side, "qty": qty, "entry": entry,
             "orig_side": orig_side, "is_contr": is_contr,
             "margin": margin,
-            "ts": entry_ts
+            "ts": entry_ts,
+            "strategy_id": strategy_id
         }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
+        # [TECH-001] Full Module Metrics Shadow Log
+        if features:
+            self._write_metrics_log(symbol, side, strategy_id, features)
+
         # Persistence
         if hasattr(self.exchange, "db"):
-            strat_id = getattr(self, "strategy", None)
-            strat_id = strat_id.name if strat_id else "model"
-            self.exchange.db.save_trade(strat_id, symbol, side, entry_ts, entry, qty)
+            self.exchange.db.save_trade(strategy_id, symbol, side, entry_ts, entry, qty)
 
     def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False, features: dict = None, margin: float = 0):
         # Local registration cleanup
@@ -193,21 +235,29 @@ class Engine:
         # Track session-wide metrics (always updated)
         self.cumulative_pnl += round_trip_pnl
 
+        # [TECH-001] Record equity history for chronological compounding curve
+        self.equity_history.append({
+            "ts": time.time(),
+            "equity": self.equity,
+            "pnl": round_trip_pnl,
+            "symbol": symbol
+        })
+
         # Persistence
         if hasattr(self.exchange, "db"):
-            strat_id = getattr(self, "strategy", None)
-            strat_id = strat_id.name if strat_id else "model"
             entry_ts = 0
             entry_price = 0
             qty = 0
+            strategy_id = "model"
             if pos_key in self.open_positions:
                 p = self.open_positions[pos_key]
                 entry_ts = p["ts"]
                 entry_price = p["entry"]
                 qty = p["qty"]
+                strategy_id = p.get("strategy_id", "model")
 
             self.exchange.db.save_trade(
-                strat_id, symbol, side, entry_ts, entry_price, qty,
+                strategy_id, symbol, side, entry_ts, entry_price, qty,
                 exit_ts=time.time(), exit_price=self.exchange.last_price.get(symbol),
                 pnl=round_trip_pnl, exit_type=exit_type
             )
@@ -226,6 +276,20 @@ class Engine:
         if side == "buy": self.asset_stats[symbol]["buy_pnl"] += round_trip_pnl
         else: self.asset_stats[symbol]["sell_pnl"] += round_trip_pnl
 
+        # [TECH-001] Strategy-Level Stats: Attribute PnL and trade counts to the
+        # specific strategy within a Family that generated the signal.
+        strategy_id = "model"
+        if pos_key in self.open_positions:
+            strategy_id = self.open_positions[pos_key].get("strategy_id", "model")
+
+        if strategy_id not in self.strategy_stats:
+            self.strategy_stats[strategy_id] = {
+                "buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0,
+                "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "total_trades": 0
+            }
+
+        self.strategy_stats[strategy_id]["pnl"] += round_trip_pnl
+
         # Track cumulative PnL for this specific trade to determine if it's a win/loss overall
         self.pos_pnl[pos_key] = self.pos_pnl.get(pos_key, 0.0) + round_trip_pnl
 
@@ -235,6 +299,7 @@ class Engine:
         # Final exit processing
         total_trade_pnl = self.pos_pnl.pop(pos_key, 0.0)
         self.total_trades += 1
+        self.strategy_stats[strategy_id]["total_trades"] += 1
 
         if pos_key in self.open_positions:
             del self.open_positions[pos_key]
@@ -250,20 +315,33 @@ class Engine:
             if exit_type == "tp":
                 self.tp_wins += 1
                 self.asset_stats[symbol]["tp_wins"] += 1
+                self.strategy_stats[strategy_id]["tp_wins"] += 1
             elif is_be:
                 self.be_wins += 1
                 self.asset_stats[symbol]["be_wins"] += 1
+                self.strategy_stats[strategy_id]["be_wins"] += 1
 
-            if side == "buy": self.asset_stats[symbol]["buy_wins"] += 1
-            else: self.asset_stats[symbol]["sell_wins"] += 1
+            if side == "buy":
+                self.asset_stats[symbol]["buy_wins"] += 1
+                self.strategy_stats[strategy_id]["buy_wins"] += 1
+            else:
+                self.asset_stats[symbol]["sell_wins"] += 1
+                self.strategy_stats[strategy_id]["sell_wins"] += 1
         else:
             if exit_type in ["tp", "ttl"]:
                 log.warning(f"GROSS WIN / NET LOSS on {symbol} [{exit_type.upper()}]: PnL={total_trade_pnl:.4f} (fees consumed profit)")
             self.losing_trades += 1
-            if side == "buy": self.asset_stats[symbol]["buy_losses"] += 1
-            else: self.asset_stats[symbol]["sell_losses"] += 1
+            if side == "buy":
+                self.asset_stats[symbol]["buy_losses"] += 1
+                self.strategy_stats[strategy_id]["buy_losses"] += 1
+            else:
+                self.asset_stats[symbol]["sell_losses"] += 1
+                self.strategy_stats[strategy_id]["sell_losses"] += 1
 
     def _print_final_stats(self):
+        """
+        [TECH-001] Enhanced final reporting with strategy breakdowns and compounding curve.
+        """
         elapsed = time.time() - self.start_time if self.start_time else 0
         hours, rem = divmod(elapsed, 3600)
         minutes, seconds = divmod(rem, 60)
@@ -279,6 +357,22 @@ class Engine:
         log.info(f"Cumulative PnL: {self.cumulative_pnl:.2f} USDT")
         log.info(f"Final equity: {self.equity:.2f} USDT")
         log.info(f"Peak equity: {self.peak_equity:.2f} USDT")
+
+        if self.strategy_stats:
+            log.info(f"--- Strategy Performance ---")
+            for sid, stats in self.strategy_stats.items():
+                total = stats["total_trades"]
+                wr = (stats["buy_wins"] + stats["sell_wins"]) / total * 100 if total > 0 else 0
+                log.info(f"{sid:20} | PnL: {stats['pnl']:7.2f} | Trades: {total:4} | Win%: {wr:5.1f}% | TP/BE: {stats['tp_wins']}/{stats['be_wins']}")
+
+        if self.equity_history:
+            log.info(f"--- Chronological Compounding Curve ---")
+            # Show every 10th trade or up to 20 points
+            step = max(1, len(self.equity_history) // 20)
+            for i in range(0, len(self.equity_history), step):
+                entry = self.equity_history[i]
+                roi = (entry["equity"] / self.starting_equity - 1) * 100
+                log.info(f"Trade #{i+1:3} | {entry['symbol']:10} | PnL: {entry['pnl']:7.2f} | Equity: {entry['equity']:10.2f} | ROI: {roi:7.1f}%")
 
         if self.asset_stats:
             log.info(f"--- Asset Performance ---")
@@ -323,6 +417,11 @@ class Engine:
         log.info(f"REGIMES | Classification Complete: {counts}")
 
     def _asset_is_tradable(self, symbol: str, side: str, features: dict = None) -> bool:
+        """
+        [TECH-001] Updated tradability logic to support Strategy Families.
+        Families allow hedging (Long + Short) but not redundant same-side positions
+        unless explicitly managed by scaling logic.
+        """
         # 1. Statistical Arbitrage Filter (Correlation & Mean Reversion)
         if hasattr(self.exchange, "asset_correlations"):
             corrs = self.exchange.asset_correlations.get(symbol, {})
@@ -352,14 +451,20 @@ class Engine:
         # Check if this specific side is already open or pending
         pos_key = f"{symbol}_{side}"
         if pos_key in self.open_positions or pos_key in self.pending_entries:
+            # [TECH-001] Block redundant same-side entry signals.
+            # Scaling is handled via manage_position.
             return False
 
-        # [C-002] Asset-level Lock: Prevent simultaneous Long and Short in the same asset
-        # unless explicitly allowed by strategy. For HFT safety, we lock the whole asset.
-        other_side = "sell" if side == "buy" else "buy"
-        other_key = f"{symbol}_{other_side}"
-        if other_key in self.open_positions or other_key in self.pending_entries:
-            return False
+        # [TECH-001] STRATEGY FAMILIES: HEDGING ALLOWED
+        # If we have multiple strategies, we allow them to take opposing sides.
+        # If we only have ONE strategy (Baseline), we maintain the strict asset-level lock.
+        if len(self.strategies) <= 1:
+            # [C-002] Asset-level Lock: Prevent simultaneous Long and Short in the same asset
+            # unless explicitly allowed by strategy. For HFT safety, we lock the whole asset.
+            other_side = "sell" if side == "buy" else "buy"
+            other_key = f"{symbol}_{other_side}"
+            if other_key in self.open_positions or other_key in self.pending_entries:
+                return False
 
         # [C-005] Dynamic Cooldown check: Scale with volatility (ATR)
         last_exit = self.last_exit_time.get(symbol, 0)
@@ -493,15 +598,29 @@ class Engine:
 
                         # USE PLUGGABLE STRATEGY IF AVAILABLE
                         market_data = {"symbol": sym, "book": book, "equity": self.equity, "features": feat}
-                        if hasattr(self, "strategy"):
-                            signal = self.strategy.get_entry_signal(market_data)
+
+                        # [TECH-001] Support for multiple strategies in a Family
+                        active_signals = []
+                        if self.strategies:
+                            for strat in self.strategies:
+                                sig = strat.get_entry_signal(market_data)
+                                if sig:
+                                    # Ensure signal knows who sent it
+                                    sig["strategy_id"] = strat.name
+                                    active_signals.append(sig)
+                        elif hasattr(self, "strategy") and self.strategy:
+                            sig = self.strategy.get_entry_signal(market_data)
+                            if sig:
+                                sig["strategy_id"] = self.strategy.name
+                                active_signals.append(sig)
                         else:
-                            signal = self.model.predict(sym, book, self.equity, features=feat)
+                            sig = self.model.predict(sym, book, self.equity, features=feat)
+                            if sig:
+                                sig["strategy_id"] = "model"
+                                active_signals.append(sig)
 
-                        if signal is None:
-                            continue
-
-                        side = signal["side"]
+                        for signal in active_signals:
+                            side = signal["side"]
                         # Skip if a position in this direction is already open
                         if f"{sym}_{side}" in self.open_positions:
                             continue

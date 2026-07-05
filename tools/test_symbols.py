@@ -1,0 +1,15 @@
+import asyncio
+import os
+from bitget_client import BitGetClient
+from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
+
+async def test():
+    client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+    symbols = await client.get_symbols()
+    for s in symbols:
+        if s['symbol'] in ['ETHUSDT', 'XRPUSDT', 'SOLUSDT', 'PEPEUSDT']:
+             print(f"Symbol: {s['symbol']} | minTradeUSDT: {s.get('minTradeUSDT')} | minTradeNum: {s.get('minTradeNum')}")
+    await client.close()
+
+if __name__ == "__main__":
+    asyncio.run(test())

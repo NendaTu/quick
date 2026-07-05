@@ -182,13 +182,17 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
 
     # 4. Start Engine
     engine = engine_module.Engine(use_db=False)
+    engine.start_time = time.time()
 
     # 4.5 Load Strategy if specified
     if variant.strategy:
         from main import load_strategy
-        strategy = load_strategy(variant.strategy, simulator=engine.exchange)
-        if strategy:
-            engine.strategy = strategy
+        strategies = load_strategy(variant.strategy, simulator=engine.exchange)
+        if strategies:
+            if isinstance(strategies, list):
+                engine.strategies = strategies
+            else:
+                engine.strategies = [strategies]
 
     async def run_engine():
         # Setup periodic stats reporting
@@ -236,9 +240,24 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
         stats_queue.put(stats)
 
 def parse_args() -> List[Variant]:
-    variants = [Variant(id="Baseline", overrides={})]
+    """
+    [TECH-001] Enhanced argument parser for Comparison tool.
+    Supports "strategies" keyword for family comparison.
+    """
+    variants = []
 
-    # Handle --strategy-a and --strategy-b
+    # Handle positional "strategies" keyword
+    if len(sys.argv) > 1 and sys.argv[1] == "strategies":
+        # Run all or a group of strategies as a collective
+        target = "strategies"
+        if len(sys.argv) > 2 and not sys.argv[2].startswith("-") and "=" not in sys.argv[2]:
+            target = os.path.join("strategies", sys.argv[2])
+
+        variants.append(Variant(id=f"Family: {sys.argv[2] if len(sys.argv) > 2 else 'All'}", overrides={}, strategy=sys.argv[2] if len(sys.argv) > 2 else "strategies"))
+        return variants
+
+    # Standard parser
+    variants = [Variant(id="Baseline", overrides={})]
     import argparse
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--strategy-a", type=str)
