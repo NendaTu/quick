@@ -82,9 +82,19 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             config_overrides=config_overrides
         )
         self.simulator = simulator
+        self._cache = {} # [PERF-005] Cache for expensive calculations
+
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths (e.g. sessions.py scans 120 1H candles)
+        self.required_history = {"1H": 120, "15m": 100, "1m": 100}
 
         # --- Strategy-Specific Parameters ---
+        # [TECH-001] bypass_external_filters:
+        # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
+        # This strategy will still calculate its INTERNAL requirements (Structure, Day Range)
+        # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
+            "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
             "h1_strength": 2,
             "m15_lookback": 100, # More lookback to capture day liquidity
             "m15_swing_strength": 2,
@@ -109,19 +119,27 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
 
         if not h1 or not m15 or not m1: return None
 
-        # --- Phase 1: Preceding Day Range (Core) ---
-        day_range = identify_core_range(h1, m1[-1]['ts'])
-        if not day_range: return None
+        # --- Phase 1: Preceding Day Range (Core) [CACHED] ---
+        last_h1_ts = h1[-1]['ts']
+        cache_key = f"{symbol}_bias_1h"
+        if self._cache.get(cache_key, {}).get('ts') == last_h1_ts:
+            bias = self._cache[cache_key]['bias']
+            day_range = self._cache[cache_key]['day_range']
+        else:
+            day_range = identify_core_range(h1, m1[-1]['ts'])
+            if not day_range: return None
 
-        self.record_milestone("Phase 1: Preceding Day Range Found", h1[-1]['ts'], "1H")
+            self.record_milestone("Phase 1: Preceding Day Range Found", h1[-1]['ts'], "1H")
 
-        # --- Phase 2: Bias Identification (1H) ---
-        h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
-        h1_sig = h1_struct.get('structure_signal') or ''
+            # --- Phase 2: Bias Identification (1H) ---
+            h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
+            h1_sig = h1_struct.get('structure_signal') or ''
 
-        bias = 'neutral'
-        if 'bullish' in h1_sig: bias = 'bullish'
-        elif 'bearish' in h1_sig: bias = 'bearish'
+            bias = 'neutral'
+            if 'bullish' in h1_sig: bias = 'bullish'
+            elif 'bearish' in h1_sig: bias = 'bearish'
+
+            self._cache[cache_key] = {'ts': last_h1_ts, 'bias': bias, 'day_range': day_range}
 
         if bias == 'neutral': return None
 
@@ -140,7 +158,17 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             self.save_state(state_key, "IDLE", self.simulator)
             state = "IDLE"
 
-        # --- Phase 3: Day Extreme Sweep (15m) ---
+        # --- Phase 3: Day Extreme Sweep (15m) [CACHED] ---
+        last_m15_ts = m15[-1]['ts']
+        cache_key_liq = f"{symbol}_liq_15m"
+        if self._cache.get(cache_key_liq, {}).get('ts') == last_m15_ts:
+            liq_15m = self._cache[cache_key_liq]['liq']
+        else:
+            # We don't necessarily use liq_15m in IDLE state for sweep detection,
+            # but we use it later for TP targets. Let's cache it anyway.
+            # (Note: identify_liquidity with hub_filter=hub is what we use later)
+            liq_15m = None
+
         if state == "IDLE":
             sweep_detected = False
             sweep_side = None
@@ -218,8 +246,13 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                 tp1 = entry_price + (risk * self.params["tp1_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp1_rrr"])
                 tp2 = entry_price + (risk * self.params["tp2_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp2_rrr"])
 
-                # Refine with Day Session Liquidity
-                liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"], hub_filter=hub)
+                # Refine with Day Session Liquidity [CACHED]
+                cache_key_liq_hub = f"{symbol}_liq_15m_{hub}"
+                if self._cache.get(cache_key_liq_hub, {}).get('ts') == last_m15_ts:
+                    liq_15m = self._cache[cache_key_liq_hub]['liq']
+                else:
+                    liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"], hub_filter=hub)
+                    self._cache[cache_key_liq_hub] = {'ts': last_m15_ts, 'liq': liq_15m}
                 if sweep_side == 'ssl':
                     for level in liq_15m.get('all_bsl', []):
                         if level >= tp1: tp1 = level; break
@@ -261,7 +294,8 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                     "tp1_price": tp1,
                     "tp1_qty": tp1_qty,
                     "tp2_qty": qty - tp1_qty,
-                    "qty": qty
+                    "qty": qty,
+                    "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 
         return None

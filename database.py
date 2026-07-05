@@ -7,8 +7,16 @@ import queue
 log = logging.getLogger("scalper.database")
 
 class Database:
-    def __init__(self, db_path="market_data.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        # [TECH-001] Ensure absolute pathing for the database to prevent fragmentation
+        # when running from different script locations.
+        if db_path is None:
+            import os
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            self.db_path = os.path.join(base_dir, "market_data.db")
+        else:
+            self.db_path = db_path
+
         self._conn = None
         self._init_db()
         self.write_queue = queue.Queue()
@@ -277,6 +285,49 @@ class Database:
             ORDER BY timestamp ASC
         """, (symbol, timeframe, start_ts, end_ts))
         return cursor.fetchall()
+
+    def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float) -> list:
+        """
+        [TECH-001] Identifies holes in the historical data for a specific asset/timeframe.
+        This ensures that we only download what is missing, rather than relying on
+        unreliable percentage-based heuristics.
+
+        Returns a list of (gap_start, gap_end) tuples representing missing periods.
+        """
+        # 1. Fetch all existing timestamps in the target range, sorted chronologically
+        cursor = self.connection.execute("""
+            SELECT timestamp FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp ASC
+        """, (symbol, timeframe, start_ts, end_ts))
+        rows = cursor.fetchall()
+
+        if not rows:
+            return [(start_ts, end_ts)]
+
+        gaps = []
+        tf_seconds = {
+            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+            "1H": 3600, "4H": 14400, "1D": 86400
+        }
+        step = tf_seconds.get(timeframe, 60)
+
+        # Check leading gap
+        if rows[0][0] > start_ts + step:
+            gaps.append((start_ts, rows[0][0] - step))
+
+        # Check internal gaps
+        for i in range(len(rows) - 1):
+            curr_ts = rows[i][0]
+            next_ts = rows[i+1][0]
+            if next_ts > curr_ts + step * 1.1: # Small buffer for floating point / missing one candle
+                gaps.append((curr_ts + step, next_ts - step))
+
+        # Check trailing gap
+        if rows[-1][0] < end_ts - step:
+            gaps.append((rows[-1][0] + step, end_ts))
+
+        return gaps
 
     def check_candle_exists(self, symbol, timeframe, timestamp):
         cursor = self.connection.execute("""

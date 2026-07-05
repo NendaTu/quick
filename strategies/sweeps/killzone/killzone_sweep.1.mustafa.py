@@ -83,9 +83,19 @@ class KillzoneSweepStrategy(JBaseStrategy):
             config_overrides=config_overrides
         )
         self.simulator = simulator
+        self._cache = {} # [PERF-005] Cache for expensive calculations
+
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths (e.g. sessions.py scans 120 1H candles)
+        self.required_history = {"1H": 120, "15m": 50, "1m": 100}
 
         # --- Strategy-Specific Parameters (with overrides) ---
+        # [TECH-001] bypass_external_filters:
+        # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
+        # This strategy will still calculate its INTERNAL requirements (FVG, Structure, Sessions)
+        # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
+            "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
             "fvg_penetration_required": False,
             "max_double_downs": 1,
             "h1_strength": 2,
@@ -117,20 +127,28 @@ class KillzoneSweepStrategy(JBaseStrategy):
         if not h1 or not m15 or not m1:
             return None
 
-        # --- Phase 1: Bias Identification (1H) ---
-        ov_range = identify_overnight_range(h1, m1[-1]['ts'])
-        if not ov_range:
-            return None
+        # --- Phase 1: Bias Identification (1H) [CACHED] ---
+        last_h1_ts = h1[-1]['ts']
+        cache_key = f"{symbol}_bias_1h"
+        if self._cache.get(cache_key, {}).get('ts') == last_h1_ts:
+            bias = self._cache[cache_key]['bias']
+            ov_range = self._cache[cache_key]['ov_range']
+        else:
+            ov_range = identify_overnight_range(h1, m1[-1]['ts'])
+            if not ov_range:
+                return None
 
-        self.record_milestone("Phase 1: 1H Overnight Range", h1[-1]['ts'], "1H")
+            self.record_milestone("Phase 1: 1H Overnight Range", h1[-1]['ts'], "1H")
 
-        h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
-        h1_sig = h1_struct.get('structure_signal') or ''
+            h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
+            h1_sig = h1_struct.get('structure_signal') or ''
 
-        # Bias: bullish if overall range is trending up or bullish BOS
-        bias = 'neutral'
-        if 'bullish' in h1_sig: bias = 'bullish'
-        elif 'bearish' in h1_sig: bias = 'bearish'
+            # Bias: bullish if overall range is trending up or bullish BOS
+            bias = 'neutral'
+            if 'bullish' in h1_sig: bias = 'bullish'
+            elif 'bearish' in h1_sig: bias = 'bearish'
+
+            self._cache[cache_key] = {'ts': last_h1_ts, 'bias': bias, 'ov_range': ov_range}
 
         if bias == 'neutral':
             return None
@@ -151,8 +169,15 @@ class KillzoneSweepStrategy(JBaseStrategy):
             self.save_state(state_key, "IDLE", self.simulator)
             state = "IDLE"
 
-        # --- Phase 2: Sweep Detection (15m) ---
-        liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
+        # --- Phase 2: Sweep Detection (15m) [CACHED] ---
+        last_m15_ts = m15[-1]['ts']
+        cache_key_liq = f"{symbol}_liq_15m"
+        if self._cache.get(cache_key_liq, {}).get('ts') == last_m15_ts:
+            liq_15m = self._cache[cache_key_liq]['liq']
+        else:
+            # Expensive structural scan on 15m
+            liq_15m = identify_liquidity(m15, lookback=self.params["m15_lookback"], swing_strength=self.params["m15_swing_strength"])
+            self._cache[cache_key_liq] = {'ts': last_m15_ts, 'liq': liq_15m}
 
         if state == "IDLE":
             # [T-003] Check all 15m candles since session start for a sweep
@@ -311,7 +336,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     "tp1_qty_ratio": self.params["tp1_qty_ratio"],
                     "tp1_qty": tp1_qty,
                     "tp2_qty": tp2_qty,
-                    "qty": qty
+                    "qty": qty,
+                    "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 
         return None

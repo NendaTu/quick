@@ -80,9 +80,19 @@ class RangeSweepATRStrategy(JBaseStrategy):
             config_overrides=config_overrides
         )
         self.simulator = simulator
+        self._cache = {} # [PERF-005] Cache for expensive calculations
+
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths
+        self.required_history = {"4H": 30, "1H": 120, "15m": 50, "1m": 100}
 
         # --- Strategy-Specific Parameters ---
+        # [TECH-001] bypass_external_filters:
+        # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
+        # This strategy will still calculate its INTERNAL requirements (ATR Expansion, BOS)
+        # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
+            "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
             "range_tf": "4H",
             "atr_multiplier": 5.0,
             "atr_period": 14,
@@ -113,7 +123,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         if not h4 or not h1 or not m15 or not m1: return None
 
-        # --- Phase 1: Expansion Detection ---
+        # --- Phase 1: Expansion Detection [CACHED] ---
         state_key = f"{symbol}_atr_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
@@ -129,13 +139,19 @@ class RangeSweepATRStrategy(JBaseStrategy):
             except:
                 anchor = None
 
-        # Check for NEW expansion candle
-        expansion = is_expansion_candle(
-            h4,
-            multiplier=self.params["atr_multiplier"],
-            period=self.params["atr_period"],
-            timeframe=range_tf
-        )
+        # Check for NEW expansion candle [CACHED]
+        last_h4_ts = h4[-1]['ts']
+        cache_key_exp = f"{symbol}_expansion_h4"
+        if self._cache.get(cache_key_exp, {}).get('ts') == last_h4_ts:
+            expansion = self._cache[cache_key_exp]['expansion']
+        else:
+            expansion = is_expansion_candle(
+                h4,
+                multiplier=self.params["atr_multiplier"],
+                period=self.params["atr_period"],
+                timeframe=range_tf
+            )
+            self._cache[cache_key_exp] = {'ts': last_h4_ts, 'expansion': expansion}
 
         # DEBUG
         # if len(h4) % 10 == 0:
@@ -170,13 +186,20 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         if not anchor: return None
 
-        # --- Phase 2: Bias (1H) ---
-        h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
-        h1_sig = h1_struct.get('structure_signal') or ''
+        # --- Phase 2: Bias (1H) [CACHED] ---
+        last_h1_ts = h1[-1]['ts']
+        cache_key = f"{symbol}_bias_1h"
+        if self._cache.get(cache_key, {}).get('ts') == last_h1_ts:
+            bias = self._cache[cache_key]['bias']
+        else:
+            h1_struct = identify_structure(h1, strength=self.params["h1_strength"])
+            h1_sig = h1_struct.get('structure_signal') or ''
 
-        bias = 'neutral'
-        if 'bullish' in h1_sig: bias = 'bullish'
-        elif 'bearish' in h1_sig: bias = 'bearish'
+            bias = 'neutral'
+            if 'bullish' in h1_sig: bias = 'bullish'
+            elif 'bearish' in h1_sig: bias = 'bearish'
+
+            self._cache[cache_key] = {'ts': last_h1_ts, 'bias': bias}
 
         if bias == 'neutral': return None
 
@@ -255,13 +278,19 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 tp1 = entry_price + (risk * self.params["tp1_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp1_rrr"])
                 tp2 = entry_price + (risk * self.params["tp2_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp2_rrr"])
 
-                # Refine with Liquidity formed SINCE Expansion
-                liq_15m = identify_liquidity(
-                    m15,
-                    lookback=self.params["m15_lookback"],
-                    swing_strength=self.params["m15_swing_strength"],
-                    start_ts=anchor['ts']
-                )
+                # Refine with Liquidity formed SINCE Expansion [CACHED]
+                last_m15_ts = m15[-1]['ts']
+                cache_key_liq_anchor = f"{symbol}_liq_15m_{anchor['ts']}"
+                if self._cache.get(cache_key_liq_anchor, {}).get('ts') == last_m15_ts:
+                    liq_15m = self._cache[cache_key_liq_anchor]['liq']
+                else:
+                    liq_15m = identify_liquidity(
+                        m15,
+                        lookback=self.params["m15_lookback"],
+                        swing_strength=self.params["m15_swing_strength"],
+                        start_ts=anchor['ts']
+                    )
+                    self._cache[cache_key_liq_anchor] = {'ts': last_m15_ts, 'liq': liq_15m}
                 if sweep_side == 'ssl':
                     for level in liq_15m.get('all_bsl', []):
                         if level >= tp1: tp1 = level; break
@@ -304,7 +333,8 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     "tp1_price": tp1,
                     "tp1_qty": tp1_qty,
                     "tp2_qty": qty - tp1_qty,
-                    "qty": qty
+                    "qty": qty,
+                    "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 
         return None

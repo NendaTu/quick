@@ -40,7 +40,10 @@ DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 START_DATE = DEFAULT_START_DATE
 END_DATE = DEFAULT_END_DATE
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+# [TECH-001] Use centralized logging
+from tools.logger import setup_logging
+setup_logging(level=logging.INFO)
+
 log = logging.getLogger("backtest")
 
 class Progress:
@@ -49,16 +52,38 @@ class Progress:
         self.current = 0
         self.label = label
         self.start_time = time.time()
+        self.last_update = 0
+        self._last_line_len = 0
 
     def update(self, amount=1):
         self.current += amount
-        pct = (self.current / self.total) * 100
-        elapsed = time.time() - self.start_time
-        rate = self.current / elapsed if elapsed > 0 else 0
-        eta = (self.total - self.current) / rate if rate > 0 else 0
+        now = time.time()
+        # Throttle to 5 seconds unless complete
+        if now - self.last_update < 5 and self.current < self.total:
+            return
 
-        sys.stdout.write(f"\r{self.label}: [{self.current}/{self.total}] {pct:.1f}% | ETA: {int(eta)}s  ")
+        self.last_update = now
+        pct = min(100.0, (self.current / self.total) * 100) if self.total > 0 else 100.0
+        elapsed = now - self.start_time
+
+        # Calculate moving average rate to stabilize ETA
+        current_rate = self.current / elapsed if elapsed > 0 else 0
+        if not hasattr(self, "_last_rate"): self._last_rate = current_rate
+        self._last_rate = (self._last_rate * 0.9) + (current_rate * 0.1) # EMA smoothing
+
+        eta = (self.total - self.current) / self._last_rate if self._last_rate > 0 else 0
+
+        # Format: ASSET: TF (PCT% / ETA s)
+        msg = f"\r{self.label} ({int(pct)}% / {int(eta)}s) Elapsed: {int(elapsed)}s"
+
+        # Clear tail of previous longer lines
+        padding = max(0, self._last_line_len - len(msg))
+        full_msg = msg + (" " * padding)
+
+        sys.stdout.write(full_msg)
         sys.stdout.flush()
+        self._last_line_len = len(msg)
+
         if self.current >= self.total:
             print()
 
@@ -81,82 +106,104 @@ async def discover_assets(client: BitGetClient) -> List[str]:
                 break
     return discovered
 
-async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False):
-    # Filter to only relevant timeframes (entry: 1m, setup: 15m, bias: 1H, plus any custom like 4H)
+async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False, chain=None):
+    """
+    [TECH-001] Accelerated historical data acquisition using concurrency and a global progress bar.
+    Includes a 14-day warm-up buffer if indicators are required.
+    """
     target_tfs = timeframes
     if not silent:
-        log.info(f"Acquiring historical data for {target_tfs}...")
+        log.debug(f"Acquiring historical data for {target_tfs}...")
 
-    target_start_ms = int(START_DATE.timestamp() * 1000)
-    target_end_ms = int(END_DATE.timestamp() * 1000)
+    tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+    session_start = time.time()
 
+    # Determine if warm-up is required
+    requires_warmup = False
+    if chain:
+        for segment in chain.segments:
+            for wrapper in segment:
+                strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+                for strat in strategies:
+                    bypass = getattr(strat, "params", {}).get("bypass_external_filters", True)
+                    is_indicator_heavy = any(x in getattr(strat, "name", "").lower() for x in ["sweep", "scalper", "fvg"])
+                    if not bypass or is_indicator_heavy:
+                        requires_warmup = True; break
+                if requires_warmup: break
+            if requires_warmup: break
+
+    dl_start_ts = START_DATE.timestamp()
+    if requires_warmup:
+        dl_start_ts -= (86400 * 14) # 14 days warm-up
+        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=pytz.UTC)}. Elapsed: {int(time.time() - session_start)}s")
+
+    # 1. First Pass: Identify all gaps to build a global progress bar
+    all_gaps = []
+    total_candles = 0
+    skipped_count = 0
     for asset in assets:
         for tf in target_tfs:
-            # Check what we already have in the required range
-            min_ts, max_ts, count = db.get_candle_range_stats(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
+            gaps = db.get_data_gaps(asset, tf, dl_start_ts, END_DATE.timestamp())
+            if gaps:
+                all_gaps.append((asset, tf, gaps))
+                total_candles += sum((g[1] - g[0] + tf_seconds[tf]) for g in gaps) / tf_seconds[tf]
+            else:
+                skipped_count += 1
 
-            # Calculate expected count (approximate)
-            tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
-            expected = (END_DATE.timestamp() - START_DATE.timestamp()) / tf_seconds[tf]
+    if not all_gaps:
+        log.info(f"Historical data complete for all {len(assets)} assets. Elapsed: {int(time.time() - session_start)}s")
+        return
 
-            if count >= expected * 0.9: # 90% coverage is good enough to skip
-                if not silent:
-                    log.debug(f"Data for {asset} {tf} already exists in DB ({count} candles).")
-                continue
+    # [TECH-001] Unified Global Progress Bar
+    if skipped_count > 0:
+        log.info(f"Acquisition: Skipping {skipped_count} segments (already complete).")
 
-            current_end = target_end_ms
-            log.info(f"Downloading {asset} {tf} from {START_DATE} to {END_DATE}...")
+    global_progress = Progress(int(total_candles), label=f"Acquisition: {len(assets)} Assets")
+    assets_completed = 0
 
-            progress = Progress(int(expected), label=f"Downloading {asset} {tf}")
+    semaphore = asyncio.Semaphore(5)
+    from tools.downloader import RateLimiter
+    limiter = RateLimiter(15)
 
-            while current_end > target_start_ms:
-                # [OPT-001] Check for existing data block to avoid redundant API calls
-                if db.check_candle_exists(asset, tf, current_end / 1000):
-                    # We have this candle. Now find the earliest candle in this continuous block.
-                    # We'll use a simpler heuristic: skip back 200 candles and check again.
-                    jump_ms = tf_seconds[tf] * 200 * 1000
-                    if db.check_candle_exists(asset, tf, (current_end - jump_ms) / 1000):
-                        current_end -= jump_ms
-                        progress.update(200)
-                        continue
+    async def download_asset_tf_gap(asset, tf, gaps):
+        nonlocal assets_completed
+        async with semaphore:
+            for gap_start, gap_end in gaps:
+                current_end = int(gap_end * 1000)
+                target_start_ms = int(gap_start * 1000)
+                while current_end > target_start_ms:
+                    await limiter.wait()
+                    response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
+                        "symbol": asset, "productType": "usdt-futures", "granularity": tf,
+                        "endTime": str(current_end), "limit": "200"
+                    })
+                    if response.get("code") in ["429", "400031", "40053"]:
+                        await asyncio.sleep(5.0); continue
+                    data = response.get("data", [])
+                    if not data: break
+                    valid_count = 0
+                    for c in data:
+                        ts_ms = int(c[0])
+                        if ts_ms < target_start_ms:
+                            current_end = 0; break
+                        db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
+                        valid_count += 1
+                        current_end = min(current_end, ts_ms - 1)
+                    if valid_count == 0: break
+                    global_progress.update(valid_count)
 
-                candles = await client.request("GET", "/api/v2/mix/market/history-candles", params={
-                    "symbol": asset,
-                    "productType": "usdt-futures",
-                    "granularity": tf,
-                    "endTime": str(current_end),
-                    "limit": "200"
-                })
-
-                data = candles.get("data", [])
-                if not data:
-                    log.warning(f"No more data returned for {asset} {tf} at {current_end}")
-                    break
-
-                valid_count = 0
-                for c in data:
-                    ts_ms = int(c[0])
-                    o, h, l, cl, v = map(float, c[1:6])
-                    if ts_ms < target_start_ms:
-                        current_end = 0
-                        # Don't break yet, process remaining in this batch if they are >= target
-                        if ts_ms >= target_start_ms:
-                             db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
-                             valid_count += 1
-                        continue
-
-                    db.save_candle(asset, tf, ts_ms / 1000, o, h, l, cl, v)
-                    valid_count += 1
-                    current_end = min(current_end, ts_ms - 1)
-
-                if valid_count == 0:
-                    break
-
-                progress.update(len(data))
-                # Small sleep to respect rate limits
-                await asyncio.sleep(0.1)
+    tasks = [download_asset_tf_gap(a, t, g) for a, t, g in all_gaps]
+    await asyncio.gather(*tasks)
+    print() # Final newline for global progress
 
 def find_strategy_file(query: str) -> Optional[str]:
+    # [TECH-001] Support directory-based discovery (Families)
+    if query == "strategies":
+        return "strategies"
+    potential_dir = os.path.join("strategies", query)
+    if os.path.isdir(potential_dir):
+        return potential_dir
+
     # Check strategies/ first
     for f in os.listdir("strategies"):
         if query in f and f.endswith(".py"):
@@ -223,37 +270,43 @@ class StrategyWrapper:
         self.instance = self._load_strategy(path)
 
     def _load_strategy(self, path):
-        module_name = path.replace("/", ".").replace("\\", ".")
-        if module_name.endswith(".py"):
-            module_name = module_name[:-3]
+        # [TECH-001] Use the enhanced load_strategy from main.py
+        from main import load_strategy
+        # Extract relative path if inside strategies/
+        rel_path = path
+        if path.startswith("strategies/"):
+             rel_path = path[11:]
+        if rel_path.endswith(".py"):
+             rel_path = rel_path[:-3]
 
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        # Check if it's a new class-based strategy
-        if "strategies/" in path:
-            for name, obj in module.__dict__.items():
-                if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
-                    return obj(simulator=self.simulator, config_overrides=self.overrides)
-
-        return module
+        return load_strategy(rel_path, simulator=self.simulator, overrides=self.overrides)
 
     def get_signal(self, ohlcv, tf, symbol=None):
-        if hasattr(self.instance, "get_entry_signal"):
-            # New Strategy class
-            # We need to wrap it to match the expected return of backtest.py
-            # Backtest expects ohlcv and tf, Strategy expects market_data
-            # We mock the market_data for the strategy
+        """
+        [TECH-001] Handle both single strategy instances and Families (lists).
+        """
+        if isinstance(self.instance, list):
+            # Family: In backtest.py, we only return the FIRST strategy signal for the chain check.
+            # TRUE multi-strategy execution happens in the run_backtest simulation loop
+            # where Engine.strategies is processed.
+            if not self.instance: return None
+            target = self.instance[0]
+        else:
+            target = self.instance
+
+        if target is None:
+            return None
+
+        if hasattr(target, "get_entry_signal"):
             market_data = {
                 "symbol": symbol or "BACKTEST",
                 "book": type('obj', (object,), {'best_bid': ohlcv[-1]['c'], 'best_ask': ohlcv[-1]['c']}),
                 "equity": config.INITIAL_EQUITY,
                 "features": None # Simulator will be used if None
             }
-            return self.instance.get_entry_signal(market_data)
+            return target.get_entry_signal(market_data)
 
-        return self.instance.get_signal(ohlcv, tf, params=self.params)
+        return target.get_signal(ohlcv, tf, params=self.params)
 
 class ConfluenceChain:
     def __init__(self, segments: List[List[StrategyWrapper]]):
@@ -441,6 +494,17 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # USE THE UNIFIED SIMULATION ENGINE
     from engine.core import Engine
     engine = Engine(use_db=False)
+    engine.start_time = time.time()
+
+    # [TECH-001] Load Strategy Family into Engine
+    engine.strategies = []
+    for segment in chain.segments:
+        for wrapper in segment:
+            if isinstance(wrapper.instance, list):
+                engine.strategies.extend(wrapper.instance)
+            else:
+                engine.strategies.append(wrapper.instance)
+
     sim = engine.exchange
     sim.db = db
 
@@ -452,9 +516,10 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     engine.leverage_limits = sim.leverage_limits
     sim.discovered_assets = [asset]
 
-    from orderbook import SimulatedOrderBook
+    from orderbook import SimulatedOrderBook, OrderBook
     for sym in [asset, BTC_SYMBOL]:
         sim.books[sym] = SimulatedOrderBook(sym, 1.0)
+        engine.books[sym] = OrderBook(sym)
 
     # Load candles from DB within the specified range
     candles = db.get_candles_in_range(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
@@ -469,16 +534,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     asset_history = {}
 
     # Discovery of relevant timeframes from the strategy chain
-    relevant_tfs_set = {"1m", "15m", "1H"}
-    for segment in chain.segments:
-        for wrapper in segment:
-            if hasattr(wrapper.instance, "params") and "range_tf" in wrapper.instance.params:
-                relevant_tfs_set.add(wrapper.instance.params["range_tf"])
-            # Also check if range_tf is in config overrides
-            if "range_tf" in wrapper.overrides:
-                relevant_tfs_set.add(wrapper.overrides["range_tf"])
-
-    relevant_tfs = list(relevant_tfs_set)
+    relevant_tfs = get_required_timeframes(chain)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in [asset, BTC_SYMBOL]:
@@ -507,7 +563,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             start_idx = i
             break
 
-    progress = Progress(len(full_history) - start_idx, label=f"Backtesting {asset} {tf}")
+    progress = Progress(len(full_history) - start_idx, label=f"BT {asset}: {tf}")
     chain.reset()
 
     # Initialize wrappers with sim and FRESH instances to avoid state leakage between assets
@@ -541,6 +597,11 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         c = full_history[i]
         o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
+        # [PERF-004] Skip sub-candle simulation if idle to boost speed
+        intra_candle_prices = [o, h, l, cl]
+        if not sim.positions and not sim.pending_orders:
+            intra_candle_prices = [cl] # Only simulate close if idle
+
         # [PERF-001] Update simulator's OHLCV with sliding window
         sim.ohlcv[asset][tf].append(c)
         if len(sim.ohlcv[asset][tf]) > 1000: sim.ohlcv[asset][tf].pop(0)
@@ -549,12 +610,18 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             sim.confluence_history[asset][tf].append(cl)
             if len(sim.confluence_history[asset][tf]) > 1000: sim.confluence_history[asset][tf].pop(0)
 
-        # [BT-001] Simulate Intra-Candle Price Action (O -> H/L -> C)
-        for price in [o, h, l, cl]:
+        # [BT-001] Simulate Price Action
+        for price in intra_candle_prices:
             sim.last_price[asset] = price
             if asset in sim.books:
                 sim.books[asset].mid_price = price
                 sim.books[asset]._regenerate()
+
+                # Sync Engine's shadow books for tradability checks
+                if asset in engine.books:
+                    engine.books[asset].bids = list(sim.books[asset].bids)
+                    engine.books[asset].asks = list(sim.books[asset].asks)
+
             # [PERF-002] Order processing is only needed if we have positions or pending orders
             if sim.positions or sim.pending_orders:
                 await sim._process_orders()
@@ -579,19 +646,53 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                         pointers[sym][t] += 1
 
-            # [PERF-004] Pass the limited sliding window to pattern detection
-            signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
-            if signal:
+            # [TECH-001] Support Strategy Families in Backtests
+            active_signals = []
+            if engine.strategies:
+                # Mock market_data for class-based strategies
+                market_data = {
+                    "symbol": asset,
+                    "book": sim.books[asset],
+                    "equity": sim.equity,
+                    "features": None # Simulator will be used if None
+                }
+                for strat in engine.strategies:
+                    # [TECH-001] AUTHENTICITY GUARD: Check if this specific strategy is ready
+                    if hasattr(strat, "is_ready") and not strat.is_ready(asset):
+                        continue
+
+                    if hasattr(strat, "get_entry_signal"):
+                        # Ensure strategy has access to current simulation state
+                        if hasattr(strat, "model") and hasattr(strat.model, "simulator"):
+                            strat.model.simulator = sim
+
+                        sig = strat.get_entry_signal(market_data)
+                        if sig:
+                            sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "name", "unknown")
+                            active_signals.append(sig)
+            else:
+                # Legacy Confluence Chain
+                signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
+                if signal:
+                    signal["strategy_id"] = "chain"
+                    active_signals.append(signal)
+
+            for signal in active_signals:
+                # [TECH-001] Collision check for backtest loop
+                if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
+                    continue
+
                 # Place trade via unified engine
-                # Remove keys that are passed as positional arguments to avoid "multiple values for argument" error
                 kwargs = signal.copy()
-                for key in ["side", "qty", "entry_price", "stop_price", "exit_price"]:
+                # Explicitly filter out keys that are passed as positional arguments
+                for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
                     kwargs.pop(key, None)
 
                 res = sim.place_trade_oco(
                     asset, signal["side"], signal.get("qty", 0),
-                    signal["entry_price"], signal["stop_price"], signal["exit_price"],
-                    features=signal, # Pass features so they are available for reporting
+                    signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
+                    features=signal,
+                    strategy_id=signal.get("strategy_id"),
                     **kwargs
                 )
 
@@ -620,6 +721,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         "trades": engine.total_trades,
         "equity": sim.equity,
         "side_stats": side_stats,
+        "strategy_stats": engine.strategy_stats, # [TECH-001] Include strategy breakdown
         "no_data": False
     }
 
@@ -678,7 +780,56 @@ def print_results(results):
 
         print(f"{'OVERALL':<22} | {'ALL':<10} | {'MIX':<5} | {ov_win_ls:>12} | {ov_pnl_ls:>15} | {'N/A':>8} | {total_pnl:>10.2f} | {ov_roi:>7.1f}% | {total_trades:>8} | {'N/A':>12}")
 
+    # [TECH-001] Strategy Breakdown Summary Table
+    strat_aggregates = {}
+    for r in results:
+        if not r or r.get("no_data"): continue
+        for sid, stats in r.get("strategy_stats", {}).items():
+            if sid not in strat_aggregates:
+                strat_aggregates[sid] = {"pnl": 0, "trades": 0, "wins": 0}
+            strat_aggregates[sid]["pnl"] += stats["pnl"]
+            strat_aggregates[sid]["trades"] += stats["total_trades"]
+            strat_aggregates[sid]["wins"] += (stats["buy_wins"] + stats["sell_wins"])
+
+    if strat_aggregates:
+        print("\nSTRATEGY BREAKDOWN")
+        print("-" * 60)
+        print(f"{'Strategy':<25} | {'PnL':>10} | {'Win%':>8} | {'Trades':>8}")
+        print("-" * 60)
+        for sid, agg in strat_aggregates.items():
+            wr = (agg["wins"] / agg["trades"] * 100) if agg["trades"] > 0 else 0
+            print(f"{sid:<25} | {agg['pnl']:>10.2f} | {wr:>7.1f}% | {agg['trades']:>8}")
+        print("-" * 60)
+
     print("="*165 + "\n")
+
+def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
+    """[TECH-001] Unified timeframe discovery logic."""
+    tfs = {"1m"} # Always include execution timeframe
+    for segment in chain.segments:
+        for wrapper in segment:
+            # Handle list of strategies (Family)
+            strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+            for strat in strategies:
+                if hasattr(strat, "params") and "range_tf" in strat.params:
+                    tfs.add(strat.params["range_tf"])
+
+            # Also check if range_tf is in config overrides or direct params
+            for p in wrapper.params:
+                if "range_tf=" in p:
+                    tfs.add(p.split("=")[1])
+            if "range_tf" in wrapper.overrides:
+                tfs.add(wrapper.overrides["range_tf"])
+
+    # If using indicators heavy strategies (mustafa), ensure 15m and 1H are included
+    # (Hardcoded for now as these strategies rely on them but don't define them in params)
+    for segment in chain.segments:
+        for wrapper in segment:
+             strat_name = getattr(wrapper.instance[0] if isinstance(wrapper.instance, list) else wrapper.instance, "name", "").lower()
+             if any(x in strat_name for x in ["mustafa", "sweep", "scalper"]):
+                 tfs.update(["15m", "1H"])
+
+    return list(tfs)
 
 async def main():
     global START_DATE, END_DATE
@@ -730,7 +881,10 @@ async def main():
 
     # Join with -> if segments were passed as separate arguments
     # This allows: python backtest.py "A + B" "C" -> A + B -> C
-    query_cmd = " -> ".join(query_parts)
+    if query_parts[0] == "strategies":
+        query_cmd = "strategies"
+    else:
+        query_cmd = " -> ".join(query_parts)
 
     db = Database()
     client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE)
@@ -751,19 +905,9 @@ async def main():
         print(f"Error parsing command: {e}")
         return
 
-    # Determine all required timeframes for the strategy chain
-    required_tfs = set(DEFAULT_TIMEFRAMES)
-    for segment in chain.segments:
-        for wrapper in segment:
-            if hasattr(wrapper.instance, "params") and "range_tf" in wrapper.instance.params:
-                required_tfs.add(wrapper.instance.params["range_tf"])
-            # Also check if range_tf is in config overrides or direct params
-            for p in wrapper.params:
-                if "range_tf=" in p:
-                    required_tfs.add(p.split("=")[1])
-
-    # 1. Acquisition of data
-    await download_historical_data(client, db, assets_to_run, list(required_tfs))
+    # 1. Acquisition of data (Using unified discovery)
+    required_tfs = get_required_timeframes(chain)
+    await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
 
     # 2. Run backtests
     all_results = []

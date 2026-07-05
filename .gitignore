@@ -2,6 +2,9 @@
 *.db
 *.db-shm
 *.db-wal
+
+# Temporary Logs
+docs/temp/
 *.log
 *.txt
 !requirements.txt
