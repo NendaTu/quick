@@ -128,25 +128,17 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
     # to control total concurrent API requests across all assets.
 
     async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
-        # Inner function to fetch a single chunk with backoff
+        # Inner function to fetch a single chunk
         async with semaphore:
-            retries = 0
-            while retries < 7:
-                try:
-                    await limiter.wait()
-                    response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
-                        "symbol": asset, "productType": "usdt-futures", "granularity": tf,
-                        "endTime": str(chunk_end_ms), "limit": "200"
-                    })
+            try:
+                await limiter.wait()
+                # [REPAIR-20260702] Single source of truth for requests and backoff in BitGetClient
+                response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
+                    "symbol": asset, "productType": "usdt-futures", "granularity": tf,
+                    "endTime": str(chunk_end_ms), "limit": "200"
+                })
 
-                    if response.get("code") in ["429", "400031", "40053"]:
-                        if "verification failed" in response.get("msg", ""): return 0
-                        # Jittered exponential backoff
-                        wait = (2 ** retries) + (random.random() * 0.5)
-                        await asyncio.sleep(wait)
-                        retries += 1
-                        continue
-
+                if response.get("code") == "00000":
                     data = response.get("data", [])
                     if not data: return 0
 
@@ -161,10 +153,8 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
 
                     progress.update(valid_count)
                     return valid_count
-                except Exception as e:
-                    log.error(f"Error in fetch_chunk {asset} {tf}: {e}")
-                    await asyncio.sleep(1.0)
-                    retries += 1
+            except Exception as e:
+                log.error(f"Error in fetch_chunk {asset} {tf}: {e}")
             return 0
 
     for gap_start, gap_end in gaps:

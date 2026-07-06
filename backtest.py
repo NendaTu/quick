@@ -173,19 +173,14 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
         # [REPAIR-20260702] Use optimized batch fetching with global semaphore
         async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
             async with semaphore:
-                retries = 0
-                while retries < 7:
-                    try:
-                        await limiter.wait()
-                        response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
-                            "symbol": asset, "productType": "usdt-futures", "granularity": tf,
-                            "endTime": str(chunk_end_ms), "limit": "200"
-                        })
-                        if response.get("code") in ["429", "400031", "40053"]:
-                            if "verification failed" in response.get("msg", ""): return 0
-                            wait = (2 ** retries) + (random.random() * 0.5)
-                            await asyncio.sleep(wait)
-                            retries += 1; continue
+                try:
+                    await limiter.wait()
+                    # Single source of truth for request and backoff
+                    response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
+                        "symbol": asset, "productType": "usdt-futures", "granularity": tf,
+                        "endTime": str(chunk_end_ms), "limit": "200"
+                    })
+                    if response.get("code") == "00000":
                         data = response.get("data", [])
                         if not data: return 0
                         valid_count = 0
@@ -197,9 +192,8 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                             valid_count += 1
                         global_progress.update(valid_count)
                         return valid_count
-                    except Exception as e:
-                        log.error(f"Error in backtest fetch_chunk {asset} {tf}: {e}")
-                        await asyncio.sleep(1.0); retries += 1
+                except Exception as e:
+                    log.error(f"Error in backtest fetch_chunk {asset} {tf}: {e}")
                 return 0
 
         for gap_start, gap_end in gaps:

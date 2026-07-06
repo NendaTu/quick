@@ -57,6 +57,10 @@ class BitGetClient:
         for attempt in range(retries):
             headers = self._get_headers(method, signed_path, body)
             try:
+                # Add a tiny delay if we've already hit limits to let the bucket drain
+                if attempt > 0:
+                    await asyncio.sleep(0.1 * attempt)
+
                 async with session.request(method, url, data=body, headers=headers, timeout=30) as response:
                     if response.status == 429:
                         # [REPAIR-20260702] Jittered exponential backoff
