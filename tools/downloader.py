@@ -29,8 +29,9 @@ logging.basicConfig(
 log = logging.getLogger("downloader")
 
 # Configuration
-CONCURRENCY_LIMIT = 2
-GLOBAL_RATE_LIMIT = 8 # Increased slightly, but added 429 backoff logic
+from engine.exchanges.bitget import BitgetExchange
+CONCURRENCY_LIMIT = BitgetExchange.DEFAULT_CONCURRENCY
+GLOBAL_RATE_LIMIT = BitgetExchange.DEFAULT_RPS
 BATCH_SIZE = 200
 
 class Progress:
@@ -111,53 +112,76 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
     start_ts = MAX_START_DATE.timestamp()
     end_ts = MAX_END_DATE.timestamp()
 
-    # Find gaps in DB
-    gaps = db.get_data_gaps(asset, tf, start_ts, end_ts)
+    # [REPAIR-20260702] Use merged gaps to reduce round-trips
+    gaps = db.get_data_gaps(asset, tf, start_ts, end_ts, merge_threshold=10)
     if not gaps:
         return
 
-    # Total expected candles across all gaps
+    # Total expected candles across all gaps (approximate)
     total_expected = sum((g[1] - g[0] + step) for g in gaps) / step
     progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
 
     for gap_start, gap_end in gaps:
-        async with semaphore:
-            current_end_ms = int(gap_end * 1000)
-            target_start_ms = int(gap_start * 1000)
+        # [REPAIR-20260702] Implement Asynchronous Batching per Gap
+        # Split each gap into 200-candle segments and fetch them concurrently
+        # while respecting the global RPS limiter.
 
-            while current_end_ms > target_start_ms:
+        target_start_ms = int(gap_start * 1000)
+        target_end_ms = int(gap_end * 1000)
+
+        # Calculate how many 200-candle chunks we need
+        total_gap_ms = target_end_ms - target_start_ms
+        chunk_ms = 200 * step * 1000
+        num_chunks = math.ceil(total_gap_ms / chunk_ms)
+
+        async def fetch_chunk(chunk_end_ms):
+            # Inner function to fetch a single chunk with backoff
+            retries = 0
+            while retries < 5:
                 try:
                     await limiter.wait()
-
                     response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
                         "symbol": asset, "productType": "usdt-futures", "granularity": tf,
-                        "endTime": str(current_end_ms), "limit": "200"
+                        "endTime": str(chunk_end_ms), "limit": "200"
                     })
 
-                    # [TECH-001] Explicit 429/Limit handling with backoff
                     if response.get("code") in ["429", "400031", "40053"]:
-                        log.warning(f"Rate limit hit for {asset} {tf}, backing off...")
-                        await asyncio.sleep(5.0)
+                        # Jittered exponential backoff
+                        wait = (2 ** retries) + (random.random() * 0.5)
+                        await asyncio.sleep(wait)
+                        retries += 1
                         continue
 
                     data = response.get("data", [])
-                    if not data: break
+                    if not data: return 0
 
                     valid_count = 0
                     for c in data:
                         ts_ms = int(c[0])
-                        if ts_ms < target_start_ms:
-                            current_end_ms = 0; break
+                        if ts_ms < target_start_ms: continue
+                        if ts_ms > target_end_ms: continue
 
                         db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
                         valid_count += 1
-                        current_end_ms = min(current_end_ms, ts_ms - 1)
 
-                    if valid_count == 0: break
                     progress.update(valid_count)
+                    return valid_count
                 except Exception as e:
-                    log.error(f"Error downloading {asset} {tf} at {current_end_ms}: {e}")
-                    await asyncio.sleep(2.0)
+                    log.error(f"Error in fetch_chunk {asset} {tf}: {e}")
+                    await asyncio.sleep(1.0)
+                    retries += 1
+            return 0
+
+        # Create tasks for all chunks in this gap
+        tasks = []
+        for i in range(num_chunks):
+            # endTime for chunk i (working backwards)
+            chunk_end_ms = target_end_ms - (i * chunk_ms)
+            tasks.append(fetch_chunk(chunk_end_ms))
+
+        # Run chunk fetches with local concurrency control
+        async with semaphore:
+            await asyncio.gather(*tasks)
 
 async def main():
     db = Database()

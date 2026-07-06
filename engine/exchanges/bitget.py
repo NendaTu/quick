@@ -6,6 +6,11 @@ from bitget_client import BitGetClient, BitGetWSClient
 log = logging.getLogger("engine.exchanges.bitget")
 
 class BitgetExchange(BaseExchange):
+    # [TECH-001] Optimized Acquisition Defaults
+    # Targeting Bitget V2 API stability while maximizing throughput.
+    DEFAULT_RPS = 35
+    DEFAULT_CONCURRENCY = 25
+
     def __init__(self, api_key: str, secret_key: str, passphrase: str):
         self.client = BitGetClient(api_key, secret_key, passphrase)
         self.ws_client: Optional[BitGetWSClient] = None

@@ -161,36 +161,60 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     global_progress = Progress(int(total_candles), label=f"Acquisition: {len(assets)} Assets")
     assets_completed = 0
 
-    semaphore = asyncio.Semaphore(5)
+    from engine.exchanges.bitget import BitgetExchange
+    semaphore = asyncio.Semaphore(BitgetExchange.DEFAULT_CONCURRENCY)
     from tools.downloader import RateLimiter
-    limiter = RateLimiter(15)
+    limiter = RateLimiter(BitgetExchange.DEFAULT_RPS)
 
     async def download_asset_tf_gap(asset, tf, gaps):
         nonlocal assets_completed
-        async with semaphore:
-            for gap_start, gap_end in gaps:
-                current_end = int(gap_end * 1000)
-                target_start_ms = int(gap_start * 1000)
-                while current_end > target_start_ms:
+
+        # [REPAIR-20260702] Use optimized batch fetching per asset/tf
+        async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
+            retries = 0
+            import random
+            while retries < 5:
+                try:
                     await limiter.wait()
                     response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
                         "symbol": asset, "productType": "usdt-futures", "granularity": tf,
-                        "endTime": str(current_end), "limit": "200"
+                        "endTime": str(chunk_end_ms), "limit": "200"
                     })
                     if response.get("code") in ["429", "400031", "40053"]:
-                        await asyncio.sleep(5.0); continue
+                        wait = (2 ** retries) + (random.random() * 0.5)
+                        await asyncio.sleep(wait)
+                        retries += 1; continue
                     data = response.get("data", [])
-                    if not data: break
+                    if not data: return 0
                     valid_count = 0
                     for c in data:
                         ts_ms = int(c[0])
-                        if ts_ms < target_start_ms:
-                            current_end = 0; break
+                        if ts_ms < target_start_ms: continue
+                        if ts_ms > target_end_ms: continue
                         db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
                         valid_count += 1
-                        current_end = min(current_end, ts_ms - 1)
-                    if valid_count == 0: break
                     global_progress.update(valid_count)
+                    return valid_count
+                except Exception as e:
+                    log.error(f"Error in backtest fetch_chunk {asset} {tf}: {e}")
+                    await asyncio.sleep(1.0); retries += 1
+            return 0
+
+        async with semaphore:
+            for gap_start, gap_end in gaps:
+                target_start_ms = int(gap_start * 1000)
+                target_end_ms = int(gap_end * 1000)
+
+                total_gap_ms = target_end_ms - target_start_ms
+                chunk_ms = 200 * tf_seconds[tf] * 1000
+                num_chunks = math.ceil(total_gap_ms / chunk_ms)
+
+                tasks = []
+                for i in range(num_chunks):
+                    chunk_end_ms = target_end_ms - (i * chunk_ms)
+                    tasks.append(fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms))
+
+                await asyncio.gather(*tasks)
 
     tasks = [download_asset_tf_gap(a, t, g) for a, t, g in all_gaps]
     await asyncio.gather(*tasks)
@@ -200,17 +224,32 @@ def find_strategy_file(query: str) -> Optional[str]:
     # [TECH-001] Support directory-based discovery (Families)
     if query == "strategies":
         return "strategies"
+
     potential_dir = os.path.join("strategies", query)
     if os.path.isdir(potential_dir):
         return potential_dir
 
-    # Check strategies/ first
-    for f in os.listdir("strategies"):
-        if query in f and f.endswith(".py"):
-            return os.path.join("strategies", f)
+    # 1. Search strategies/ recursively
+    strategy_matches = []
+    for root, dirs, files in os.walk("strategies"):
+        for file in files:
+            if file.endswith(".py") and not file.startswith("__") and "base_strategy" not in file:
+                rel_path = os.path.relpath(os.path.join(root, file), "strategies")
+                clean_path = rel_path.replace("\\", "/").replace(".py", "")
 
-    # Recursively search ta/
-    matches = []
+                # Exact match (e.g. "sweeps/killzone/killzone_sweep.1.mustafa")
+                if clean_path.lower() == query.lower():
+                    return os.path.join(root, file)
+
+                # Partial match (e.g. "killzone_sweep")
+                if query.lower() in clean_path.lower():
+                    strategy_matches.append(os.path.join(root, file))
+
+    if len(strategy_matches) == 1:
+        return strategy_matches[0]
+
+    # 2. Recursively search ta/
+    matches = strategy_matches # Merge strategy matches into the overall pool
 
     # Handle the singular/plural mapping (candle -> candles)
     mapping = {"candle": "candles", "pattern": "patterns", "indicator": "indicators"}
@@ -804,30 +843,37 @@ def print_results(results):
     print("="*165 + "\n")
 
 def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
-    """[TECH-001] Unified timeframe discovery logic."""
-    tfs = {"1m"} # Always include execution timeframe
+    """
+    [TECH-001] Unified timeframe discovery logic.
+    [REPAIR-20260702] Strict scoping: Only include what's explicitly required
+    by the strategies in the chain. No 'forced' 1m unless explicitly needed.
+    """
+    tfs = set()
     for segment in chain.segments:
         for wrapper in segment:
             # Handle list of strategies (Family)
             strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
             for strat in strategies:
+                # 1. Check explicit required_history (Class-based strategies)
+                if hasattr(strat, "required_history"):
+                    tfs.update(strat.required_history.keys())
+
+                # 2. Check range_tf in params
                 if hasattr(strat, "params") and "range_tf" in strat.params:
                     tfs.add(strat.params["range_tf"])
 
-            # Also check if range_tf is in config overrides or direct params
+            # 3. Check CLI overrides
             for p in wrapper.params:
                 if "range_tf=" in p:
                     tfs.add(p.split("=")[1])
             if "range_tf" in wrapper.overrides:
                 tfs.add(wrapper.overrides["range_tf"])
+            if "timeframe" in wrapper.overrides:
+                tfs.add(wrapper.overrides["timeframe"])
 
-    # If using indicators heavy strategies (mustafa), ensure 15m and 1H are included
-    # (Hardcoded for now as these strategies rely on them but don't define them in params)
-    for segment in chain.segments:
-        for wrapper in segment:
-             strat_name = getattr(wrapper.instance[0] if isinstance(wrapper.instance, list) else wrapper.instance, "name", "").lower()
-             if any(x in strat_name for x in ["mustafa", "sweep", "scalper"]):
-                 tfs.update(["15m", "1H"])
+    # Fallback: if no timeframes discovered, default to 1m for simulation
+    if not tfs:
+        tfs.add("1m")
 
     return list(tfs)
 

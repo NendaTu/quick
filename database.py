@@ -143,7 +143,7 @@ class Database:
                     # Wait for first item
                     items.append(self.write_queue.get(timeout=0.5))
                     # Try to grab more for batching
-                    for _ in range(100):
+                    for _ in range(1000):
                         items.append(self.write_queue.get_nowait())
                 except (queue.Empty):
                     pass
@@ -286,11 +286,10 @@ class Database:
         """, (symbol, timeframe, start_ts, end_ts))
         return cursor.fetchall()
 
-    def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float) -> list:
+    def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:
         """
         [TECH-001] Identifies holes in the historical data for a specific asset/timeframe.
-        This ensures that we only download what is missing, rather than relying on
-        unreliable percentage-based heuristics.
+        [REPAIR-20260702] Implements Gap Merging: merges gaps separated by <= merge_threshold candles.
 
         Returns a list of (gap_start, gap_end) tuples representing missing periods.
         """
@@ -305,29 +304,46 @@ class Database:
         if not rows:
             return [(start_ts, end_ts)]
 
-        gaps = []
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
             "1H": 3600, "4H": 14400, "1D": 86400
         }
         step = tf_seconds.get(timeframe, 60)
 
+        raw_gaps = []
         # Check leading gap
         if rows[0][0] > start_ts + step:
-            gaps.append((start_ts, rows[0][0] - step))
+            raw_gaps.append((start_ts, rows[0][0] - step))
 
         # Check internal gaps
         for i in range(len(rows) - 1):
             curr_ts = rows[i][0]
             next_ts = rows[i+1][0]
-            if next_ts > curr_ts + step * 1.1: # Small buffer for floating point / missing one candle
-                gaps.append((curr_ts + step, next_ts - step))
+            if next_ts > curr_ts + step * 1.1:
+                raw_gaps.append((curr_ts + step, next_ts - step))
 
         # Check trailing gap
         if rows[-1][0] < end_ts - step:
-            gaps.append((rows[-1][0] + step, end_ts))
+            raw_gaps.append((rows[-1][0] + step, end_ts))
 
-        return gaps
+        if not raw_gaps:
+            return []
+
+        # 2. Merge Gaps [REPAIR-20260702]
+        merged_gaps = []
+        if raw_gaps:
+            curr_start, curr_end = raw_gaps[0]
+            for i in range(1, len(raw_gaps)):
+                next_start, next_end = raw_gaps[i]
+                # If distance between gaps is <= threshold candles
+                if next_start - curr_end <= step * (merge_threshold + 1):
+                    curr_end = next_end
+                else:
+                    merged_gaps.append((curr_start, curr_end))
+                    curr_start, curr_end = next_start, next_end
+            merged_gaps.append((curr_start, curr_end))
+
+        return merged_gaps
 
     def check_candle_exists(self, symbol, timeframe, timestamp):
         cursor = self.connection.execute("""
