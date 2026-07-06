@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 import math
+import random
 import logging
 import time
 import importlib
@@ -172,7 +173,6 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
         # [REPAIR-20260702] Use optimized batch fetching per asset/tf
         async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
             retries = 0
-            import random
             while retries < 5:
                 try:
                     await limiter.wait()
