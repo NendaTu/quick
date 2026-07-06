@@ -170,50 +170,52 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     async def download_asset_tf_gap(asset, tf, gaps):
         nonlocal assets_completed
 
-        # [REPAIR-20260702] Use optimized batch fetching per asset/tf
+        # [REPAIR-20260702] Use optimized batch fetching with global semaphore
         async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
-            retries = 0
-            while retries < 5:
-                try:
-                    await limiter.wait()
-                    response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
-                        "symbol": asset, "productType": "usdt-futures", "granularity": tf,
-                        "endTime": str(chunk_end_ms), "limit": "200"
-                    })
-                    if response.get("code") in ["429", "400031", "40053"]:
-                        wait = (2 ** retries) + (random.random() * 0.5)
-                        await asyncio.sleep(wait)
-                        retries += 1; continue
-                    data = response.get("data", [])
-                    if not data: return 0
-                    valid_count = 0
-                    for c in data:
-                        ts_ms = int(c[0])
-                        if ts_ms < target_start_ms: continue
-                        if ts_ms > target_end_ms: continue
-                        db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
-                        valid_count += 1
-                    global_progress.update(valid_count)
-                    return valid_count
-                except Exception as e:
-                    log.error(f"Error in backtest fetch_chunk {asset} {tf}: {e}")
-                    await asyncio.sleep(1.0); retries += 1
-            return 0
+            async with semaphore:
+                retries = 0
+                while retries < 7:
+                    try:
+                        await limiter.wait()
+                        response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
+                            "symbol": asset, "productType": "usdt-futures", "granularity": tf,
+                            "endTime": str(chunk_end_ms), "limit": "200"
+                        })
+                        if response.get("code") in ["429", "400031", "40053"]:
+                            if "verification failed" in response.get("msg", ""): return 0
+                            wait = (2 ** retries) + (random.random() * 0.5)
+                            await asyncio.sleep(wait)
+                            retries += 1; continue
+                        data = response.get("data", [])
+                        if not data: return 0
+                        valid_count = 0
+                        for c in data:
+                            ts_ms = int(c[0])
+                            if ts_ms < target_start_ms: continue
+                            if ts_ms > target_end_ms: continue
+                            db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
+                            valid_count += 1
+                        global_progress.update(valid_count)
+                        return valid_count
+                    except Exception as e:
+                        log.error(f"Error in backtest fetch_chunk {asset} {tf}: {e}")
+                        await asyncio.sleep(1.0); retries += 1
+                return 0
 
-        async with semaphore:
-            for gap_start, gap_end in gaps:
-                target_start_ms = int(gap_start * 1000)
-                target_end_ms = int(gap_end * 1000)
+        for gap_start, gap_end in gaps:
+            target_start_ms = int(gap_start * 1000)
+            target_end_ms = int(gap_end * 1000)
 
-                total_gap_ms = target_end_ms - target_start_ms
-                chunk_ms = 200 * tf_seconds[tf] * 1000
-                num_chunks = math.ceil(total_gap_ms / chunk_ms)
+            total_gap_ms = target_end_ms - target_start_ms
+            chunk_ms = 200 * tf_seconds[tf] * 1000
+            num_chunks = math.ceil(total_gap_ms / chunk_ms)
 
-                tasks = []
-                for i in range(num_chunks):
-                    chunk_end_ms = target_end_ms - (i * chunk_ms)
-                    tasks.append(fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms))
+            tasks = []
+            for i in range(num_chunks):
+                chunk_end_ms = target_end_ms - (i * chunk_ms)
+                tasks.append(fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms))
 
+            if tasks:
                 await asyncio.gather(*tasks)
 
     tasks = [download_asset_tf_gap(a, t, g) for a, t, g in all_gaps]

@@ -7,9 +7,9 @@ log = logging.getLogger("engine.exchanges.bitget")
 
 class BitgetExchange(BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
-    # Targeting Bitget V2 API stability while maximizing throughput.
-    DEFAULT_RPS = 35
-    DEFAULT_CONCURRENCY = 25
+    # Reduced to ensure 0 limit breaches during long acquisition runs.
+    DEFAULT_RPS = 20
+    DEFAULT_CONCURRENCY = 10
 
     def __init__(self, api_key: str, secret_key: str, passphrase: str):
         self.client = BitGetClient(api_key, secret_key, passphrase)

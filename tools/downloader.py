@@ -123,23 +123,15 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
     total_expected = sum((g[1] - g[0] + step) for g in gaps) / step
     progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
 
-    for gap_start, gap_end in gaps:
-        # [REPAIR-20260702] Implement Asynchronous Batching per Gap
-        # Split each gap into 200-candle segments and fetch them concurrently
-        # while respecting the global RPS limiter.
+    # [REPAIR-20260702] Implement Asynchronous Batching with controlled concurrency
+    # We no longer fire thousands of tasks at once. We use the global semaphore
+    # to control total concurrent API requests across all assets.
 
-        target_start_ms = int(gap_start * 1000)
-        target_end_ms = int(gap_end * 1000)
-
-        # Calculate how many 200-candle chunks we need
-        total_gap_ms = target_end_ms - target_start_ms
-        chunk_ms = 200 * step * 1000
-        num_chunks = math.ceil(total_gap_ms / chunk_ms)
-
-        async def fetch_chunk(chunk_end_ms):
-            # Inner function to fetch a single chunk with backoff
+    async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
+        # Inner function to fetch a single chunk with backoff
+        async with semaphore:
             retries = 0
-            while retries < 5:
+            while retries < 7:
                 try:
                     await limiter.wait()
                     response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
@@ -148,6 +140,7 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                     })
 
                     if response.get("code") in ["429", "400031", "40053"]:
+                        if "verification failed" in response.get("msg", ""): return 0
                         # Jittered exponential backoff
                         wait = (2 ** retries) + (random.random() * 0.5)
                         await asyncio.sleep(wait)
@@ -174,15 +167,22 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                     retries += 1
             return 0
 
-        # Create tasks for all chunks in this gap
+    for gap_start, gap_end in gaps:
+        target_start_ms = int(gap_start * 1000)
+        target_end_ms = int(gap_end * 1000)
+
+        # Calculate how many 200-candle chunks we need
+        total_gap_ms = target_end_ms - target_start_ms
+        chunk_ms = 200 * step * 1000
+        num_chunks = math.ceil(total_gap_ms / chunk_ms)
+
         tasks = []
         for i in range(num_chunks):
             # endTime for chunk i (working backwards)
             chunk_end_ms = target_end_ms - (i * chunk_ms)
-            tasks.append(fetch_chunk(chunk_end_ms))
+            tasks.append(fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms))
 
-        # Run chunk fetches with local concurrency control
-        async with semaphore:
+        if tasks:
             await asyncio.gather(*tasks)
 
 async def main():
