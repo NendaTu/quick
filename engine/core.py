@@ -203,16 +203,26 @@ class Engine:
 
         # [TECH-001] Determine Strategy ID for attribution
         if strategy_id is None:
-             strat_id = getattr(self, "strategy", None)
-             strategy_id = strat_id.name if strat_id else "model"
+             strat = getattr(self, "strategy", None)
+             strategy_id = getattr(strat, "strategy_id", strat.name) if strat else "model"
 
-        self.open_positions[pos_key] = {
-            "side": side, "qty": qty, "entry": entry,
-            "orig_side": orig_side, "is_contr": is_contr,
-            "margin": margin,
-            "ts": entry_ts,
-            "strategy_id": strategy_id
-        }
+        if pos_key in self.open_positions:
+            # Scaling up an existing position
+            p = self.open_positions[pos_key]
+            total_qty = p["qty"] + qty
+            # Update weighted average entry price for tracking
+            p["entry"] = (p["entry"] * p["qty"] + entry * qty) / total_qty
+            p["qty"] = total_qty
+            p["margin"] += margin
+            # Keep the ORIGINAL strategy_id as the primary owner for attribution
+        else:
+            self.open_positions[pos_key] = {
+                "side": side, "qty": qty, "entry": entry,
+                "orig_side": orig_side, "is_contr": is_contr,
+                "margin": margin,
+                "ts": entry_ts,
+                "strategy_id": strategy_id
+            }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
@@ -646,12 +656,12 @@ class Engine:
                                 sig = strat.get_entry_signal(market_data)
                                 if sig:
                                     # Ensure signal knows who sent it
-                                    sig["strategy_id"] = strat.name
+                                    sig["strategy_id"] = getattr(strat, "strategy_id", strat.name)
                                     active_signals.append(sig)
                         elif hasattr(self, "strategy") and self.strategy:
                             sig = self.strategy.get_entry_signal(market_data)
                             if sig:
-                                sig["strategy_id"] = self.strategy.name
+                                sig["strategy_id"] = getattr(self.strategy, "strategy_id", self.strategy.name)
                                 active_signals.append(sig)
                         else:
                             sig = self.model.predict(sym, book, self.equity, features=feat)

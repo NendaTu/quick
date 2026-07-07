@@ -64,7 +64,7 @@ class ScalperStrategy(JBaseStrategy):
         if signal:
             # Enrich signal with strategy identification
             signal["symbol"] = symbol
-            signal["strategy"] = self.file_name
+            signal["strategy_id"] = self.strategy_id
             return signal
 
         return None

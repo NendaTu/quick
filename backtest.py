@@ -516,10 +516,12 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     if db:
         for segment in chain.segments:
             for wrapper in segment:
-                strat_id = getattr(wrapper.instance, "file_name", None) or getattr(wrapper.instance, "name", "")
-                if strat_id:
-                    db.connection.execute("DELETE FROM strategy_state WHERE strategy_id = ? AND key LIKE ?", (strat_id, f"{asset}%"))
-                    db.connection.commit()
+                strats = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+                for s in strats:
+                    strat_id = getattr(s, "strategy_id", None) or getattr(s, "name", "")
+                    if strat_id:
+                        db.connection.execute("DELETE FROM strategy_state WHERE strategy_id = ? AND key LIKE ?", (strat_id, f"{asset}%"))
+                        db.connection.commit()
 
     # USE THE UNIFIED SIMULATION ENGINE
     from engine.core import Engine
@@ -701,7 +703,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                         sig = strat.get_entry_signal(market_data)
                         if sig:
-                            sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "name", "unknown")
+                            sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
                             active_signals.append(sig)
             else:
                 # Legacy Confluence Chain

@@ -913,7 +913,8 @@ class Simulator:
             self.positions[pos_key] = {
                 "side": side, "qty": qty, "entry_price": fill_price, "entry_fee": fee, "btc_conf": btc_conf, "margin": margin, "entry_drt": drt,
                 "original_side": original_side, "is_contrarian": is_contrarian, "ts": now,
-                "features": features
+                "features": features,
+                "strategy_id": strategy_id
             }
         side_str = side.upper()
         if is_contrarian:
