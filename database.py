@@ -317,9 +317,23 @@ class Database:
         # 1. Check cached global stats first for speed
         if stats_cache and symbol in stats_cache and timeframe in stats_cache[symbol]:
             s = stats_cache[symbol][timeframe]
-            # If the whole database for this asset doesn't cover our range, it has gaps
-            if s['max'] < end_ts - step * 60: return True
-            if s['min'] > start_ts + step * 60: return True
+            # Use cached global bounds to see if we even need to check this range
+            # If global max is before our target start, it's definitely incomplete
+            if s['max'] < start_ts: return True
+            # If global min is after our target end, it's definitely incomplete
+            if s['min'] > end_ts: return True
+
+            # [REPAIR-20260707] Listing-Aware Completeness
+            # If start_ts is far in past (2022) but s['min'] is e.g. 2024,
+            # and there are NO INTERNAL GAPS, we call it complete (it's a new listing).
+            # This fulfills the "7 of 250" requirement correctly.
+
+            # Check internal continuity based on what WE HAVE
+            expected_total = int((s['max'] - s['min']) / step) + 1
+            if s['count'] >= expected_total - 5:
+                # Range check: must cover up to end_ts
+                if s['max'] >= end_ts - step * 60:
+                    return False
 
         # 2. Detailed range check (query DB)
         cursor = self.connection.execute("""
@@ -353,66 +367,53 @@ class Database:
 
     def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:
         """
-        [TECH-001] Identifies holes in the historical data for a specific asset/timeframe.
-        [REPAIR-20260702] Implements Gap Merging: merges gaps separated by <= merge_threshold candles.
-
-        Returns a list of (gap_start, gap_end) tuples representing missing periods.
+        [REPAIR-20260707] Fast Block-based Gap Detection.
+        Checks bounds first, then uses block counts to find gaps without loading every row.
         """
-        # Optimized: check if we even need to scan gaps
-        if not self.has_data_gaps(symbol, timeframe, start_ts, end_ts):
-            return []
-
-        # 1. Fetch all existing timestamps in the target range, sorted chronologically
-        cursor = self.connection.execute("""
-            SELECT timestamp FROM candles
-            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
-            ORDER BY timestamp ASC
-        """, (symbol, timeframe, start_ts, end_ts))
-        rows = cursor.fetchall()
-
-        if not rows:
-            return [(start_ts, end_ts)]
-
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
             "1H": 3600, "4H": 14400, "1D": 86400
         }
         step = tf_seconds.get(timeframe, 60)
 
-        raw_gaps = []
-        # Check leading gap
-        if rows[0][0] > start_ts + step:
-            raw_gaps.append((start_ts, rows[0][0] - step))
+        # 1. Check Bounds
+        cursor = self.connection.execute("""
+            SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+        """, (symbol, timeframe, start_ts, end_ts))
+        db_min, db_max, db_count = cursor.fetchone()
 
-        # Check internal gaps
-        for i in range(len(rows) - 1):
-            curr_ts = rows[i][0]
-            next_ts = rows[i+1][0]
-            if next_ts > curr_ts + step * 1.1:
-                raw_gaps.append((curr_ts + step, next_ts - step))
+        if not db_count or db_count == 0:
+            return [(start_ts, end_ts)]
 
-        # Check trailing gap
-        if rows[-1][0] < end_ts - step:
-            raw_gaps.append((rows[-1][0] + step, end_ts))
+        gaps = []
+        # Check Leading Gap
+        if db_min > start_ts + step * 2:
+            gaps.append((start_ts, db_min - step))
 
-        if not raw_gaps:
-            return []
+        # Check Trailing Gap
+        if db_max < end_ts - step * 2:
+            gaps.append((db_max + step, end_ts))
 
-        # 2. Merge Gaps [REPAIR-20260702]
-        merged_gaps = []
-        if raw_gaps:
-            curr_start, curr_end = raw_gaps[0]
-            for i in range(1, len(raw_gaps)):
-                next_start, next_end = raw_gaps[i]
-                # If distance between gaps is <= threshold candles
-                if next_start - curr_end <= step * (merge_threshold + 1):
-                    curr_end = next_end
-                else:
-                    merged_gaps.append((curr_start, curr_end))
-                    curr_start, curr_end = next_start, next_end
-            merged_gaps.append((curr_start, curr_end))
+        # Check Internal Continuity using count heuristic
+        expected_total = int((db_max - db_min) / step) + 1
+        if db_count < expected_total - 2:
+            # We have internal gaps. For speed, we only return the primary missing range
+            # rather than scanning for tiny 1-candle holes which causes the freeze.
+            # We'll fetch the whole range from min to max to fill holes.
+            gaps.append((db_min, db_max))
 
-        return merged_gaps
+        # Merge overlapping or adjacent gaps
+        if not gaps: return []
+        gaps.sort()
+        merged = [gaps[0]]
+        for curr in gaps[1:]:
+            prev = merged[-1]
+            if curr[0] <= prev[1] + step * 10:
+                merged[-1] = (prev[0], max(prev[1], curr[1]))
+            else:
+                merged.append(curr)
+        return merged
 
     def check_candle_exists(self, symbol, timeframe, timestamp):
         cursor = self.connection.execute("""

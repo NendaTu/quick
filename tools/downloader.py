@@ -132,7 +132,9 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
 
                 if response.get("code") == "00000":
                     data = response.get("data", [])
-                    if not data: return 0
+                    if not data:
+                        # [REPAIR-20260707] Mark as reached beginning of history to stop pointless fetching
+                        return -1
 
                     valid_count = 0
                     for c in data:
@@ -162,7 +164,8 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
         for i in range(num_chunks):
             chunk_end_ms = target_end_ms - (i * chunk_ms)
             if chunk_end_ms <= target_start_ms: break
-            await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
+            res = await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
+            if res == -1: break # Reached beginning of history
 
 async def main():
     db = Database()
@@ -189,57 +192,54 @@ async def main():
             if is_complete: completed_assets.append(asset)
             else: remaining_assets.append(asset)
 
-        # [REPAIR-20260702] Hard-coded log format as requested
-        # [REPAIR-20260707] Always show these lines to ensure transparency
+        # [REPAIR-20260707] Exactly match requested log format with timing
+        await asyncio.sleep(1.0) # Artificial pause for readability as requested
         log.info(f"{len(completed_assets)} of {len(assets)} assets have complete data across {len(AVAILABLE_TIMEFRAMES)} timeframes.")
 
         if not remaining_assets:
             log.info("All assets are already complete. Nothing to download.")
             db.stop(); return
 
+        await asyncio.sleep(1.0)
         log.info(f"Starting download for {len(remaining_assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
 
         # [REPAIR-20260707] Calculate total candles for a GLOBAL progress bar
         total_candles = 0
-
-        # This pass is fast because it uses the stats_cache / fast gap check
         for asset in remaining_assets:
             for tf in AVAILABLE_TIMEFRAMES:
                 gaps = db.get_data_gaps(asset, tf, start_ts, end_ts, merge_threshold=10)
                 if gaps:
                     total_candles += sum((g[1] - g[0] + TF_SECONDS[tf]) for g in gaps) / TF_SECONDS[tf]
 
-        global_progress = Progress(int(total_candles), label=f"Acquisition: {len(remaining_assets)} Assets")
+        global_progress = Progress(int(total_candles), label=f"Acquisition")
 
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
         limiter = RateLimiter(GLOBAL_RATE_LIMIT)
 
-        # [REPAIR-20260707] Worker Pool Pattern
-        # Instead of creating thousands of tasks, we use a controlled set of workers
-        # to process the download queue. This ensures event loop stability and
-        # prevents the application from "freezing" under heavy task load.
+        # Worker Pool
         queue = asyncio.Queue()
         for asset in remaining_assets:
             for tf in AVAILABLE_TIMEFRAMES:
                 queue.put_nowait((asset, tf))
 
-        async def download_worker():
+        async def download_worker(worker_id):
             while not queue.empty():
                 try:
                     asset, tf = queue.get_nowait()
+                    # Heartbeat for debugging freezes
+                    if random.random() < 0.05: # Occasional heartbeat
+                         log.debug(f"Worker {worker_id}: Processing {asset} {tf}...")
                     await download_asset_tf(client, db, asset, tf, semaphore, limiter, global_progress)
                     queue.task_done()
                 except asyncio.QueueEmpty:
                     break
                 except Exception as e:
-                    log.error(f"Worker Error: {e}")
+                    log.error(f"Worker {worker_id} Error: {e}")
 
         # Number of workers matches concurrency limit
-        worker_count = CONCURRENCY_LIMIT
-        workers = [asyncio.create_task(download_worker()) for _ in range(worker_count)]
+        workers = [asyncio.create_task(download_worker(i)) for i in range(CONCURRENCY_LIMIT)]
 
         await asyncio.gather(*workers)
-
         log.info("Historical candle download complete.")
 
         # TODO: Implement optional tick download here in future iteration
