@@ -275,6 +275,11 @@ class Simulator:
         if h_active:
             last_ts = h_active[-1]['ts']
             if symbol in self._feature_cache and self._feature_cache[symbol].get('_ts') == last_ts:
+                # [PERF] If price hasn't moved significantly, return the fully cached featureset.
+                # In backtests, mid is constant per candle, so this allows O(1) feature retrieval.
+                if abs(mid - self._feature_cache[symbol].get('mid', 0)) < 1e-9:
+                    return self._feature_cache[symbol]
+
                 # Use cached stable features
                 features = self._feature_cache[symbol].copy()
 
@@ -282,7 +287,6 @@ class Simulator:
                 # 1. Real-time metrics
                 bid_vol, ask_vol = book.top_bid_ask_qty()
                 total_vol = bid_vol + ask_vol
-                mid = (book.best_bid + book.best_ask) / 2
                 features.update({
                     "imbalance": current_imb,
                     "imb_delta": imb_delta,
@@ -294,7 +298,6 @@ class Simulator:
                 })
 
                 # 2. Price-dependent patterns (Must re-check against live price)
-                # Note: We re-use stable data like fvg_data from the cache but re-evaluate reaction
                 struct_data = identify_structure(h_active)
                 sweep_data = detect_sweeps(h_active)
                 idm_data = detect_idm(h_active)
@@ -916,7 +919,7 @@ class Simulator:
         if is_contrarian:
             side_str = f"{(original_side or side).upper()} [Flipped to {side.upper()}]"
 
-        log.info(f"FILLED ENTRY {symbol} {side_str} {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
+        log.info(f"FILLED ENTRY {symbol} {side_str} [Strat: {strategy_id}] {qty:.3f} @ {fill_price:.8f} ({order_type.upper()}) [{btc_conf}] drt={drt:.4f} | equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 
         if self.engine:
             self.engine._report_entry(symbol, side, qty, fill_price, original_side, is_contrarian, ts=now, strategy_id=strategy_id, features=features)
@@ -956,7 +959,7 @@ class Simulator:
         if pos.get("is_contrarian"):
             side_str = f"{pos.get('original_side', side).upper()} [Flipped to {side.upper()}]"
 
-        log.info(f"EXIT {'PARTIAL' if is_partial else 'FULL'} {sym} {side_str} {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
+        log.info(f"EXIT {'PARTIAL' if is_partial else 'FULL'} {sym} {side_str} [Strat: {pos.get('strategy_id')}] {exit_type.upper()} ({order_type.upper()}) @ {fill_price:.8f} PnL={pnl:.4f} net={round_trip_pnl:.4f} "
                  f"[{pos['btc_conf']}] drt_entry={pos.get('entry_drt',0.5):.4f} drt_exit={exit_drt:.4f} | "
                  f"equity={self.equity:.2f} used_margin={self.used_margin:.2f}")
 

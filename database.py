@@ -128,6 +128,16 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time ON candles (symbol, timeframe, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session_id)")
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS asset_metadata (
+                    symbol TEXT,
+                    timeframe TEXT,
+                    earliest_ts REAL,
+                    is_exhausted INTEGER,
+                    PRIMARY KEY (symbol, timeframe)
+                )
+            """)
+
             # Create a new session
             cursor = conn.execute("INSERT INTO sessions (start_time) VALUES (?)", (time.time(),))
             self.session_id = cursor.lastrowid
@@ -154,6 +164,11 @@ class Database:
 
                 cursor = conn.cursor()
                 for type, data in items:
+                    if type == "metadata":
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO asset_metadata (symbol, timeframe, earliest_ts, is_exhausted)
+                            VALUES (?, ?, ?, ?)
+                        """, data)
                     if type == "tick":
                         cursor.execute(
                             "INSERT INTO ticks (symbol, timestamp, price, side, size) VALUES (?, ?, ?, ?, ?)",
@@ -290,23 +305,23 @@ class Database:
     def get_all_candle_stats(self) -> Dict[str, Dict[str, Dict[str, float]]]:
         """
         [REPAIR-20260702] Fetches coverage stats for all symbols and timeframes in one query.
-        Returns {symbol: {tf: {'count': N, 'min': T1, 'max': T2}}}
+        Returns {symbol: {tf: {'count': N, 'min': T1, 'max': T2, 'is_exhausted': bool}}}
         """
         cursor = self.connection.execute("""
-            SELECT symbol, timeframe, COUNT(*), MIN(timestamp), MAX(timestamp)
-            FROM candles
-            GROUP BY symbol, timeframe
+            SELECT c.symbol, c.timeframe, COUNT(*), MIN(c.timestamp), MAX(c.timestamp), m.is_exhausted
+            FROM candles c
+            LEFT JOIN asset_metadata m ON c.symbol = m.symbol AND c.timeframe = m.timeframe
+            GROUP BY c.symbol, c.timeframe
         """)
         stats = {}
-        for sym, tf, count, t_min, t_max in cursor.fetchall():
+        for sym, tf, count, t_min, t_max, exhausted in cursor.fetchall():
             if sym not in stats: stats[sym] = {}
-            stats[sym][tf] = {'count': count, 'min': t_min, 'max': t_max}
+            stats[sym][tf] = {'count': count, 'min': t_min, 'max': t_max, 'is_exhausted': bool(exhausted)}
         return stats
 
     def has_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, stats_cache: dict = None) -> bool:
         """
-        [REPAIR-20260702] Fast-check for gaps using counts.
-        [REPAIR-20260707] Accuracy Fix: Checks if data covers requested range without holes.
+        [REPAIR-20260707] Fast-check for gaps with Listing-Awareness.
         """
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
@@ -314,26 +329,37 @@ class Database:
         }
         step = tf_seconds.get(timeframe, 60)
 
-        # 1. Check cached global stats first for speed
+        # 1. Check Metadata for Listing Completeness
+        is_exhausted = False
         if stats_cache and symbol in stats_cache and timeframe in stats_cache[symbol]:
             s = stats_cache[symbol][timeframe]
-            # Use cached global bounds to see if we even need to check this range
-            # If global max is before our target start, it's definitely incomplete
-            if s['max'] < start_ts: return True
-            # If global min is after our target end, it's definitely incomplete
-            if s['min'] > end_ts: return True
+            is_exhausted = s.get('is_exhausted', False)
 
-            # [REPAIR-20260707] Listing-Aware Completeness
-            # If start_ts is far in past (2022) but s['min'] is e.g. 2024,
-            # and there are NO INTERNAL GAPS, we call it complete (it's a new listing).
-            # This fulfills the "7 of 250" requirement correctly.
+            # End must be covered (within 1 hour)
+            if s['max'] < end_ts - step * 60: return True
+
+            # If not exhausted, start must be covered (within 1 hour)
+            if not is_exhausted and s['min'] > start_ts + step * 60: return True
 
             # Check internal continuity based on what WE HAVE
+            # We allow 5 candles tolerance for minor exchange maintenance
             expected_total = int((s['max'] - s['min']) / step) + 1
-            if s['count'] >= expected_total - 5:
-                # Range check: must cover up to end_ts
-                if s['max'] >= end_ts - step * 60:
-                    return False
+            if s['count'] < expected_total - 5:
+                return True # Internal gaps found in cache
+
+            # If start is covered (or exhausted) and end is covered and count matches, it's complete
+            return False
+
+        if stats_cache and symbol not in stats_cache:
+             # Check if we are exhausted even if no candles exist
+             cursor = self.connection.execute("SELECT is_exhausted FROM asset_metadata WHERE symbol=? AND timeframe=?", (symbol, timeframe))
+             row = cursor.fetchone()
+             if row and bool(row[0]): return False # Exhausted with 0 candles is "complete" for its history
+             return True
+        else:
+            cursor = self.connection.execute("SELECT is_exhausted FROM asset_metadata WHERE symbol=? AND timeframe=?", (symbol, timeframe))
+            row = cursor.fetchone()
+            is_exhausted = bool(row[0]) if row else False
 
         # 2. Detailed range check (query DB)
         cursor = self.connection.execute("""
@@ -344,23 +370,13 @@ class Database:
         if not res or res[0] == 0: return True
         count, first, last = res
 
-        # 2. Check Range Coverage
-        # Data must cover the requested range (with a 20-candle tolerance for exchange pruning/listings)
-        if first > start_ts + step * 20:
-            # Check if this is a recent listing. If it was listed after start_ts,
-            # and we have data from its listing time, we'll call it complete ONLY if
-            # we are not trying to fetch historical.
-            # For the 0 of 250 report, if start_ts is 2022 and we have 2026, it's NOT complete.
-            return True
-        if last < end_ts - step * 20: return True
+        # Coverage check
+        if last < end_ts - step * 60: return True
+        if not is_exhausted and first > start_ts + step * 60: return True
 
-        # 3. Check Continuity
-        # Total expected candles in the range
-        expected_count = int((end_ts - start_ts) / step) + 1
-
-        # We allow a small tolerance (1% or 10 candles) for exchange-side gaps
-        tolerance = max(10, int(expected_count * 0.01))
-        if count < expected_count - tolerance:
+        # Continuity Check
+        expected_in_range = int((last - first) / step) + 1
+        if count < expected_in_range - 5:
             return True
 
         return False
@@ -428,6 +444,10 @@ class Database:
 
     def purge_old_sessions(self, keep_sessions=3):
         self.write_queue.put(("purge_sessions", keep_sessions))
+
+    def mark_exhausted(self, symbol, timeframe, earliest_ts):
+        """[REPAIR-20260707] Persists that we reached the beginning of history."""
+        self.write_queue.put(("metadata", (symbol, timeframe, earliest_ts, 1)))
 
     def stop(self):
         self.stop_event.set()

@@ -9,15 +9,19 @@ session and killzone alignment.
 import math
 from datetime import datetime
 import pytz
-from typing import List
+from typing import List, Dict
+import functools
 
 # --- Configuration ---
 TIMEZONE = "America/Toronto"
 _local_tz = pytz.timezone(TIMEZONE)
 
+@functools.lru_cache(maxsize=10000)
 def convert_to_local(timestamp_s: float) -> datetime:
-    """Converts a Unix timestamp to a localized datetime object."""
-    # PERFORMANCE: Use pre-cached timezone object
+    """
+    Converts a Unix timestamp to a localized datetime object.
+    [PERF] Cached to avoid expensive pytz/datetime operations on repetitive timestamps.
+    """
     utc_dt = datetime.fromtimestamp(timestamp_s, tz=pytz.UTC)
     return utc_dt.astimezone(_local_tz)
 

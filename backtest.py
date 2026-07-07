@@ -178,7 +178,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                     })
                     if response.get("code") == "00000":
                         data = response.get("data", [])
-                        if not data: return 0
+                        if not data: return -1 # Beginning of history
                         valid_count = 0
                         for c in data:
                             ts_ms = int(c[0])
@@ -204,7 +204,8 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             for i in range(num_chunks):
                 chunk_end_ms = target_end_ms - (i * chunk_ms)
                 if chunk_end_ms <= target_start_ms: break
-                await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
+                res = await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
+                if res == -1: break # Stop if beginning of history reached
 
     tasks = [download_asset_tf_gap(a, t, g) for a, t, g in all_gaps]
     await asyncio.gather(*tasks)

@@ -685,11 +685,11 @@ class Engine:
                                 side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
 
                             # Extract all feature keys (excluding common ones handled manually in log)
-                            exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct']
+                            exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct', 'strategy_id', 'symbol', 'features']
                             extra_features = {k: v for k, v in signal.items() if k not in exclude and v is not None}
                             feat_msg = " ".join([f"{k}={v}" for k, v in extra_features.items()])
 
-                            signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
+                            signal_msg = (f"SIGNAL: {sym} {side_str} [Strat: {signal.get('strategy_id')}] qty={qty:.3f} "
                                           f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
                                           f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
                                           f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")

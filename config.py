@@ -158,7 +158,7 @@ RESTRICT_STRUCTURE = False # [OP-007] Set to True to require BOS/MSS for entry
 
 # --- Logging & UI ---
 LOG_REJECTIONS = False
-LOG_SIGNALS = False
+LOG_SIGNALS = True
 SHOW_PERIODIC_SUMMARY = True
 SUMMARY_INTERVAL_SECONDS = 15
 

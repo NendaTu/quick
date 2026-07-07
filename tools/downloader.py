@@ -105,7 +105,7 @@ class RateLimiter:
                 await asyncio.sleep(wait_time)
             self.last_call = time.time()
 
-async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter, progress: Progress):
+async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter, progress: Progress, worker_id: int):
     """
     Downloads gaps for a single asset/timeframe.
     Updates the shared GlobalProgress bar.
@@ -133,8 +133,8 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
                 if response.get("code") == "00000":
                     data = response.get("data", [])
                     if not data:
-                        # [REPAIR-20260707] Mark as reached beginning of history to stop pointless fetching
-                        return -1
+                            db.mark_exhausted(asset, tf, chunk_end_ms / 1000)
+                            return -1
 
                     valid_count = 0
                     for c in data:
@@ -226,10 +226,9 @@ async def main():
             while not queue.empty():
                 try:
                     asset, tf = queue.get_nowait()
-                    # Heartbeat for debugging freezes
-                    if random.random() < 0.05: # Occasional heartbeat
-                         log.debug(f"Worker {worker_id}: Processing {asset} {tf}...")
-                    await download_asset_tf(client, db, asset, tf, semaphore, limiter, global_progress)
+                    # Regular heartbeat for responsiveness proof
+                    log.info(f"Worker {worker_id}: Processing {asset} {tf}...")
+                    await download_asset_tf(client, db, asset, tf, semaphore, limiter, global_progress, worker_id)
                     queue.task_done()
                 except asyncio.QueueEmpty:
                     break
