@@ -204,13 +204,11 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             chunk_ms = 200 * tf_seconds[tf] * 1000
             num_chunks = math.ceil(total_gap_ms / chunk_ms)
 
-            tasks = []
+            # [REPAIR-20260702] Sequential chunking to prevent freeze
             for i in range(num_chunks):
                 chunk_end_ms = target_end_ms - (i * chunk_ms)
-                tasks.append(fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms))
-
-            if tasks:
-                await asyncio.gather(*tasks)
+                if chunk_end_ms <= target_start_ms: break
+                await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
 
     tasks = [download_asset_tf_gap(a, t, g) for a, t, g in all_gaps]
     await asyncio.gather(*tasks)

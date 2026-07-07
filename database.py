@@ -3,6 +3,7 @@ import time
 import logging
 import threading
 import queue
+from typing import Dict
 
 log = logging.getLogger("scalper.database")
 
@@ -286,10 +287,25 @@ class Database:
         """, (symbol, timeframe, start_ts, end_ts))
         return cursor.fetchall()
 
-    def has_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float) -> bool:
+    def get_all_candle_stats(self) -> Dict[str, Dict[str, Dict[str, float]]]:
+        """
+        [REPAIR-20260702] Fetches coverage stats for all symbols and timeframes in one query.
+        Returns {symbol: {tf: {'count': N, 'min': T1, 'max': T2}}}
+        """
+        cursor = self.connection.execute("""
+            SELECT symbol, timeframe, COUNT(*), MIN(timestamp), MAX(timestamp)
+            FROM candles
+            GROUP BY symbol, timeframe
+        """)
+        stats = {}
+        for sym, tf, count, t_min, t_max in cursor.fetchall():
+            if sym not in stats: stats[sym] = {}
+            stats[sym][tf] = {'count': count, 'min': t_min, 'max': t_max}
+        return stats
+
+    def has_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, stats_cache: dict = None) -> bool:
         """
         [REPAIR-20260702] Fast-check for gaps using counts.
-        Returns True if any gap is detected.
         """
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
@@ -298,17 +314,20 @@ class Database:
         step = tf_seconds.get(timeframe, 60)
         expected_count = int((end_ts - start_ts) / step)
 
-        # We allow a small tolerance for start/end alignment
-        cursor = self.connection.execute("""
-            SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM candles
-            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
-        """, (symbol, timeframe, start_ts, end_ts))
-        count, first, last = cursor.fetchone()
+        if stats_cache and symbol in stats_cache and timeframe in stats_cache[symbol]:
+            s = stats_cache[symbol][timeframe]
+            count, first, last = s['count'], s['min'], s['max']
+        else:
+            cursor = self.connection.execute("""
+                SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM candles
+                WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+            """, (symbol, timeframe, start_ts, end_ts))
+            count, first, last = cursor.fetchone()
 
         if not count or count == 0: return True
-        if count < expected_count - 2: return True # Tolerance for rounding
-        if first > start_ts + step * 2: return True
-        if last < end_ts - step * 2: return True
+        if count < expected_count - 5: return True # Small tolerance for start/end alignment
+        if first > start_ts + step * 5: return True
+        if last < end_ts - step * 5: return True
         return False
 
     def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:

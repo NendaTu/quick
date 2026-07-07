@@ -166,14 +166,12 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
         chunk_ms = 200 * step * 1000
         num_chunks = math.ceil(total_gap_ms / chunk_ms)
 
-        tasks = []
+        # [REPAIR-20260702] Sequential chunking per asset
+        # This prevents event loop saturation and ensures linear progress
         for i in range(num_chunks):
-            # endTime for chunk i (working backwards)
             chunk_end_ms = target_end_ms - (i * chunk_ms)
-            tasks.append(fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms))
-
-        if tasks:
-            await asyncio.gather(*tasks)
+            if chunk_end_ms <= target_start_ms: break
+            await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
 
 async def main():
     db = Database()
@@ -182,38 +180,33 @@ async def main():
     try:
         assets = await discover_assets(client)
 
-        # [REPAIR-20260702] Check for already completed assets to provide better progress feedback
+        # [REPAIR-20260702] Optimized Startup Check
         from backtest import MAX_START_DATE, MAX_END_DATE
         start_ts = MAX_START_DATE.timestamp()
         end_ts = MAX_END_DATE.timestamp()
 
+        # Use single-query stats to avoid N+1 startup freeze
+        stats_cache = db.get_all_candle_stats()
+
         completed_assets = []
         remaining_assets = []
 
-        # [REPAIR-20260702] Optimized loop using fast-check has_data_gaps
         for asset in assets:
             is_complete = True
             for tf in AVAILABLE_TIMEFRAMES:
-                # Use the new fast-check to avoid freezing on massive gap scans
-                if db.has_data_gaps(asset, tf, start_ts, end_ts):
-                    is_complete = False
-                    break
-            if is_complete:
-                completed_assets.append(asset)
-            else:
-                remaining_assets.append(asset)
+                if db.has_data_gaps(asset, tf, start_ts, end_ts, stats_cache=stats_cache):
+                    is_complete = False; break
+            if is_complete: completed_assets.append(asset)
+            else: remaining_assets.append(asset)
 
-        if completed_assets:
-            log.info(f"{len(completed_assets)} of {len(assets)} assets have complete data across {len(AVAILABLE_TIMEFRAMES)} timeframes.")
-            if remaining_assets:
-                log.info(f"Starting download for {len(remaining_assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
-            else:
-                log.info("All assets are already complete. Nothing to download.")
-                db.stop()
-                return
-        else:
-            log.info(f"Starting download for {len(assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
-            remaining_assets = assets
+        # [REPAIR-20260702] Hard-coded log format as requested
+        log.info(f"{len(completed_assets)} of {len(assets)} assets have complete data across {len(AVAILABLE_TIMEFRAMES)} timeframes.")
+
+        if not remaining_assets:
+            log.info("All assets are already complete. Nothing to download.")
+            db.stop(); return
+
+        log.info(f"Starting download for {len(remaining_assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
 
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
         limiter = RateLimiter(GLOBAL_RATE_LIMIT)
