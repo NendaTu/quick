@@ -19,7 +19,7 @@ import pytz
 # Ensure project root is in path
 sys.path.append(os.getcwd())
 
-from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, ASSETS_COUNT, ASSET_OMITTED, AVAILABLE_TIMEFRAMES
+from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, ASSETS_COUNT, ASSET_OMITTED, AVAILABLE_TIMEFRAMES, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
 from database import Database
 from bitget_client import BitGetClient
 
@@ -105,11 +105,12 @@ class RateLimiter:
                 await asyncio.sleep(wait_time)
             self.last_call = time.time()
 
-async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter):
-    from backtest import MAX_START_DATE, MAX_END_DATE
-
-    tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
-    step = tf_seconds.get(tf, 60)
+async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter, progress: Progress):
+    """
+    Downloads gaps for a single asset/timeframe.
+    Updates the shared GlobalProgress bar.
+    """
+    step = TF_SECONDS.get(tf, 60)
 
     start_ts = MAX_START_DATE.timestamp()
     end_ts = MAX_END_DATE.timestamp()
@@ -119,20 +120,11 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
     if not gaps:
         return
 
-    # Total expected candles across all gaps (approximate)
-    total_expected = sum((g[1] - g[0] + step) for g in gaps) / step
-    progress = Progress(max(1, int(total_expected)), label=f"{asset}: {tf}")
-
-    # [REPAIR-20260702] Implement Asynchronous Batching with controlled concurrency
-    # We no longer fire thousands of tasks at once. We use the global semaphore
-    # to control total concurrent API requests across all assets.
-
     async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
-        # Inner function to fetch a single chunk
+        # [REPAIR-20260707] Controlled request-level concurrency
         async with semaphore:
             try:
                 await limiter.wait()
-                # [REPAIR-20260702] Single source of truth for requests and backoff in BitGetClient
                 response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
                     "symbol": asset, "productType": "usdt-futures", "granularity": tf,
                     "endTime": str(chunk_end_ms), "limit": "200"
@@ -166,8 +158,7 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
         chunk_ms = 200 * step * 1000
         num_chunks = math.ceil(total_gap_ms / chunk_ms)
 
-        # [REPAIR-20260702] Sequential chunking per asset
-        # This prevents event loop saturation and ensures linear progress
+        # [REPAIR-20260702] Sequential chunking to prevent freeze
         for i in range(num_chunks):
             chunk_end_ms = target_end_ms - (i * chunk_ms)
             if chunk_end_ms <= target_start_ms: break
@@ -181,7 +172,6 @@ async def main():
         assets = await discover_assets(client)
 
         # [REPAIR-20260702] Optimized Startup Check
-        from backtest import MAX_START_DATE, MAX_END_DATE
         start_ts = MAX_START_DATE.timestamp()
         end_ts = MAX_END_DATE.timestamp()
 
@@ -200,6 +190,7 @@ async def main():
             else: remaining_assets.append(asset)
 
         # [REPAIR-20260702] Hard-coded log format as requested
+        # [REPAIR-20260707] Always show these lines to ensure transparency
         log.info(f"{len(completed_assets)} of {len(assets)} assets have complete data across {len(AVAILABLE_TIMEFRAMES)} timeframes.")
 
         if not remaining_assets:
@@ -208,16 +199,46 @@ async def main():
 
         log.info(f"Starting download for {len(remaining_assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
 
+        # [REPAIR-20260707] Calculate total candles for a GLOBAL progress bar
+        total_candles = 0
+
+        # This pass is fast because it uses the stats_cache / fast gap check
+        for asset in remaining_assets:
+            for tf in AVAILABLE_TIMEFRAMES:
+                gaps = db.get_data_gaps(asset, tf, start_ts, end_ts, merge_threshold=10)
+                if gaps:
+                    total_candles += sum((g[1] - g[0] + TF_SECONDS[tf]) for g in gaps) / TF_SECONDS[tf]
+
+        global_progress = Progress(int(total_candles), label=f"Acquisition: {len(remaining_assets)} Assets")
+
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
         limiter = RateLimiter(GLOBAL_RATE_LIMIT)
 
-        # Download candles (High priority)
-        tasks = []
+        # [REPAIR-20260707] Worker Pool Pattern
+        # Instead of creating thousands of tasks, we use a controlled set of workers
+        # to process the download queue. This ensures event loop stability and
+        # prevents the application from "freezing" under heavy task load.
+        queue = asyncio.Queue()
         for asset in remaining_assets:
             for tf in AVAILABLE_TIMEFRAMES:
-                tasks.append(download_asset_tf(client, db, asset, tf, semaphore, limiter))
+                queue.put_nowait((asset, tf))
 
-        await asyncio.gather(*tasks)
+        async def download_worker():
+            while not queue.empty():
+                try:
+                    asset, tf = queue.get_nowait()
+                    await download_asset_tf(client, db, asset, tf, semaphore, limiter, global_progress)
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+                except Exception as e:
+                    log.error(f"Worker Error: {e}")
+
+        # Number of workers matches concurrency limit
+        worker_count = CONCURRENCY_LIMIT
+        workers = [asyncio.create_task(download_worker()) for _ in range(worker_count)]
+
+        await asyncio.gather(*workers)
 
         log.info("Historical candle download complete.")
 

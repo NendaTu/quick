@@ -306,28 +306,49 @@ class Database:
     def has_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, stats_cache: dict = None) -> bool:
         """
         [REPAIR-20260702] Fast-check for gaps using counts.
+        [REPAIR-20260707] Accuracy Fix: Checks if data covers requested range without holes.
         """
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
             "1H": 3600, "4H": 14400, "1D": 86400
         }
         step = tf_seconds.get(timeframe, 60)
-        expected_count = int((end_ts - start_ts) / step)
 
+        # 1. Check cached global stats first for speed
         if stats_cache and symbol in stats_cache and timeframe in stats_cache[symbol]:
             s = stats_cache[symbol][timeframe]
-            count, first, last = s['count'], s['min'], s['max']
-        else:
-            cursor = self.connection.execute("""
-                SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM candles
-                WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
-            """, (symbol, timeframe, start_ts, end_ts))
-            count, first, last = cursor.fetchone()
+            # If the whole database for this asset doesn't cover our range, it has gaps
+            if s['max'] < end_ts - step * 60: return True
+            if s['min'] > start_ts + step * 60: return True
 
-        if not count or count == 0: return True
-        if count < expected_count - 5: return True # Small tolerance for start/end alignment
-        if first > start_ts + step * 5: return True
-        if last < end_ts - step * 5: return True
+        # 2. Detailed range check (query DB)
+        cursor = self.connection.execute("""
+            SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+        """, (symbol, timeframe, start_ts, end_ts))
+        res = cursor.fetchone()
+        if not res or res[0] == 0: return True
+        count, first, last = res
+
+        # 2. Check Range Coverage
+        # Data must cover the requested range (with a 20-candle tolerance for exchange pruning/listings)
+        if first > start_ts + step * 20:
+            # Check if this is a recent listing. If it was listed after start_ts,
+            # and we have data from its listing time, we'll call it complete ONLY if
+            # we are not trying to fetch historical.
+            # For the 0 of 250 report, if start_ts is 2022 and we have 2026, it's NOT complete.
+            return True
+        if last < end_ts - step * 20: return True
+
+        # 3. Check Continuity
+        # Total expected candles in the range
+        expected_count = int((end_ts - start_ts) / step) + 1
+
+        # We allow a small tolerance (1% or 10 candles) for exchange-side gaps
+        tolerance = max(10, int(expected_count * 0.01))
+        if count < expected_count - tolerance:
+            return True
+
         return False
 
     def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:

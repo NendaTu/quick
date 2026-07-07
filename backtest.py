@@ -19,7 +19,7 @@ import config
 from database import Database
 from bitget_client import BitGetClient
 from engine.simulation import SimulationEngine
-from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED
+from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
 from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
 # --- Backtest Settings ---
@@ -30,9 +30,6 @@ DIRECTION_MODE = "strict" # "strict" or "open"
 # Set to [] to enable automatic discovery by volume
 DEFAULT_ASSETS = ["ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT", "SOLUSDT", "ENAUSDT", "SUIUSDT", "DOGEUSDT"]
 DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
-# June 1, 2022 to June 1, 2026 (Global Range)
-MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
-MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
 # Default to Dec 2025 - June 2026 as requested by user
 DEFAULT_START_DATE = datetime(2026, 5, 1, tzinfo=pytz.UTC)
@@ -116,7 +113,6 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     if not silent:
         log.debug(f"Acquiring historical data for {target_tfs}...")
 
-    tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
     session_start = time.time()
 
     # Determine if warm-up is required
@@ -147,7 +143,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             gaps = db.get_data_gaps(asset, tf, dl_start_ts, END_DATE.timestamp())
             if gaps:
                 all_gaps.append((asset, tf, gaps))
-                total_candles += sum((g[1] - g[0] + tf_seconds[tf]) for g in gaps) / tf_seconds[tf]
+                total_candles += sum((g[1] - g[0] + TF_SECONDS[tf]) for g in gaps) / TF_SECONDS[tf]
             else:
                 skipped_count += 1
 
@@ -201,7 +197,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             target_end_ms = int(gap_end * 1000)
 
             total_gap_ms = target_end_ms - target_start_ms
-            chunk_ms = 200 * tf_seconds[tf] * 1000
+            chunk_ms = 200 * TF_SECONDS[tf] * 1000
             num_chunks = math.ceil(total_gap_ms / chunk_ms)
 
             # [REPAIR-20260702] Sequential chunking to prevent freeze
