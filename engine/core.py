@@ -203,16 +203,26 @@ class Engine:
 
         # [TECH-001] Determine Strategy ID for attribution
         if strategy_id is None:
-             strat_id = getattr(self, "strategy", None)
-             strategy_id = strat_id.name if strat_id else "model"
+             strat = getattr(self, "strategy", None)
+             strategy_id = getattr(strat, "strategy_id", strat.name) if strat else "model"
 
-        self.open_positions[pos_key] = {
-            "side": side, "qty": qty, "entry": entry,
-            "orig_side": orig_side, "is_contr": is_contr,
-            "margin": margin,
-            "ts": entry_ts,
-            "strategy_id": strategy_id
-        }
+        if pos_key in self.open_positions:
+            # Scaling up an existing position
+            p = self.open_positions[pos_key]
+            total_qty = p["qty"] + qty
+            # Update weighted average entry price for tracking
+            p["entry"] = (p["entry"] * p["qty"] + entry * qty) / total_qty
+            p["qty"] = total_qty
+            p["margin"] += margin
+            # Keep the ORIGINAL strategy_id as the primary owner for attribution
+        else:
+            self.open_positions[pos_key] = {
+                "side": side, "qty": qty, "entry": entry,
+                "orig_side": orig_side, "is_contr": is_contr,
+                "margin": margin,
+                "ts": entry_ts,
+                "strategy_id": strategy_id
+            }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
@@ -646,12 +656,12 @@ class Engine:
                                 sig = strat.get_entry_signal(market_data)
                                 if sig:
                                     # Ensure signal knows who sent it
-                                    sig["strategy_id"] = strat.name
+                                    sig["strategy_id"] = getattr(strat, "strategy_id", strat.name)
                                     active_signals.append(sig)
                         elif hasattr(self, "strategy") and self.strategy:
                             sig = self.strategy.get_entry_signal(market_data)
                             if sig:
-                                sig["strategy_id"] = self.strategy.name
+                                sig["strategy_id"] = getattr(self.strategy, "strategy_id", self.strategy.name)
                                 active_signals.append(sig)
                         else:
                             sig = self.model.predict(sym, book, self.equity, features=feat)
@@ -685,11 +695,11 @@ class Engine:
                                 side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
 
                             # Extract all feature keys (excluding common ones handled manually in log)
-                            exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct']
+                            exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct', 'strategy_id', 'symbol', 'features']
                             extra_features = {k: v for k, v in signal.items() if k not in exclude and v is not None}
                             feat_msg = " ".join([f"{k}={v}" for k, v in extra_features.items()])
 
-                            signal_msg = (f"SIGNAL: {sym} {side_str} qty={qty:.3f} "
+                            signal_msg = (f"SIGNAL: {sym} {side_str} [Strat: {signal.get('strategy_id')}] qty={qty:.3f} "
                                           f"entry={entry:.8f} exit={tp:.8f} stop={stop:.8f} "
                                           f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
                                           f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")

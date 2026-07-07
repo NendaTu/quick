@@ -10,6 +10,8 @@ A Swing High is a peak where High[t] > High[t-1] and High[t] > High[t+1].
 
 from typing import List, Dict, Optional
 
+_swing_cache = {}
+
 # --- Internal Configuration ---
 ENABLED = True
 STRENGTH = 2 # Number of bars required on each side to confirm a swing point
@@ -17,13 +19,16 @@ STRENGTH = 2 # Number of bars required on each side to confirm a swing point
 def detect_swings(ohlcv: List[dict], strength: int = 2) -> Dict[str, List[dict]]:
     """
     Scans OHLCV data for confirms swing high and low points.
-
-    Returns:
-        A dictionary with 'highs' and 'lows' lists, each containing
-        {'price': float, 'index': int, 'timestamp': float}.
+    [PERF] Implements bar-count caching to avoid O(N^2) scans.
     """
     if not ENABLED or len(ohlcv) < (strength * 2 + 1):
         return {'highs': [], 'lows': []}
+
+    # 1. Check Cache
+    # We use (first_ts, last_ts, len, strength) as a fingerprint
+    cache_key = (ohlcv[0]['ts'], ohlcv[-1]['ts'], len(ohlcv), strength)
+    if cache_key in _swing_cache:
+        return _swing_cache[cache_key]
 
     swing_highs = []
     swing_lows = []
@@ -46,10 +51,14 @@ def detect_swings(ohlcv: List[dict], strength: int = 2) -> Dict[str, List[dict]]
         if is_low:
             swing_lows.append({'price': curr['l'], 'index': i, 'timestamp': curr['ts']})
 
-    return {
+    res = {
         'highs': swing_highs,
         'lows': swing_lows
     }
+
+    if len(_swing_cache) > 1000: _swing_cache.clear()
+    _swing_cache[cache_key] = res
+    return res
 
 def get_signal(ohlcv, tf, params=None, **kwargs):
     """

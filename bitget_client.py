@@ -43,7 +43,7 @@ class BitGetClient:
             "locale": "en-US"
         }
 
-    async def request(self, method: str, path: str, params: Dict = None, data: Dict = None, retries: int = 5) -> Dict:
+    async def request(self, method: str, path: str, params: Dict = None, data: Dict = None, retries: int = 7) -> Dict:
         session = await self.get_session()
 
         signed_path = path
@@ -53,16 +53,20 @@ class BitGetClient:
 
         url = self.base_url + signed_path
         body = json.dumps(data) if data else ""
-        headers = self._get_headers(method, signed_path, body)
 
         for attempt in range(retries):
+            headers = self._get_headers(method, signed_path, body)
             try:
+                # Add a tiny delay if we've already hit limits to let the bucket drain
+                if attempt > 0:
+                    await asyncio.sleep(0.1 * attempt)
+
                 async with session.request(method, url, data=body, headers=headers, timeout=30) as response:
                     if response.status == 429:
-                        wait = (2 ** attempt) + (random.random() * 0.1)
+                        # [REPAIR-20260702] Jittered exponential backoff
+                        wait = (2 ** attempt) + (random.random() * 0.5)
                         log.warning(f"Rate limited (429). Retrying in {wait:.2f}s... (Attempt {attempt+1}/{retries})")
                         await asyncio.sleep(wait)
-                        headers = self._get_headers(method, signed_path, body)
                         continue
 
                     try:
@@ -76,11 +80,11 @@ class BitGetClient:
                             continue
                         return {"code": "error", "msg": f"JSON parse error: {json_err}", "data": None}
 
-                    if result.get("code") == "429" or result.get("code") == "400031": # Bitget specific rate limit codes
-                        wait = (2 ** attempt) + (random.random() * 0.1)
+                    if result.get("code") in ["429", "400031", "40053"] and "verification failed" not in result.get("msg", ""):
+                        # Bitget specific rate limit codes
+                        wait = (2 ** attempt) + (random.random() * 0.5)
                         log.warning(f"Rate limited ({result.get('code')}). Retrying in {wait:.2f}s... (Attempt {attempt+1}/{retries})")
                         await asyncio.sleep(wait)
-                        headers = self._get_headers(method, signed_path, body)
                         continue
 
                     if result.get("code") != "00000":

@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+import pytz
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -46,6 +48,16 @@ ASSET_REDISCOVERY_HOURS = 6.0
 # Assets to exclude from trading.
 ASSET_OMITTED = ["BTCUSDT"]
 BTC_SYMBOL = "BTCUSDT"
+
+# --- Acquisition & Timeframes ---
+# June 1, 2022 to June 1, 2026 (Global Range)
+MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
+MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
+
+# Multi-Timeframe (MTF) analysis configuration.
+ACTIVE_TIMEFRAME = "1m"
+AVAILABLE_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H", "4H", "1D"]
+TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
 # --- Execution ---
 # Order type for entries, Take-Profits, and Stop-Losses.
@@ -137,10 +149,6 @@ RESTRICT_SCORE = False
 # Minimum confidence required to trade.
 MIN_CONFIDENCE = 0.66
 
-# Multi-Timeframe (MTF) analysis configuration.
-ACTIVE_TIMEFRAME = "1m"
-AVAILABLE_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H", "4H", "1D"]
-
 # --- Global Restriction Toggles ---
 RESTRICT_IMBALANCE = True
 RESTRICT_HTF_BIAS = True
@@ -150,7 +158,7 @@ RESTRICT_STRUCTURE = False # [OP-007] Set to True to require BOS/MSS for entry
 
 # --- Logging & UI ---
 LOG_REJECTIONS = False
-LOG_SIGNALS = False
+LOG_SIGNALS = True
 SHOW_PERIODIC_SUMMARY = True
 SUMMARY_INTERVAL_SECONDS = 15
 

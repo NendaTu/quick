@@ -172,13 +172,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     self.record_milestone("Phase 1: ATR Expansion Anchor", cand['ts'], range_tf)
 
         # Check for range expiration
-        # If a new 4H candle closes and we are still in WAITING_FOR_SWEEP,
-        # and it's NOT the anchor candle, reset.
+        # If too many 4H candles pass since the anchor without a sweep, reset.
         if state == "WAITING_FOR_SWEEP" and anchor:
             if len(h4) < 2: return None
             last_closed_h4_ts = h4[-2]['ts']
-            if last_closed_h4_ts > anchor['ts'] and not expansion['is_expansion']:
-                # Sequence never started (no sweep), and a new normal candle appeared.
+            # Allow 24 hours (6 candles of 4H) for a sweep to occur
+            if last_closed_h4_ts > anchor['ts'] + (6 * 14400) and not expansion['is_expansion']:
+                # Sequence never started (no sweep) within 24 hours.
                 self.save_state(state_key, "IDLE", self.simulator)
                 self.save_state(f"{symbol}_atr_anchor", None, self.simulator)
                 state = "IDLE"

@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 import math
+import random
 import logging
 import time
 import importlib
@@ -18,7 +19,7 @@ import config
 from database import Database
 from bitget_client import BitGetClient
 from engine.simulation import SimulationEngine
-from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED
+from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
 from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
 # --- Backtest Settings ---
@@ -29,9 +30,6 @@ DIRECTION_MODE = "strict" # "strict" or "open"
 # Set to [] to enable automatic discovery by volume
 DEFAULT_ASSETS = ["ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT", "SOLUSDT", "ENAUSDT", "SUIUSDT", "DOGEUSDT"]
 DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
-# June 1, 2022 to June 1, 2026 (Global Range)
-MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
-MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
 # Default to Dec 2025 - June 2026 as requested by user
 DEFAULT_START_DATE = datetime(2026, 5, 1, tzinfo=pytz.UTC)
@@ -115,7 +113,6 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     if not silent:
         log.debug(f"Acquiring historical data for {target_tfs}...")
 
-    tf_seconds = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
     session_start = time.time()
 
     # Determine if warm-up is required
@@ -146,7 +143,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
             gaps = db.get_data_gaps(asset, tf, dl_start_ts, END_DATE.timestamp())
             if gaps:
                 all_gaps.append((asset, tf, gaps))
-                total_candles += sum((g[1] - g[0] + tf_seconds[tf]) for g in gaps) / tf_seconds[tf]
+                total_candles += sum((g[1] - g[0] + TF_SECONDS[tf]) for g in gaps) / TF_SECONDS[tf]
             else:
                 skipped_count += 1
 
@@ -161,36 +158,54 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     global_progress = Progress(int(total_candles), label=f"Acquisition: {len(assets)} Assets")
     assets_completed = 0
 
-    semaphore = asyncio.Semaphore(5)
+    from engine.exchanges.bitget import BitgetExchange
+    semaphore = asyncio.Semaphore(BitgetExchange.DEFAULT_CONCURRENCY)
     from tools.downloader import RateLimiter
-    limiter = RateLimiter(15)
+    limiter = RateLimiter(BitgetExchange.DEFAULT_RPS)
 
     async def download_asset_tf_gap(asset, tf, gaps):
         nonlocal assets_completed
-        async with semaphore:
-            for gap_start, gap_end in gaps:
-                current_end = int(gap_end * 1000)
-                target_start_ms = int(gap_start * 1000)
-                while current_end > target_start_ms:
+
+        # [REPAIR-20260702] Use optimized batch fetching with global semaphore
+        async def fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms):
+            async with semaphore:
+                try:
                     await limiter.wait()
+                    # Single source of truth for request and backoff
                     response = await client.request("GET", "/api/v2/mix/market/history-candles", params={
                         "symbol": asset, "productType": "usdt-futures", "granularity": tf,
-                        "endTime": str(current_end), "limit": "200"
+                        "endTime": str(chunk_end_ms), "limit": "200"
                     })
-                    if response.get("code") in ["429", "400031", "40053"]:
-                        await asyncio.sleep(5.0); continue
-                    data = response.get("data", [])
-                    if not data: break
-                    valid_count = 0
-                    for c in data:
-                        ts_ms = int(c[0])
-                        if ts_ms < target_start_ms:
-                            current_end = 0; break
-                        db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
-                        valid_count += 1
-                        current_end = min(current_end, ts_ms - 1)
-                    if valid_count == 0: break
-                    global_progress.update(valid_count)
+                    if response.get("code") == "00000":
+                        data = response.get("data", [])
+                        if not data: return -1 # Beginning of history
+                        valid_count = 0
+                        for c in data:
+                            ts_ms = int(c[0])
+                            if ts_ms < target_start_ms: continue
+                            if ts_ms > target_end_ms: continue
+                            db.save_candle(asset, tf, ts_ms / 1000, float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5]))
+                            valid_count += 1
+                        global_progress.update(valid_count)
+                        return valid_count
+                except Exception as e:
+                    log.error(f"Error in backtest fetch_chunk {asset} {tf}: {e}")
+                return 0
+
+        for gap_start, gap_end in gaps:
+            target_start_ms = int(gap_start * 1000)
+            target_end_ms = int(gap_end * 1000)
+
+            total_gap_ms = target_end_ms - target_start_ms
+            chunk_ms = 200 * TF_SECONDS[tf] * 1000
+            num_chunks = math.ceil(total_gap_ms / chunk_ms)
+
+            # [REPAIR-20260702] Sequential chunking to prevent freeze
+            for i in range(num_chunks):
+                chunk_end_ms = target_end_ms - (i * chunk_ms)
+                if chunk_end_ms <= target_start_ms: break
+                res = await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
+                if res == -1: break # Stop if beginning of history reached
 
     tasks = [download_asset_tf_gap(a, t, g) for a, t, g in all_gaps]
     await asyncio.gather(*tasks)
@@ -200,17 +215,32 @@ def find_strategy_file(query: str) -> Optional[str]:
     # [TECH-001] Support directory-based discovery (Families)
     if query == "strategies":
         return "strategies"
+
     potential_dir = os.path.join("strategies", query)
     if os.path.isdir(potential_dir):
         return potential_dir
 
-    # Check strategies/ first
-    for f in os.listdir("strategies"):
-        if query in f and f.endswith(".py"):
-            return os.path.join("strategies", f)
+    # 1. Search strategies/ recursively
+    strategy_matches = []
+    for root, dirs, files in os.walk("strategies"):
+        for file in files:
+            if file.endswith(".py") and not file.startswith("__") and "base_strategy" not in file:
+                rel_path = os.path.relpath(os.path.join(root, file), "strategies")
+                clean_path = rel_path.replace("\\", "/").replace(".py", "")
 
-    # Recursively search ta/
-    matches = []
+                # Exact match (e.g. "sweeps/killzone/killzone_sweep.1.mustafa")
+                if clean_path.lower() == query.lower():
+                    return os.path.join(root, file)
+
+                # Partial match (e.g. "killzone_sweep")
+                if query.lower() in clean_path.lower():
+                    strategy_matches.append(os.path.join(root, file))
+
+    if len(strategy_matches) == 1:
+        return strategy_matches[0]
+
+    # 2. Recursively search ta/
+    matches = strategy_matches # Merge strategy matches into the overall pool
 
     # Handle the singular/plural mapping (candle -> candles)
     mapping = {"candle": "candles", "pattern": "patterns", "indicator": "indicators"}
@@ -486,24 +516,17 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     if db:
         for segment in chain.segments:
             for wrapper in segment:
-                strat_id = getattr(wrapper.instance, "file_name", None) or getattr(wrapper.instance, "name", "")
-                if strat_id:
-                    db.connection.execute("DELETE FROM strategy_state WHERE strategy_id = ? AND key LIKE ?", (strat_id, f"{asset}%"))
-                    db.connection.commit()
+                strats = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+                for s in strats:
+                    strat_id = getattr(s, "strategy_id", None) or getattr(s, "name", "")
+                    if strat_id:
+                        db.connection.execute("DELETE FROM strategy_state WHERE strategy_id = ? AND key LIKE ?", (strat_id, f"{asset}%"))
+                        db.connection.commit()
 
     # USE THE UNIFIED SIMULATION ENGINE
     from engine.core import Engine
     engine = Engine(use_db=False)
     engine.start_time = time.time()
-
-    # [TECH-001] Load Strategy Family into Engine
-    engine.strategies = []
-    for segment in chain.segments:
-        for wrapper in segment:
-            if isinstance(wrapper.instance, list):
-                engine.strategies.extend(wrapper.instance)
-            else:
-                engine.strategies.append(wrapper.instance)
 
     sim = engine.exchange
     sim.db = db
@@ -566,17 +589,29 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     progress = Progress(len(full_history) - start_idx, label=f"BT {asset}: {tf}")
     chain.reset()
 
-    # Initialize wrappers with sim and FRESH instances to avoid state leakage between assets
+    # [TECH-001] Load Strategy Family into Engine with FRESH instances and simulator linked
+    engine.strategies = []
     for segment in chain.segments:
         for wrapper in segment:
             wrapper.simulator = sim
-            # Re-load instance with fresh state
+            # Re-load instance with fresh state and simulator linked
             wrapper.instance = wrapper._load_strategy(wrapper.path)
+
             # Re-apply overrides if any
             if wrapper.overrides:
-                for k, v in wrapper.overrides.items():
-                    if hasattr(wrapper.instance, "params") and k in wrapper.instance.params:
-                        wrapper.instance.params[k] = v
+                # Handle both list and single instance
+                strats = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+                for s in strats:
+                    for k, v in wrapper.overrides.items():
+                        if hasattr(s, "params") and k in s.params:
+                            s.params[k] = v
+
+            if isinstance(wrapper.instance, list):
+                engine.strategies.extend(wrapper.instance)
+            else:
+                engine.strategies.append(wrapper.instance)
+
+    log.info(f"Engine initialized with {len(engine.strategies)} strategies.")
 
     # Track pointers into history for each timeframe/symbol to avoid re-scanning
     pointers = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
@@ -668,7 +703,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                         sig = strat.get_entry_signal(market_data)
                         if sig:
-                            sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "name", "unknown")
+                            sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
                             active_signals.append(sig)
             else:
                 # Legacy Confluence Chain
@@ -804,30 +839,37 @@ def print_results(results):
     print("="*165 + "\n")
 
 def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
-    """[TECH-001] Unified timeframe discovery logic."""
-    tfs = {"1m"} # Always include execution timeframe
+    """
+    [TECH-001] Unified timeframe discovery logic.
+    [REPAIR-20260702] Strict scoping: Only include what's explicitly required
+    by the strategies in the chain. No 'forced' 1m unless explicitly needed.
+    """
+    tfs = set()
     for segment in chain.segments:
         for wrapper in segment:
             # Handle list of strategies (Family)
             strategies = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
             for strat in strategies:
+                # 1. Check explicit required_history (Class-based strategies)
+                if hasattr(strat, "required_history"):
+                    tfs.update(strat.required_history.keys())
+
+                # 2. Check range_tf in params
                 if hasattr(strat, "params") and "range_tf" in strat.params:
                     tfs.add(strat.params["range_tf"])
 
-            # Also check if range_tf is in config overrides or direct params
+            # 3. Check CLI overrides
             for p in wrapper.params:
                 if "range_tf=" in p:
                     tfs.add(p.split("=")[1])
             if "range_tf" in wrapper.overrides:
                 tfs.add(wrapper.overrides["range_tf"])
+            if "timeframe" in wrapper.overrides:
+                tfs.add(wrapper.overrides["timeframe"])
 
-    # If using indicators heavy strategies (mustafa), ensure 15m and 1H are included
-    # (Hardcoded for now as these strategies rely on them but don't define them in params)
-    for segment in chain.segments:
-        for wrapper in segment:
-             strat_name = getattr(wrapper.instance[0] if isinstance(wrapper.instance, list) else wrapper.instance, "name", "").lower()
-             if any(x in strat_name for x in ["mustafa", "sweep", "scalper"]):
-                 tfs.update(["15m", "1H"])
+    # Fallback: if no timeframes discovered, default to 1m for simulation
+    if not tfs:
+        tfs.add("1m")
 
     return list(tfs)
 

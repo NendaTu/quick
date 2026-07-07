@@ -76,7 +76,12 @@ def load_strategy(strategy_path: str, simulator=None, overrides=None):
 
         for name, obj in module.__dict__.items():
             if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
-                return obj(simulator=simulator, config_overrides=overrides)
+                instance = obj(simulator=simulator, config_overrides=overrides)
+                # [TECH-001] Extract strategy_id from filename (before first dot)
+                base_name = os.path.basename(full_path)
+                strat_id = base_name.split(".")[0]
+                instance.strategy_id = strat_id
+                return instance
     except Exception as e:
         log.error(f"Error loading strategy file {full_path}: {e}")
 

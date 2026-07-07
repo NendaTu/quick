@@ -3,6 +3,7 @@ import time
 import logging
 import threading
 import queue
+from typing import Dict
 
 log = logging.getLogger("scalper.database")
 
@@ -127,6 +128,16 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time ON candles (symbol, timeframe, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs (session_id)")
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS asset_metadata (
+                    symbol TEXT,
+                    timeframe TEXT,
+                    earliest_ts REAL,
+                    is_exhausted INTEGER,
+                    PRIMARY KEY (symbol, timeframe)
+                )
+            """)
+
             # Create a new session
             cursor = conn.execute("INSERT INTO sessions (start_time) VALUES (?)", (time.time(),))
             self.session_id = cursor.lastrowid
@@ -143,7 +154,7 @@ class Database:
                     # Wait for first item
                     items.append(self.write_queue.get(timeout=0.5))
                     # Try to grab more for batching
-                    for _ in range(100):
+                    for _ in range(1000):
                         items.append(self.write_queue.get_nowait())
                 except (queue.Empty):
                     pass
@@ -153,6 +164,11 @@ class Database:
 
                 cursor = conn.cursor()
                 for type, data in items:
+                    if type == "metadata":
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO asset_metadata (symbol, timeframe, earliest_ts, is_exhausted)
+                            VALUES (?, ?, ?, ?)
+                        """, data)
                     if type == "tick":
                         cursor.execute(
                             "INSERT INTO ticks (symbol, timestamp, price, side, size) VALUES (?, ?, ?, ?, ?)",
@@ -286,48 +302,134 @@ class Database:
         """, (symbol, timeframe, start_ts, end_ts))
         return cursor.fetchall()
 
-    def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float) -> list:
+    def get_all_candle_stats(self) -> Dict[str, Dict[str, Dict[str, float]]]:
         """
-        [TECH-001] Identifies holes in the historical data for a specific asset/timeframe.
-        This ensures that we only download what is missing, rather than relying on
-        unreliable percentage-based heuristics.
-
-        Returns a list of (gap_start, gap_end) tuples representing missing periods.
+        [REPAIR-20260702] Fetches coverage stats for all symbols and timeframes in one query.
+        Returns {symbol: {tf: {'count': N, 'min': T1, 'max': T2, 'is_exhausted': bool}}}
         """
-        # 1. Fetch all existing timestamps in the target range, sorted chronologically
         cursor = self.connection.execute("""
-            SELECT timestamp FROM candles
-            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
-            ORDER BY timestamp ASC
-        """, (symbol, timeframe, start_ts, end_ts))
-        rows = cursor.fetchall()
+            SELECT c.symbol, c.timeframe, COUNT(*), MIN(c.timestamp), MAX(c.timestamp), m.is_exhausted
+            FROM candles c
+            LEFT JOIN asset_metadata m ON c.symbol = m.symbol AND c.timeframe = m.timeframe
+            GROUP BY c.symbol, c.timeframe
+        """)
+        stats = {}
+        for sym, tf, count, t_min, t_max, exhausted in cursor.fetchall():
+            if sym not in stats: stats[sym] = {}
+            stats[sym][tf] = {'count': count, 'min': t_min, 'max': t_max, 'is_exhausted': bool(exhausted)}
+        return stats
 
-        if not rows:
-            return [(start_ts, end_ts)]
-
-        gaps = []
+    def has_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, stats_cache: dict = None) -> bool:
+        """
+        [REPAIR-20260707] Fast-check for gaps with Listing-Awareness.
+        """
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
             "1H": 3600, "4H": 14400, "1D": 86400
         }
         step = tf_seconds.get(timeframe, 60)
 
-        # Check leading gap
-        if rows[0][0] > start_ts + step:
-            gaps.append((start_ts, rows[0][0] - step))
+        # 1. Check Metadata for Listing Completeness
+        is_exhausted = False
+        if stats_cache and symbol in stats_cache and timeframe in stats_cache[symbol]:
+            s = stats_cache[symbol][timeframe]
+            is_exhausted = s.get('is_exhausted', False)
 
-        # Check internal gaps
-        for i in range(len(rows) - 1):
-            curr_ts = rows[i][0]
-            next_ts = rows[i+1][0]
-            if next_ts > curr_ts + step * 1.1: # Small buffer for floating point / missing one candle
-                gaps.append((curr_ts + step, next_ts - step))
+            # End must be covered (within 1 hour)
+            if s['max'] < end_ts - step * 60: return True
 
-        # Check trailing gap
-        if rows[-1][0] < end_ts - step:
-            gaps.append((rows[-1][0] + step, end_ts))
+            # If not exhausted, start must be covered (within 1 hour)
+            if not is_exhausted and s['min'] > start_ts + step * 60: return True
 
-        return gaps
+            # Check internal continuity based on what WE HAVE
+            # We allow 5 candles tolerance for minor exchange maintenance
+            expected_total = int((s['max'] - s['min']) / step) + 1
+            if s['count'] < expected_total - 5:
+                return True # Internal gaps found in cache
+
+            # If start is covered (or exhausted) and end is covered and count matches, it's complete
+            return False
+
+        if stats_cache and symbol not in stats_cache:
+             # Check if we are exhausted even if no candles exist
+             cursor = self.connection.execute("SELECT is_exhausted FROM asset_metadata WHERE symbol=? AND timeframe=?", (symbol, timeframe))
+             row = cursor.fetchone()
+             if row and bool(row[0]): return False # Exhausted with 0 candles is "complete" for its history
+             return True
+        else:
+            cursor = self.connection.execute("SELECT is_exhausted FROM asset_metadata WHERE symbol=? AND timeframe=?", (symbol, timeframe))
+            row = cursor.fetchone()
+            is_exhausted = bool(row[0]) if row else False
+
+        # 2. Detailed range check (query DB)
+        cursor = self.connection.execute("""
+            SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+        """, (symbol, timeframe, start_ts, end_ts))
+        res = cursor.fetchone()
+        if not res or res[0] == 0: return True
+        count, first, last = res
+
+        # Coverage check
+        if last < end_ts - step * 60: return True
+        if not is_exhausted and first > start_ts + step * 60: return True
+
+        # Continuity Check
+        expected_in_range = int((last - first) / step) + 1
+        if count < expected_in_range - 5:
+            return True
+
+        return False
+
+    def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:
+        """
+        [REPAIR-20260707] Fast Block-based Gap Detection.
+        Checks bounds first, then uses block counts to find gaps without loading every row.
+        """
+        tf_seconds = {
+            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+            "1H": 3600, "4H": 14400, "1D": 86400
+        }
+        step = tf_seconds.get(timeframe, 60)
+
+        # 1. Check Bounds
+        cursor = self.connection.execute("""
+            SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+        """, (symbol, timeframe, start_ts, end_ts))
+        db_min, db_max, db_count = cursor.fetchone()
+
+        if not db_count or db_count == 0:
+            return [(start_ts, end_ts)]
+
+        gaps = []
+        # Check Leading Gap
+        if db_min > start_ts + step * 2:
+            gaps.append((start_ts, db_min - step))
+
+        # Check Trailing Gap
+        if db_max < end_ts - step * 2:
+            gaps.append((db_max + step, end_ts))
+
+        # Check Internal Continuity using count heuristic
+        expected_total = int((db_max - db_min) / step) + 1
+        if db_count < expected_total - 2:
+            # We have internal gaps. For speed, we only return the primary missing range
+            # rather than scanning for tiny 1-candle holes which causes the freeze.
+            # We'll fetch the whole range from min to max to fill holes.
+            gaps.append((db_min, db_max))
+
+        # Merge overlapping or adjacent gaps
+        if not gaps: return []
+        gaps.sort()
+        merged = [gaps[0]]
+        for curr in gaps[1:]:
+            prev = merged[-1]
+            if curr[0] <= prev[1] + step * 10:
+                merged[-1] = (prev[0], max(prev[1], curr[1]))
+            else:
+                merged.append(curr)
+        return merged
 
     def check_candle_exists(self, symbol, timeframe, timestamp):
         cursor = self.connection.execute("""
@@ -342,6 +444,10 @@ class Database:
 
     def purge_old_sessions(self, keep_sessions=3):
         self.write_queue.put(("purge_sessions", keep_sessions))
+
+    def mark_exhausted(self, symbol, timeframe, earliest_ts):
+        """[REPAIR-20260707] Persists that we reached the beginning of history."""
+        self.write_queue.put(("metadata", (symbol, timeframe, earliest_ts, 1)))
 
     def stop(self):
         self.stop_event.set()
