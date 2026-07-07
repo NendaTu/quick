@@ -181,14 +181,43 @@ async def main():
 
     try:
         assets = await discover_assets(client)
-        log.info(f"Starting download for {len(assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
+
+        # [REPAIR-20260702] Check for already completed assets to provide better progress feedback
+        from backtest import MAX_START_DATE, MAX_END_DATE
+        start_ts = MAX_START_DATE.timestamp()
+        end_ts = MAX_END_DATE.timestamp()
+
+        completed_assets = []
+        remaining_assets = []
+        for asset in assets:
+            is_complete = True
+            for tf in AVAILABLE_TIMEFRAMES:
+                gaps = db.get_data_gaps(asset, tf, start_ts, end_ts)
+                if gaps:
+                    is_complete = False
+                    break
+            if is_complete:
+                completed_assets.append(asset)
+            else:
+                remaining_assets.append(asset)
+
+        if completed_assets:
+            log.info(f"{len(completed_assets)} of {len(assets)} assets have complete data across {len(AVAILABLE_TIMEFRAMES)} timeframes.")
+            if remaining_assets:
+                log.info(f"Starting download for {len(remaining_assets)} remaining assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
+            else:
+                log.info("All assets are already complete. Nothing to download.")
+                return
+        else:
+            log.info(f"Starting download for {len(assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
+            remaining_assets = assets
 
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
         limiter = RateLimiter(GLOBAL_RATE_LIMIT)
 
         # Download candles (High priority)
         tasks = []
-        for asset in assets:
+        for asset in remaining_assets:
             for tf in AVAILABLE_TIMEFRAMES:
                 tasks.append(download_asset_tf(client, db, asset, tf, semaphore, limiter))
 
