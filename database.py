@@ -286,6 +286,31 @@ class Database:
         """, (symbol, timeframe, start_ts, end_ts))
         return cursor.fetchall()
 
+    def has_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float) -> bool:
+        """
+        [REPAIR-20260702] Fast-check for gaps using counts.
+        Returns True if any gap is detected.
+        """
+        tf_seconds = {
+            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+            "1H": 3600, "4H": 14400, "1D": 86400
+        }
+        step = tf_seconds.get(timeframe, 60)
+        expected_count = int((end_ts - start_ts) / step)
+
+        # We allow a small tolerance for start/end alignment
+        cursor = self.connection.execute("""
+            SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM candles
+            WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+        """, (symbol, timeframe, start_ts, end_ts))
+        count, first, last = cursor.fetchone()
+
+        if not count or count == 0: return True
+        if count < expected_count - 2: return True # Tolerance for rounding
+        if first > start_ts + step * 2: return True
+        if last < end_ts - step * 2: return True
+        return False
+
     def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:
         """
         [TECH-001] Identifies holes in the historical data for a specific asset/timeframe.
@@ -293,6 +318,10 @@ class Database:
 
         Returns a list of (gap_start, gap_end) tuples representing missing periods.
         """
+        # Optimized: check if we even need to scan gaps
+        if not self.has_data_gaps(symbol, timeframe, start_ts, end_ts):
+            return []
+
         # 1. Fetch all existing timestamps in the target range, sorted chronologically
         cursor = self.connection.execute("""
             SELECT timestamp FROM candles

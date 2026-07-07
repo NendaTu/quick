@@ -189,11 +189,13 @@ async def main():
 
         completed_assets = []
         remaining_assets = []
+
+        # [REPAIR-20260702] Optimized loop using fast-check has_data_gaps
         for asset in assets:
             is_complete = True
             for tf in AVAILABLE_TIMEFRAMES:
-                gaps = db.get_data_gaps(asset, tf, start_ts, end_ts)
-                if gaps:
+                # Use the new fast-check to avoid freezing on massive gap scans
+                if db.has_data_gaps(asset, tf, start_ts, end_ts):
                     is_complete = False
                     break
             if is_complete:
@@ -204,9 +206,10 @@ async def main():
         if completed_assets:
             log.info(f"{len(completed_assets)} of {len(assets)} assets have complete data across {len(AVAILABLE_TIMEFRAMES)} timeframes.")
             if remaining_assets:
-                log.info(f"Starting download for {len(remaining_assets)} remaining assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
+                log.info(f"Starting download for {len(remaining_assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
             else:
                 log.info("All assets are already complete. Nothing to download.")
+                db.stop()
                 return
         else:
             log.info(f"Starting download for {len(assets)} assets across {len(AVAILABLE_TIMEFRAMES)} timeframes...")
