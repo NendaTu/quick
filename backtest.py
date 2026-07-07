@@ -526,15 +526,6 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     engine = Engine(use_db=False)
     engine.start_time = time.time()
 
-    # [TECH-001] Load Strategy Family into Engine
-    engine.strategies = []
-    for segment in chain.segments:
-        for wrapper in segment:
-            if isinstance(wrapper.instance, list):
-                engine.strategies.extend(wrapper.instance)
-            else:
-                engine.strategies.append(wrapper.instance)
-
     sim = engine.exchange
     sim.db = db
 
@@ -596,17 +587,29 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     progress = Progress(len(full_history) - start_idx, label=f"BT {asset}: {tf}")
     chain.reset()
 
-    # Initialize wrappers with sim and FRESH instances to avoid state leakage between assets
+    # [TECH-001] Load Strategy Family into Engine with FRESH instances and simulator linked
+    engine.strategies = []
     for segment in chain.segments:
         for wrapper in segment:
             wrapper.simulator = sim
-            # Re-load instance with fresh state
+            # Re-load instance with fresh state and simulator linked
             wrapper.instance = wrapper._load_strategy(wrapper.path)
+
             # Re-apply overrides if any
             if wrapper.overrides:
-                for k, v in wrapper.overrides.items():
-                    if hasattr(wrapper.instance, "params") and k in wrapper.instance.params:
-                        wrapper.instance.params[k] = v
+                # Handle both list and single instance
+                strats = wrapper.instance if isinstance(wrapper.instance, list) else [wrapper.instance]
+                for s in strats:
+                    for k, v in wrapper.overrides.items():
+                        if hasattr(s, "params") and k in s.params:
+                            s.params[k] = v
+
+            if isinstance(wrapper.instance, list):
+                engine.strategies.extend(wrapper.instance)
+            else:
+                engine.strategies.append(wrapper.instance)
+
+    log.info(f"Engine initialized with {len(engine.strategies)} strategies.")
 
     # Track pointers into history for each timeframe/symbol to avoid re-scanning
     pointers = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
