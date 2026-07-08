@@ -200,10 +200,9 @@ class BitGetClient:
         return res.get("data") or {}
 
     async def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
-        path = "/api/v2/mix/order/margin-coin-order-list"
+        path = "/api/v2/mix/order/orders-pending"
         params = {
-            "productType": "USDT-FUTURES",
-            "marginCoin": "USDT"
+            "productType": "USDT-FUTURES"
         }
         if symbol:
             params["symbol"] = symbol
@@ -253,7 +252,8 @@ class BitGetWSClient:
                         await ws.send_json(auth_msg)
                         # Wait for login confirmation
                         resp = await ws.receive_json()
-                        if resp.get("code") != "0":
+                        # Success can be "0" or 0 depending on the API version/response type
+                        if str(resp.get("code")) != "0":
                             log.error(f"Private WS Login Failed: {resp}")
                             break
 
