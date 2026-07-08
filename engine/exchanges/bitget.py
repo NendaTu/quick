@@ -1,4 +1,4 @@
-import logging
+import logging, asyncio
 from typing import Dict, List, Optional
 from engine.base import BaseExchange
 from bitget_client import BitGetClient, BitGetWSClient
@@ -16,6 +16,7 @@ class BitgetExchange(BaseExchange):
         self.ws_client: Optional[BitGetWSClient] = None
         self.is_demo = is_demo
         self.engine = None
+        self.ohlcv = {} # Symbol -> TF -> List[Candle]
 
     async def get_tickers(self) -> List[Dict]:
         tickers = await self.client.get_tickers()
@@ -57,6 +58,7 @@ class BitgetExchange(BaseExchange):
             sl_price=sl_price,
             **filtered_kwargs
         )
+        log.info(f"Bitget Order Result: {res}")
         return res
 
     async def get_balance(self) -> Optional[float]:
@@ -69,6 +71,14 @@ class BitgetExchange(BaseExchange):
             if acc.get("marginCoin") == "USDT":
                 return float(acc.get("available", 0))
         return 0.0
+
+    def get_features(self, symbol: str) -> Dict:
+        """
+        Placeholder for technical features.
+        Live/Demo mode features should ideally be calculated from OHLCV.
+        """
+        # For now, return empty as strategies handle their own logic via Simulator
+        return {}
 
     async def scale_position(self, symbol: str, side: str, qty: float, **kwargs) -> Dict:
         # For Bitget, scaling up is just another order in the same direction

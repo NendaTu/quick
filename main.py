@@ -108,7 +108,7 @@ async def main():
     if TARGET_NET_ROE >= 1.0:
         log.warning(f"HIGH TARGET_NET_ROE DETECTED: {TARGET_NET_ROE}. This is a decimal ROE (0.05 = 5%). Please verify config.")
 
-    engine = Engine()
+    engine = Engine(mode=args.mode)
 
     # 0. Setup Logging with DB support
     setup_logging(db=getattr(engine.exchange, 'db', None))

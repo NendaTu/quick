@@ -36,10 +36,10 @@ class BitGetClient:
         timestamp = str(int(time.time() * 1000))
         sign = self._generate_signature(timestamp, method, request_path, body)
         headers = {
-            "ACCESS-KEY": self.api_key,
-            "ACCESS-SIGN": sign,
-            "ACCESS-PASSPHRASE": self.passphrase,
-            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-KEY": str(self.api_key),
+            "ACCESS-SIGN": str(sign),
+            "ACCESS-PASSPHRASE": str(self.passphrase),
+            "ACCESS-TIMESTAMP": str(timestamp),
             "Content-Type": "application/json",
             "locale": "en-US"
         }

@@ -55,4 +55,8 @@ class SignalRouter:
             return res
         else:
             # Live/Demo exchange calls are usually async
-            return await self.exchange.place_order(symbol, side, "limit", qty, price, **signal)
+            # Explicitly filter out keys that are passed as positional arguments
+            kwargs = signal.copy()
+            for key in ["symbol", "side", "qty", "price", "entry_price"]:
+                kwargs.pop(key, None)
+            return await self.exchange.place_order(symbol, side, "limit", qty, price, **kwargs)

@@ -10,7 +10,11 @@ from engine.entry import SignalRouter
 log = logging.getLogger("scalper.engine")
 
 class Engine:
-    def __init__(self, use_db=True):
+    def __init__(self, use_db=True, mode=None):
+        global MODE
+        if mode:
+            MODE = mode.lower()
+
         self.books: Dict[str, OrderBook] = {}
         self.leverage_limits = {}
         self.pending_entries: Set[str] = set() # key is 'SYMBOL_buy' or 'SYMBOL_sell'
@@ -112,8 +116,16 @@ class Engine:
             try:
                 specs = await self.exchange.get_symbols()
                 self.leverage_limits = {s['symbol']: float(s.get('maxLever', 20)) for s in specs}
+
+                # Also initialize equity from exchange
+                real_balance = await self.exchange.get_balance()
+                if real_balance is not None:
+                    self.equity = real_balance
+                    self.starting_equity = real_balance
+                    self.peak_equity = real_balance
+                    log.info(f"Initialized equity from exchange: {self.equity:.2f} USDT")
             except Exception as e:
-                log.error(f"Failed to fetch leverage limits: {e}")
+                log.error(f"Failed to fetch initial exchange data: {e}")
                 self.leverage_limits = {sym: 20 for sym in self.enabled_assets + [BTC_SYMBOL]}
 
         # Initialize books for discovered assets
@@ -178,7 +190,8 @@ class Engine:
             if self.equity > self.peak_equity:
                 self.peak_equity = self.equity
 
-            await asyncio.sleep(0.5)
+            # Slow down monitor for real exchanges to avoid rate limits
+            await asyncio.sleep(0.5 if MODE == "paper" else 5.0)
 
     async def _maintenance_loop(self):
         while not self.stop_event.is_set():
@@ -507,7 +520,7 @@ class Engine:
 
         # Check if this specific side is already open or pending
         pos_key = f"{symbol}_{side}"
-        if pos_key in self.open_positions or pos_key in self.pending_entries:
+        if pos_key in self.open_positions or (pos_key in self.pending_entries and signal is None):
             # [TECH-001] Block redundant same-side entry signals.
             # Scaling is handled via manage_position.
             return False
@@ -750,17 +763,18 @@ class Engine:
                                 log.debug(signal_msg)
 
                             # Final collision check immediately before router call
-                            if not self._asset_is_tradable(sym, side, features=feat):
+                            # Pass signal to allow it to pass even if already in pending_entries
+                            if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
                                 if pos_key in self.open_positions: del self.open_positions[pos_key]
                                 if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
                                 continue
 
                             # Add regime to features for predict logic
-                            feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
+                            if feat is not None:
+                                feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
 
-                            # [TECH-001] Merge all calculated features into the signal
-                            # to satisfy requirement (g) for full metrics reporting.
-                            if feat:
+                                # [TECH-001] Merge all calculated features into the signal
+                                # to satisfy requirement (g) for full metrics reporting.
                                 for k, v in feat.items():
                                     if k not in signal:
                                         signal[k] = v
