@@ -5,33 +5,41 @@ from bitget_client import BitGetClient, BitGetWSClient
 
 log = logging.getLogger("engine.exchanges.bitget")
 
-class BitgetExchange(BaseExchange):
+from simulator import Simulator
+import config
+
+class BitgetExchange(Simulator, BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
     # Targeting a zero-429 baseline for long historical runs.
     DEFAULT_RPS = 10
     DEFAULT_CONCURRENCY = 5
 
     def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
-        self.client = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo)
+        # Dual-Client Architecture:
+        # 1. data_client: Always uses Live keys for market data to ensure availability and fix 40099.
+        self.data_client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, is_demo=False)
+
+        # 2. execution_client: Handles private actions (orders, balance) in Live or Demo environment.
+        self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo)
+
+        # Initialize Simulator first with the data client to get OHLCV/TA capabilities
+        Simulator.__init__(self, use_db=True, client=self.data_client)
+
+        # Keep references compatible
+        self.client = self.client_exec
+
         self.ws_client: Optional[BitGetWSClient] = None
         self.is_demo = is_demo
         self.engine = None
-        self.ohlcv = {} # Symbol -> TF -> List[Candle]
 
     async def get_tickers(self) -> List[Dict]:
-        tickers = await self.client.get_tickers()
-        if self.is_demo:
-            # Filter for demo-supported symbols if possible,
-            # though get_tickers usually returns what's available.
-            pass
-        return tickers
+        return await self.data_client.get_tickers()
 
     async def get_symbols(self) -> List[Dict]:
-        symbols = await self.client.get_symbols()
-        return symbols
+        return await self.data_client.get_symbols()
 
     async def get_candles(self, symbol: str, timeframe: str, limit: int = 100) -> List[List]:
-        return await self.client.get_candles(symbol, timeframe, limit)
+        return await self.data_client.get_candles(symbol, timeframe, limit)
 
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None, **kwargs) -> Dict:
         """
@@ -48,7 +56,7 @@ class BitgetExchange(BaseExchange):
 
         log.info(f"Bitget: Placing {order_type} {side} order for {qty} {symbol} @ {price} (TP: {tp_price}, SL: {sl_price})")
 
-        res = await self.client.place_order(
+        res = await self.client_exec.place_order(
             symbol=symbol,
             side=side,
             order_type=order_type,
@@ -65,7 +73,7 @@ class BitgetExchange(BaseExchange):
         """
         Fetches the actual USDT balance from the exchange.
         """
-        accounts = await self.client.get_account_balance()
+        accounts = await self.client_exec.get_account_balance()
         if not accounts: return None
         for acc in accounts:
             if acc.get("marginCoin") == "USDT":

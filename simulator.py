@@ -38,7 +38,7 @@ from bitget_client import BitGetClient, BitGetWSClient
 log = logging.getLogger("scalper.simulator")
 
 class Simulator:
-    def __init__(self, use_db=True):
+    def __init__(self, use_db=True, client=None):
         self.books: Dict[str, SimulatedOrderBook] = {}
         self.leverage_limits = {}
         self.contract_specs: Dict[str, dict] = {}
@@ -53,7 +53,7 @@ class Simulator:
         self.engine = None
         self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
-        self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+        self.client = client or BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
         self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
         self.trade_history: Dict[str, List[dict]] = {}

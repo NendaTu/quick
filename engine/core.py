@@ -98,19 +98,25 @@ class Engine:
             # Discover assets from exchange
             tickers = await self.exchange.get_tickers()
             sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
-            self.enabled_assets = []
+
             demo_whitelist = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XAUUSDT", "NEARUSDT"]
 
-            for t in sorted_tickers:
-                sym = t["symbol"]
-                if MODE == "demo" and sym not in demo_whitelist:
-                    continue
+            # If in Demo mode, ONLY monitor the whitelist
+            if MODE == "demo":
+                self.enabled_assets = [s for s in demo_whitelist if any(t['symbol'] == s for t in sorted_tickers)]
+            else:
+                self.enabled_assets = []
+                for t in sorted_tickers:
+                    sym = t["symbol"]
+                    if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                        if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
+                        self.enabled_assets.append(sym)
+                        if len(self.enabled_assets) >= ASSETS_COUNT: break
 
-                if sym.endswith("USDT") and sym not in ASSET_OMITTED:
-                    if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
-                    self.enabled_assets.append(sym)
-                    if len(self.enabled_assets) >= ASSETS_COUNT: break
             log.info(f"Exchange Initialization: {len(self.enabled_assets)} assets discovered.")
+
+            # For Demo/Live, we also warm up to get initial indicators
+            await self.exchange.warm_up()
 
         self._classify_asset_regimes()
 
@@ -161,7 +167,6 @@ class Engine:
                 self.equity = self.exchange.equity
             else:
                 # Real balance from exchange
-                # For high frequency, we might want to cache this or use WS updates
                 try:
                     real_balance = await self.exchange.get_balance()
                     if real_balance is not None:
