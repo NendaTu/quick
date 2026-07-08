@@ -142,7 +142,7 @@ class BitGetClient:
         return res.get("data", [])
 
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None,
-                          trade_side: str = "open", margin_mode: str = "crossed", tp_price: Optional[float] = None,
+                          trade_side: str = "open", margin_mode: str = "isolated", tp_price: Optional[float] = None,
                           sl_price: Optional[float] = None, **kwargs) -> Dict:
         path = "/api/v2/mix/order/place-order"
         data = {

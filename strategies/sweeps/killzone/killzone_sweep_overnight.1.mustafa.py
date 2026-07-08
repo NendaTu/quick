@@ -71,8 +71,6 @@ from ta.patterns.liquidity import identify_liquidity
 from ta.patterns.fvg import detect_fvgs
 import config
 
-log = logging.getLogger("strategies.mustafa_ov")
-
 class KillzoneSweepOvernightStrategy(JBaseStrategy):
     def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
         super().__init__(
@@ -185,7 +183,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
 
             if sweep_detected:
                 if self.record_milestone(f"Phase 3: Day {sweep_side.upper()} Sweep", m15[-1]['ts'], "15m"):
-                    log.info(f"MUSTAFA_OV | {symbol} Overnight Sweep of Day {sweep_side.upper()} detected!")
+                    self.logger.info(f"[{symbol}] Overnight Sweep of Day {sweep_side.upper()} detected!")
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_ov_sweep_side", sweep_side, self.simulator)
                 state = "WAITING_FOR_BOS1"
@@ -289,7 +287,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                             return None
 
                 if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
-                    log.info(f"MUSTAFA_OV | {symbol} {sweep_side.upper()} Triggered! Target: Day Liquidity. Hub: {hub}")
+                    self.logger.info(f"[{symbol}] {sweep_side.upper()} Triggered! Target: Day Liquidity. Hub: {hub}")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
 

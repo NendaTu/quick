@@ -69,8 +69,6 @@ from ta.patterns.liquidity import identify_liquidity
 from ta.patterns.fvg import detect_fvgs
 import config
 
-log = logging.getLogger("strategies.mustafa_atr")
-
 class RangeSweepATRStrategy(JBaseStrategy):
     def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
         super().__init__(
@@ -164,7 +162,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
             # If sequence hasn't started (Phase 3), we always take the most recent expansion
             if state in ["IDLE", "WAITING_FOR_SWEEP"] or anchor is None:
                 if anchor is None or cand['ts'] != anchor['ts']:
-                    log.info(f"MUSTAFA_ATR | {symbol} Expansion Candle detected ({expansion['ratio']:.1f}x ATR)!")
+                    self.logger.info(f"[{symbol}] Expansion Candle detected ({expansion['ratio']:.1f}x ATR)!")
                     self.save_state(f"{symbol}_atr_anchor", new_anchor, self.simulator)
                     self.save_state(state_key, "WAITING_FOR_SWEEP", self.simulator)
                     state = "WAITING_FOR_SWEEP"
@@ -220,7 +218,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
             if sweep_detected:
                 self.record_milestone(f"Phase 2: 1H {bias.upper()} Bias", h1[-1]['ts'], "1H")
                 self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", m15[-1]['ts'], "15m")
-                log.info(f"MUSTAFA_ATR | {symbol} Sweep of ATR Anchor detected! Entering Execution.")
+                self.logger.info(f"[{symbol}] Sweep of ATR Anchor detected! Entering Execution.")
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_atr_sweep_side", sweep_side, self.simulator)
                 state = "WAITING_FOR_BOS1"
@@ -328,7 +326,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                             return None
 
                 if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
-                    log.info(f"MUSTAFA_ATR | {symbol} {sweep_side.upper()} Entry Triggered!")
+                    self.logger.info(f"[{symbol}] {sweep_side.upper()} Entry Triggered!")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
 
@@ -374,7 +372,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
         if is_retracement:
             dd_count = int(self.get_state(f"{symbol}_atr_dd_count", self.simulator) or 0)
             if dd_count < self.params["max_double_downs"]:
-                log.info(f"MUSTAFA_ATR | DOUBLE DOWN for {symbol} {side}")
+                self.logger.info(f"DOUBLE DOWN for {symbol} {side}")
                 self.save_state(f"{symbol}_atr_dd_count", dd_count + 1, self.simulator)
                 return {"action": "double_size"}
 
