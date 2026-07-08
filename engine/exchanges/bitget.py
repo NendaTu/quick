@@ -23,10 +23,8 @@ class BitgetExchange(Simulator, BaseExchange):
         self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo)
 
         # Initialize Simulator first with the data client to get OHLCV/TA capabilities
+        # This ensures Simulator.warm_up uses the correct keys and environment.
         Simulator.__init__(self, use_db=True, client=self.data_client)
-
-        # Keep references compatible
-        self.client = self.client_exec
 
         self.ws_client: Optional[BitGetWSClient] = None
         self.is_demo = is_demo
@@ -79,6 +77,16 @@ class BitgetExchange(Simulator, BaseExchange):
             if acc.get("marginCoin") == "USDT":
                 return float(acc.get("available", 0))
         return 0.0
+
+    async def get_trading_equity(self) -> float:
+        """
+        Returns equity for sizing, either virtual or real depending on config.
+        """
+        if config.USE_VIRTUAL_BALANCE:
+            return self.equity # Inherited from Simulator
+
+        real = await self.get_balance()
+        return real if real is not None else self.equity
 
     def get_features(self, symbol: str) -> Dict:
         """

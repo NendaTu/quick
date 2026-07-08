@@ -59,5 +59,8 @@ class SimulationEngine(BaseExchange, Simulator):
         self._execute_entry_direct(symbol, side, qty, price, "scale_up")
         return {"code": "00000", "data": {"orderId": f"scale_{int(time.time())}"}}
 
+    async def get_trading_equity(self) -> float:
+        return self.equity
+
     # Additional methods to support backtesting loop directly will be added here
     # in Step 4 of the plan.

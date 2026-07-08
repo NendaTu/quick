@@ -26,6 +26,9 @@ BITGET_SECRET_KEY_DEMO = get_env_stripped("BITGET_SECRET_KEY_DEMO") or BITGET_SE
 BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO") or BITGET_PASSPHRASE
 
 # --- Account & Risk ---
+# If True, Live/Demo modes use INITIAL_EQUITY instead of real account balance for sizing.
+USE_VIRTUAL_BALANCE = False
+
 # The simulated starting balance used for all PnL and risk calculations.
 INITIAL_EQUITY = 15.0
 

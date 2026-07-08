@@ -129,12 +129,11 @@ class Engine:
                 self.leverage_limits = {s['symbol']: float(s.get('maxLever', 20)) for s in specs}
 
                 # Also initialize equity from exchange
-                real_balance = await self.exchange.get_balance()
-                if real_balance is not None:
-                    self.equity = real_balance
-                    self.starting_equity = real_balance
-                    self.peak_equity = real_balance
-                    log.info(f"Initialized equity from exchange: {self.equity:.2f} USDT")
+                trading_equity = await self.exchange.get_trading_equity()
+                self.equity = trading_equity
+                self.starting_equity = trading_equity
+                self.peak_equity = trading_equity
+                log.info(f"Initialized equity ({'VIRTUAL' if config.USE_VIRTUAL_BALANCE else 'REAL'}): {self.equity:.2f} USDT")
             except Exception as e:
                 log.error(f"Failed to fetch initial exchange data: {e}")
                 self.leverage_limits = {sym: 20 for sym in self.enabled_assets + [BTC_SYMBOL]}
@@ -163,16 +162,10 @@ class Engine:
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
             # Sync equity
-            if MODE == "paper":
-                self.equity = self.exchange.equity
-            else:
-                # Real balance from exchange
-                try:
-                    real_balance = await self.exchange.get_balance()
-                    if real_balance is not None:
-                        self.equity = real_balance
-                except Exception as e:
-                    log.error(f"Failed to sync real equity: {e}")
+            try:
+                self.equity = await self.exchange.get_trading_equity()
+            except Exception as e:
+                log.error(f"Failed to sync equity: {e}")
 
             # 1. Drawdown Limit
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
