@@ -21,6 +21,7 @@ class BitGetClient:
         self.is_demo = is_demo
         self.base_url = "https://api.bitget.com"
         self._session: Optional[aiohttp.ClientSession] = None
+        self.time_offset = 0
 
     async def get_session(self):
         if self._session is None or self._session.closed:
@@ -34,8 +35,23 @@ class BitGetClient:
         mac = hmac.new(self.secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
         return base64.b64encode(mac.digest()).decode("utf-8")
 
+    async def sync_time(self):
+        try:
+            # Public endpoint to get server time
+            url = f"{self.base_url}/api/v2/public/time"
+            session = await self.get_session()
+            async with session.get(url) as response:
+                result = await response.json()
+                if result.get("code") == "00000":
+                    server_time = int(result["data"])
+                    local_time = int(time.time() * 1000)
+                    self.time_offset = server_time - local_time
+                    log.info(f"Synchronized time with Bitget. Offset: {self.time_offset}ms")
+        except Exception as e:
+            log.error(f"Failed to sync time: {e}")
+
     def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
-        timestamp = str(int(time.time() * 1000))
+        timestamp = str(int(time.time() * 1000) + self.time_offset)
         sign = self._generate_signature(timestamp, method, request_path, body)
         headers = {
             "ACCESS-KEY": str(self.api_key),
@@ -67,7 +83,7 @@ class BitGetClient:
                 if attempt > 0:
                     await asyncio.sleep(0.1 * attempt)
 
-                async with session.request(method, url, data=body, headers=headers, timeout=30) as response:
+                async with session.request(method, url, data=body, headers=headers, timeout=10) as response:
                     if response.status == 429:
                         # [REPAIR-20260702] Jittered exponential backoff
                         wait = (2 ** attempt) + (random.random() * 0.5)
@@ -98,6 +114,12 @@ class BitGetClient:
                         continue
 
                     if result.get("code") != "00000":
+                        # [REPAIR-20260708] Handle timestamp expiry
+                        if result.get("code") == "40008":
+                            log.warning("Bitget reported timestamp expiry. Re-syncing time and retrying...")
+                            await self.sync_time()
+                            continue
+
                         # [REPAIR-20260707] Specific error for incorrect environment (40099)
                         if result.get("code") == "40099":
                             log.critical(f"BITGET CRITICAL: Exchange environment incorrect. Check your API Keys and MODE config. URL: {url}")

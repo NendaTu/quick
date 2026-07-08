@@ -22,6 +22,10 @@ class BitgetExchange(Simulator, BaseExchange):
         # 2. execution_client: Handles private actions (orders, balance) in Live or Demo environment.
         self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo)
 
+        # 3. Synchronize time immediately
+        asyncio.create_task(self.data_client.sync_time())
+        asyncio.create_task(self.client_exec.sync_time())
+
         # Initialize Simulator first with the data client to get OHLCV/TA capabilities
         # This ensures Simulator.warm_up uses the correct keys and environment.
         Simulator.__init__(self, use_db=True, client=self.data_client)
