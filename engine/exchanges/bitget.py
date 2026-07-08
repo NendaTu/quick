@@ -1,4 +1,4 @@
-import logging, asyncio
+import logging, asyncio, time
 from typing import Dict, List, Optional
 from engine.base import BaseExchange
 from bitget_client import BitGetClient, BitGetWSClient
@@ -258,9 +258,26 @@ class BitgetExchange(Simulator, BaseExchange):
             for d in data:
                 book.update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
         elif channel == "trade":
-            # For now we just use orderbook for mid price,
-            # but we could track trades if needed.
-            pass
+            for t in data:
+                # Bitget V2 trade format: [ts, price, size, side]
+                price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
+                size = float(t[2]) if isinstance(t, list) else float(t.get("size", 0))
+                ts_ms = float(t[0]) if isinstance(t, list) else float(t.get("ts", 0))
+                ts = ts_ms / 1000
+                side = t[3] if isinstance(t, list) else t.get("side", "buy")
+
+                self.last_price[norm_sym] = price
+
+                # Update trade history for feature extraction
+                if norm_sym not in self.trade_history: self.trade_history[norm_sym] = []
+                self.trade_history[norm_sym].append({"price": price, "size": size, "side": side, "ts": ts})
+                if len(self.trade_history[norm_sym]) > 200: self.trade_history[norm_sym].pop(0)
+
+                if self.db:
+                    self.db.save_tick(norm_sym, ts, price, side, size)
+
+                # [REPAIR-20260708] Update real-time candles in simulator
+                self._update_candles(norm_sym, price, size, ts)
 
     async def close(self):
         # Simulator (parent) might have its own close or needs its client closed

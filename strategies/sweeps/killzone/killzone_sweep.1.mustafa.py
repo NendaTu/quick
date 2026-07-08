@@ -291,9 +291,17 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     for level in liq_15m.get('all_ssl', []):
                         if level <= tp2: tp2 = level; break
 
-                # Calculate Quantity based on risk
+                # Calculate Quantity based on risk and reinvestment settings
                 equity = market_data.get("equity") or (self.simulator.equity if self.simulator else config.INITIAL_EQUITY)
-                qty = calculate_position_size(equity, config.RISK_PER_TRADE, entry_price, stop_price)
+                starting_equity = getattr(config, 'INITIAL_EQUITY', 15.0)
+                reinvest_pct = getattr(config, 'REINVESTMENT_PERCENTAGE', 1.0)
+
+                if equity > starting_equity:
+                    riskable_equity = starting_equity + (equity - starting_equity) * reinvest_pct
+                else:
+                    riskable_equity = equity
+
+                qty = calculate_position_size(riskable_equity, config.RISK_PER_TRADE, entry_price, stop_price)
 
                 # Round quantity based on asset specs
                 if self.simulator and symbol in self.simulator.contract_specs:

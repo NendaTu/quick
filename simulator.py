@@ -621,32 +621,26 @@ class Simulator:
                 if side == "buy" and price <= o["price"]: fills.append((o, "entry"))
                 elif side == "sell" and price >= o["price"]: fills.append((o, "entry"))
 
-                # Chase/Timeout logic
+                # Chase/Timeout logic: Cancel stale limit orders [REPAIR-20260708]
                 elif now - o.get("ts", now) > LIMIT_CHASE_TIMEOUT:
-                    # In a real bot, we'd reposition. For simulation, let's just "take" it
-                    # to keep the data flowing, or expire it. Let's convert to market-ish fill.
+                    log.info(f"TIMEOUT: Cancelling stale limit entry for {o['symbol']} {o['pos_side'].upper()}")
+                    if o in self.pending_orders:
+                        self.used_margin -= o.get("reserved_margin", 0)
+                        self.pending_orders.remove(o)
 
-                    # Re-verify margin at current price before filling timeout
-                    fill_price = self.last_price.get(o["symbol"])
-                    max_lev = self.leverage_limits.get(o["symbol"], 20)
-                    new_margin = (o["qty"] * fill_price) / max_lev
-                    estimated_fee = o["qty"] * fill_price * TAKER_FEE
+                    # Also notify exchange if real
+                    if hasattr(self, "cancel_order"):
+                        # We use eid as orderId in simulator, but for real exchange we need the real ID
+                        # Simulator pending_orders for real exchange should store the exchange orderId
+                        real_oid = o.get("orderId")
+                        if real_oid:
+                             asyncio.create_task(self.cancel_order(o['symbol'], real_oid))
 
-                    # available_balance already accounts for the 'reserved_margin' (o["reserved_margin"])
-                    # so we check if the new required total fits.
-                    current_avail = self.equity - (self.used_margin - o.get("reserved_margin", 0))
-                    if current_avail < (new_margin + estimated_fee):
-                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {o['pos_side'].upper()}: Insufficient margin at new price {fill_price:.8f}")
-                        if o in self.pending_orders:
-                            self.used_margin -= o.get("reserved_margin", 0)
-                            self.pending_orders.remove(o)
-                        if self.engine:
-                            pos_key = f"{o['symbol']}_{o['pos_side']}"
-                            if pos_key in self.engine.pending_entries:
-                                self.engine.pending_entries.remove(pos_key)
-                        continue
-
-                    fills.append((o, "entry_timeout"))
+                    if self.engine:
+                        pos_key = f"{o['symbol']}_{o['pos_side']}"
+                        if pos_key in self.engine.pending_entries:
+                            self.engine.pending_entries.remove(pos_key)
+                    continue
 
             elif o["type"] == "stop":
                 # Soft Stop Logic
@@ -860,7 +854,7 @@ class Simulator:
 
                 tp_orders.extend([
                     {"id": tid1, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp1_price"], "qty": kwargs["tp1_qty"], "is_tp1": True, "original_side": original_side, "is_contrarian": is_contrarian},
-                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contr},
+                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contrarian},
                 ])
             else:
                 tid = self.order_id_counter; self.order_id_counter += 1

@@ -840,37 +840,74 @@ class Engine:
     async def _sync_exchange_state(self):
         """
         [REPAIR-20260708] Reconciles Engine state with actual Exchange state (Positions & Orders).
+        Now handles removals (exits/cancellations) and realized PnL reporting.
         """
         log.info(f"Synchronizing state with {self.mode.upper()} exchange...")
         try:
             # 1. Sync Positions
             positions = await self.exchange.get_positions()
+            current_pos_keys = set()
             for p in positions:
                 sym = p['symbol']
-                side = 'buy' if p.get('holdSide') == 'long' else 'sell'
+                side = 'buy' if p.get('holdSide') in ['long', 'buy'] else 'sell'
                 qty = float(p.get('total', 0))
                 entry = float(p.get('averageOpenPrice', 0))
 
                 if qty > 0:
                     pos_key = f"{sym}_{side}"
-                    # For existing positions, we attribute to 'legacy' if unknown
-                    self.open_positions[pos_key] = {
-                        "side": side, "qty": qty, "entry": entry,
-                        "orig_side": side, "is_contr": False,
-                        "margin": (qty * entry) / float(p.get('leverage', 20)),
-                        "ts": time.time(),
-                        "strategy_id": "legacy_sync"
-                    }
-                    log.info(f"Synced Position: {pos_key} | Qty: {qty} @ {entry}")
+                    current_pos_keys.add(pos_key)
+                    if pos_key not in self.open_positions:
+                        # New position discovered (possibly opened externally or during restart)
+                        self.open_positions[pos_key] = {
+                            "side": side, "qty": qty, "entry": entry,
+                            "orig_side": side, "is_contr": False,
+                            "margin": (qty * entry) / float(p.get('leverage', 20)),
+                            "ts": time.time(),
+                            "strategy_id": "legacy_sync"
+                        }
+                        log.info(f"Synced Position: {pos_key} | Qty: {qty} @ {entry}")
+                    else:
+                        # Update existing position details
+                        self.open_positions[pos_key].update({"qty": qty, "entry": entry})
+
+            # Detect Exited Positions
+            for pos_key in list(self.open_positions.keys()):
+                if pos_key not in current_pos_keys:
+                    p = self.open_positions[pos_key]
+                    if p.get("strategy_id") != "legacy_sync":
+                        # Position is gone from exchange!
+                        log.info(f"Position {pos_key} gone from exchange. Reporting exit...")
+                        # For real trades, we'd ideally fetch the PnL from history.
+                        # As a fallback, we'll use the last known price to estimate if not provided.
+                        exit_price = self.exchange.last_price.get(pos_key.split("_")[0], p["entry"])
+                        # Simple PnL calculation
+                        pnl = (exit_price - p["entry"]) * p["qty"] if p["side"] == "buy" else (p["entry"] - exit_price) * p["qty"]
+                        # [TODO] Better PnL attribution from exchange history
+                        self._report_exit(pos_key.split("_")[0], p["side"], pnl, exit_type="exchange_sync")
+                    else:
+                        # Just clear legacy sync position without reporting
+                        log.info(f"Legacy synced position {pos_key} cleared.")
+                        if pos_key in self.open_positions:
+                            del self.open_positions[pos_key]
 
             # 2. Sync Pending Orders
             orders = await self.exchange.get_open_orders()
+            current_order_keys = set()
             for o in orders:
                 sym = o['symbol']
                 side = o['side'].lower()
                 pos_key = f"{sym}_{side}"
-                self.pending_entries.add(pos_key)
-                log.info(f"Synced Pending Order: {pos_key} | OrderId: {o.get('orderId')}")
+                current_order_keys.add(pos_key)
+                if pos_key not in self.pending_entries:
+                    self.pending_entries.add(pos_key)
+                    log.info(f"Synced Pending Order: {pos_key} | OrderId: {o.get('orderId')}")
+
+            # Reconcile pending removals
+            # Only remove if it's not in self.open_positions (as it might have just filled)
+            for pk in list(self.pending_entries):
+                if pk not in current_order_keys and pk not in current_pos_keys:
+                    self.pending_entries.remove(pk)
+                    log.info(f"Cleared Stale Pending Entry: {pk}")
 
         except Exception as e:
             log.error(f"Failed to sync exchange state: {e}")

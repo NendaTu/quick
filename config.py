@@ -28,7 +28,7 @@ BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO") or BITGET_PA
 
 # --- Account & Risk ---
 # If True, Live/Demo modes use INITIAL_EQUITY instead of real account balance for sizing.
-USE_VIRTUAL_BALANCE = False
+USE_VIRTUAL_BALANCE = True
 
 # The simulated starting balance used for all PnL and risk calculations.
 INITIAL_EQUITY = 15.0
@@ -40,7 +40,7 @@ REINVESTMENT_PERCENTAGE = 1.0
 RISK_PER_TRADE = 0.0667
 
 # Maximum number of concurrent positions allowed.
-MAX_CONCURRENT_POSITIONS = 100
+MAX_CONCURRENT_POSITIONS = 1
 
 # Stop bot if balance drops below this fraction of ATH (0.5 = 50% drawdown).
 DRAWDOWN_LIMIT = 0.5
@@ -90,9 +90,6 @@ LIMIT_CHASE_TIMEOUT = 10.0
 # --- Strategy Hardening ---
 # Toggle for online LearningModel training.
 USE_ONLINE_LEARNING = False
-
-# Target Return on Equity (ROE) per trade (0.20 = 20%).
-TARGET_NET_ROE = 0.20
 
 # Minimum wait time (seconds) after exiting an asset before re-entry.
 REENTRY_COOLDOWN = 60.0

@@ -62,5 +62,38 @@ class SimulationEngine(BaseExchange, Simulator):
     async def get_trading_equity(self) -> float:
         return self.equity
 
+    async def get_positions(self) -> List[Dict]:
+        # Convert internal simulator positions to Bitget-like dicts
+        res = []
+        for (sym, side), p in self.positions.items():
+            res.append({
+                'symbol': sym,
+                'holdSide': 'long' if side == 'buy' else 'short',
+                'total': str(p['qty']),
+                'averageOpenPrice': str(p['entry_price']),
+                'leverage': str(self.leverage_limits.get(sym, 20))
+            })
+        return res
+
+    async def get_open_orders(self) -> List[Dict]:
+        res = []
+        for o in self.pending_orders:
+            res.append({
+                'symbol': o['symbol'],
+                'side': o['pos_side'],
+                'orderId': str(o.get('id', '0')),
+                'price': str(o.get('price', 0))
+            })
+        return res
+
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict:
+        self.pending_orders = [o for o in self.pending_orders if str(o.get('id')) != str(order_id)]
+        return {"code": "00000", "msg": "success"}
+
+    async def get_order_status(self, symbol: str, order_id: str) -> Dict:
+        # Mocking status as filled if not in pending
+        found = any(str(o.get('id')) == str(order_id) for o in self.pending_orders)
+        return {"orderId": order_id, "status": "live" if found else "filled"}
+
     # Additional methods to support backtesting loop directly will be added here
     # in Step 4 of the plan.
