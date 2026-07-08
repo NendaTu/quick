@@ -14,10 +14,11 @@ from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
 log = logging.getLogger("scalper.bitget")
 
 class BitGetClient:
-    def __init__(self, api_key: str, secret_key: str, passphrase: str):
+    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
         self.api_key = api_key
         self.secret_key = secret_key
         self.passphrase = passphrase
+        self.is_demo = is_demo
         self.base_url = "https://api.bitget.com"
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -27,6 +28,8 @@ class BitGetClient:
         return self._session
 
     def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        if not self.secret_key:
+            raise ValueError(f"BITGET_SECRET_KEY missing for {'DEMO' if self.is_demo else 'LIVE'} mode")
         message = timestamp + method.upper() + request_path + body
         mac = hmac.new(self.secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
         return base64.b64encode(mac.digest()).decode("utf-8")
@@ -34,14 +37,17 @@ class BitGetClient:
     def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
         timestamp = str(int(time.time() * 1000))
         sign = self._generate_signature(timestamp, method, request_path, body)
-        return {
-            "ACCESS-KEY": self.api_key,
-            "ACCESS-SIGN": sign,
-            "ACCESS-PASSPHRASE": self.passphrase,
-            "ACCESS-TIMESTAMP": timestamp,
+        headers = {
+            "ACCESS-KEY": str(self.api_key),
+            "ACCESS-SIGN": str(sign),
+            "ACCESS-PASSPHRASE": str(self.passphrase),
+            "ACCESS-TIMESTAMP": str(timestamp),
             "Content-Type": "application/json",
             "locale": "en-US"
         }
+        if self.is_demo:
+            headers["paptrading"] = "1"
+        return headers
 
     async def request(self, method: str, path: str, params: Dict = None, data: Dict = None, retries: int = 7) -> Dict:
         session = await self.get_session()
@@ -88,7 +94,11 @@ class BitGetClient:
                         continue
 
                     if result.get("code") != "00000":
-                        log.error(f"BitGet Error: {result} on {url}")
+                        # [REPAIR-20260707] Specific error for incorrect environment (40099)
+                        if result.get("code") == "40099":
+                            log.critical(f"BITGET CRITICAL: Exchange environment incorrect. Check your API Keys and MODE config. URL: {url}")
+                        else:
+                            log.error(f"BitGet Error: {result} on {url}")
                     return result
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 log.error(f"Connection error ({type(e).__name__}): {e} on {url}")
@@ -112,7 +122,7 @@ class BitGetClient:
         path = "/api/v2/mix/market/candles"
         params = {
             "symbol": symbol,
-            "productType": "usdt-futures",
+            "productType": "USDT-FUTURES",
             "granularity": granularity, # Do not lowercase
             "limit": str(limit)
         }
@@ -121,13 +131,52 @@ class BitGetClient:
 
     async def get_symbols(self) -> List:
         path = "/api/v2/mix/market/contracts"
-        params = {"productType": "usdt-futures"}
+        params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
         return res.get("data", [])
 
     async def get_tickers(self) -> List:
         path = "/api/v2/mix/market/tickers"
-        params = {"productType": "usdt-futures"}
+        params = {"productType": "USDT-FUTURES"}
+        res = await self.request("GET", path, params=params)
+        return res.get("data", [])
+
+    async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None,
+                          trade_side: str = "open", margin_mode: str = "crossed", tp_price: Optional[float] = None,
+                          sl_price: Optional[float] = None, **kwargs) -> Dict:
+        path = "/api/v2/mix/order/place-order"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginMode": margin_mode,
+            "marginCoin": "USDT",
+            "size": str(qty),
+            "side": side.lower(),
+            "orderType": order_type.lower(),
+            "tradeSide": trade_side,
+            "force": "gtc" if order_type.lower() == "limit" else None
+        }
+        if price:
+            data["price"] = str(price)
+        if tp_price:
+            data["presetTakeProfitPrice"] = str(tp_price)
+        if sl_price:
+            data["presetStopLossPrice"] = str(sl_price)
+
+        data.update(kwargs)
+        return await self.request("POST", path, data=data)
+
+    async def get_account_balance(self) -> List[Dict]:
+        path = "/api/v2/mix/account/accounts"
+        params = {"productType": "USDT-FUTURES"}
+        res = await self.request("GET", path, params=params)
+        return res.get("data", [])
+
+    async def get_positions(self, symbol: Optional[str] = None) -> List[Dict]:
+        path = "/api/v2/mix/position/all-position"
+        params = {"productType": "USDT-FUTURES"}
+        if symbol:
+            params["symbol"] = symbol
         res = await self.request("GET", path, params=params)
         return res.get("data", [])
 

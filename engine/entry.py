@@ -2,13 +2,13 @@ import logging
 from typing import Dict, Any, Optional
 from engine.base import BaseExchange, BaseStrategy
 from engine.exchanges.bitget import BitgetExchange
-from config import MODE, BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
+from config import MODE, BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO
 
 log = logging.getLogger("engine.router")
 
 class SignalRouter:
     def __init__(self, mode: str = MODE, exchange: Optional[BaseExchange] = None):
-        self.mode = mode
+        self.mode = mode.lower().strip(' "').strip("'")
         self.exchange = exchange
         if not self.exchange:
             self._init_exchange()
@@ -18,10 +18,9 @@ class SignalRouter:
             from engine.simulation import SimulationEngine
             self.exchange = SimulationEngine()
         elif self.mode == "demo":
-            # For now, demo uses BitgetExchange but would point to demo endpoints
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+            self.exchange = BitgetExchange(BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO, is_demo=True)
         elif self.mode == "live":
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, is_demo=False)
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
@@ -56,4 +55,8 @@ class SignalRouter:
             return res
         else:
             # Live/Demo exchange calls are usually async
-            return await self.exchange.place_order(symbol, side, "limit", qty, price, **signal)
+            # Explicitly filter out keys that are passed as positional arguments
+            kwargs = signal.copy()
+            for key in ["symbol", "side", "qty", "price", "entry_price"]:
+                kwargs.pop(key, None)
+            return await self.exchange.place_order(symbol, side, "limit", qty, price, **kwargs)

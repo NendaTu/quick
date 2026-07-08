@@ -5,15 +5,31 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Mode & Environment ---
+def get_env_stripped(key, default=None):
+    val = os.getenv(key, default)
+    if val:
+        return val.strip(' "').strip("'")
+    return val
+
+# --- Mode & Environment ---
 # Sets whether the bot runs in "paper" (simulated) or "live" (real funds) mode.
-MODE = os.getenv("MODE", "paper").lower()
+# [BT-002] Default mode. Prefer passing mode explicitly to constructors.
+MODE = get_env_stripped("MODE", "paper").lower()
 
 # Exchange credentials sourced from your .env file.
-BITGET_API_KEY = os.getenv("BITGET_API_KEY")
-BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
-BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
+BITGET_API_KEY = get_env_stripped("BITGET_API_KEY")
+BITGET_SECRET_KEY = get_env_stripped("BITGET_SECRET_KEY")
+BITGET_PASSPHRASE = get_env_stripped("BITGET_PASSPHRASE")
+
+# Demo Mode Credentials (fallback to standard keys if not provided)
+BITGET_API_KEY_DEMO = get_env_stripped("BITGET_API_KEY_DEMO") or BITGET_API_KEY
+BITGET_SECRET_KEY_DEMO = get_env_stripped("BITGET_SECRET_KEY_DEMO") or BITGET_SECRET_KEY
+BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO") or BITGET_PASSPHRASE
 
 # --- Account & Risk ---
+# If True, Live/Demo modes use INITIAL_EQUITY instead of real account balance for sizing.
+USE_VIRTUAL_BALANCE = False
+
 # The simulated starting balance used for all PnL and risk calculations.
 INITIAL_EQUITY = 15.0
 

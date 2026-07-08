@@ -49,3 +49,12 @@ class OrderBook:
         bid_vol = sum(s for _, s in self.bids[:3])
         ask_vol = sum(s for _, s in self.asks[:3])
         return bid_vol, ask_vol
+
+    def update(self, bids: List[List], asks: List[List], ts: float = 0.0):
+        """Updates the order book with new data."""
+        if bids:
+            self.bids = [(float(p), float(s)) for p, s in bids]
+        if asks:
+            self.asks = [(float(p), float(s)) for p, s in asks]
+        if ts > 0:
+            self.timestamp = ts

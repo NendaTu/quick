@@ -628,3 +628,9 @@ class LearningModel:
 class DummyModel:
     def predict(self, symbol, book, equity=None):
         return None
+
+    def train_on_tick(self, symbol, features, direction_up):
+        pass
+
+    def train_on_trade(self, symbol, features, pnl):
+        pass

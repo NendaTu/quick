@@ -438,7 +438,7 @@ class Database:
         """, (symbol, timeframe, timestamp))
         return cursor.fetchone() is not None
 
-    def purge_old_data(self, tick_retention_seconds=3600, candle_retention_days=7):
+    def purge_old_data(self, tick_retention_seconds=3600, candle_retention_days=90):
         self.write_queue.put(("purge", (tick_retention_seconds, candle_retention_days)))
         self.purge_old_sessions()
 

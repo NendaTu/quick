@@ -10,7 +10,9 @@ from engine.entry import SignalRouter
 log = logging.getLogger("scalper.engine")
 
 class Engine:
-    def __init__(self, use_db=True):
+    def __init__(self, use_db=True, mode=None):
+        self.mode = (mode or config.MODE).lower().strip(' "').strip("'")
+
         self.books: Dict[str, OrderBook] = {}
         self.leverage_limits = {}
         self.pending_entries: Set[str] = set() # key is 'SYMBOL_buy' or 'SYMBOL_sell'
@@ -46,18 +48,27 @@ class Engine:
         self.stop_event = asyncio.Event()
         self.start_time = time.time()
 
-        if MODE == "paper":
+        if self.mode == "paper":
             from engine.simulation import SimulationEngine
             self.exchange = SimulationEngine(use_db=use_db)
             self.exchange.engine = self
             self.model = LearningModel(self.exchange)
-        else:
+        elif self.mode == "demo":
             from engine.exchanges.bitget import BitgetExchange
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+            self.exchange = BitgetExchange(BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO, is_demo=True)
+            self.exchange.engine = self
             self.model = DummyModel()
-            log.warning("Live/testnet mode support is in foundation.")
+            log.info("Initialized Bitget in DEMO mode.")
+        elif self.mode == "live":
+            from engine.exchanges.bitget import BitgetExchange
+            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, is_demo=False)
+            self.exchange.engine = self
+            self.model = DummyModel()
+            log.info("Initialized Bitget in LIVE mode.")
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}")
 
-        self.router = SignalRouter(mode=MODE, exchange=self.exchange)
+        self.router = SignalRouter(mode=self.mode, exchange=self.exchange)
 
     async def start(self, preloaded_data=None, external_feed=None):
         self.start_time = time.time()
@@ -78,24 +89,78 @@ class Engine:
         except Exception as e:
             log.debug(f"Signal handlers not supported: {e}")
 
-        if MODE == "paper":
+        if self.mode == "paper":
             await self.exchange.warm_up(preloaded_data=preloaded_data)
             self.enabled_assets = self.exchange.discovered_assets
         else:
-            # Future: Discover assets from live exchange
-            self.enabled_assets = []
+            # 1. Discover assets from exchange
+            tickers = await self.exchange.get_tickers()
+            sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
+
+            demo_whitelist = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XAUUSDT", "NEARUSDT"]
+
+            # Ensure BTC is always mapped even if not in enabled_assets
+            if self.mode == "demo" and hasattr(self.exchange, "symbol_map"):
+                for t in sorted_tickers:
+                    if t['symbol'] in ["BTCUSDT", "SBTCUSDT"]:
+                         self.exchange.symbol_map["BTCUSDT"] = t['symbol']
+                         self.exchange.rev_symbol_map[t['symbol']] = "BTCUSDT"
+                         break
+
+            # 2. Apply Whitelist / Discovery
+            if self.mode == "demo":
+                self.enabled_assets = []
+                for s in demo_whitelist:
+                    # Check for exact match or S-prefix (common in Bitget Demo)
+                    for t in sorted_tickers:
+                        sym = t['symbol']
+                        if sym == s or sym == f"S{s}":
+                            # Store CANONICAL symbol as the primary reference
+                            self.enabled_assets.append(s)
+
+                            # Update exchange-specific mapping for internal routing
+                            if hasattr(self.exchange, "symbol_map"):
+                                self.exchange.symbol_map[s] = sym
+                                self.exchange.rev_symbol_map[sym] = s
+                            break
+            else:
+                self.enabled_assets = []
+                for t in sorted_tickers:
+                    sym = t["symbol"]
+                    if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                        if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
+                        self.enabled_assets.append(sym)
+                        if len(self.enabled_assets) >= ASSETS_COUNT: break
+
+            log.info(f"Exchange Initialization: {len(self.enabled_assets)} assets discovered.")
+
+            # 3. Warm up indicators for discovered assets (Filtered list)
+            await self.exchange.warm_up(assets=self.enabled_assets)
 
         self._classify_asset_regimes()
 
-        if MODE == "paper":
+        if self.mode == "paper":
             self.leverage_limits = self.exchange.get_leverage_limits()
-            # Initialize books for discovered assets
-            for sym in self.enabled_assets + [BTC_SYMBOL]:
-                self.books[sym] = OrderBook(sym)
-            log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
         else:
-            log.error("Only paper mode is implemented.")
-            return
+            # For Live/Demo, fetch leverage limits from exchange
+            try:
+                specs = await self.exchange.get_symbols()
+                self.leverage_limits = {s['symbol']: float(s.get('maxLever', 20)) for s in specs}
+
+                # Also initialize equity from exchange
+                trading_equity = await self.exchange.get_trading_equity()
+                self.equity = trading_equity
+                self.starting_equity = trading_equity
+                self.peak_equity = trading_equity
+                log.info(f"Initialized equity ({'VIRTUAL' if config.USE_VIRTUAL_BALANCE else 'REAL'}): {self.equity:.2f} USDT")
+            except Exception as e:
+                log.error(f"Failed to fetch initial exchange data: {e}")
+                self.leverage_limits = {sym: 20 for sym in self.enabled_assets + [BTC_SYMBOL]}
+
+        # Initialize books for discovered assets
+        for sym in self.enabled_assets + [BTC_SYMBOL]:
+            self.books[sym] = OrderBook(sym)
+        log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
 
         asyncio.create_task(self.exchange.data_feed_task(self, external_feed=external_feed))
         asyncio.create_task(self._equity_monitor())
@@ -116,7 +181,10 @@ class Engine:
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
             # Sync equity
-            self.equity = self.exchange.equity
+            try:
+                self.equity = await self.exchange.get_trading_equity()
+            except Exception as e:
+                log.error(f"Failed to sync equity: {e}")
 
             # 1. Drawdown Limit
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
@@ -144,9 +212,13 @@ class Engine:
             if self.equity > self.peak_equity:
                 self.peak_equity = self.equity
 
-            await asyncio.sleep(0.5)
+            # Slow down monitor for real exchanges to avoid rate limits
+            await asyncio.sleep(0.5 if self.mode == "paper" else 5.0)
 
     async def _maintenance_loop(self):
+        # [REPAIR-20260707] Delay initial purge to allow bot to finish initialization
+        await asyncio.sleep(600)
+
         while not self.stop_event.is_set():
             try:
                 if getattr(self.exchange, "db", None):
@@ -473,7 +545,7 @@ class Engine:
 
         # Check if this specific side is already open or pending
         pos_key = f"{symbol}_{side}"
-        if pos_key in self.open_positions or pos_key in self.pending_entries:
+        if pos_key in self.open_positions or (pos_key in self.pending_entries and signal is None):
             # [TECH-001] Block redundant same-side entry signals.
             # Scaling is handled via manage_position.
             return False
@@ -716,17 +788,18 @@ class Engine:
                                 log.debug(signal_msg)
 
                             # Final collision check immediately before router call
-                            if not self._asset_is_tradable(sym, side, features=feat):
+                            # Pass signal to allow it to pass even if already in pending_entries
+                            if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
                                 if pos_key in self.open_positions: del self.open_positions[pos_key]
                                 if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
                                 continue
 
                             # Add regime to features for predict logic
-                            feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
+                            if feat is not None:
+                                feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
 
-                            # [TECH-001] Merge all calculated features into the signal
-                            # to satisfy requirement (g) for full metrics reporting.
-                            if feat:
+                                # [TECH-001] Merge all calculated features into the signal
+                                # to satisfy requirement (g) for full metrics reporting.
                                 for k, v in feat.items():
                                     if k not in signal:
                                         signal[k] = v

@@ -38,7 +38,7 @@ from bitget_client import BitGetClient, BitGetWSClient
 log = logging.getLogger("scalper.simulator")
 
 class Simulator:
-    def __init__(self, use_db=True):
+    def __init__(self, use_db=True, client=None):
         self.books: Dict[str, SimulatedOrderBook] = {}
         self.leverage_limits = {}
         self.contract_specs: Dict[str, dict] = {}
@@ -53,7 +53,7 @@ class Simulator:
         self.engine = None
         self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
-        self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+        self.client = client or BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
 
         self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
         self.trade_history: Dict[str, List[dict]] = {}
@@ -65,7 +65,7 @@ class Simulator:
         self.discovered_assets: List[str] = []
         self.asset_correlations: Dict[str, Dict[str, float]] = {}
 
-    async def warm_up(self, preloaded_data=None):
+    async def warm_up(self, preloaded_data=None, assets=None):
         if preloaded_data:
             log.info("Warming up with preloaded data...")
             self.discovered_assets = preloaded_data["discovered_assets"]
@@ -85,44 +85,52 @@ class Simulator:
         log.info("Starting warm-up...")
 
         # 1. Discover Assets by Volume (with persistence)
-        if self.db:
-            last_ts, cached_assets = self.db.get_discovered_assets()
-        else:
-            last_ts, cached_assets = 0, []
-        age_hours = (time.time() - last_ts) / 3600
-
-        if cached_assets and age_hours < ASSET_REDISCOVERY_HOURS:
-            log.info(f"Using cached assets from DB (age: {age_hours:.1f}h)")
-            self.discovered_assets = cached_assets
-            # Still need tickers for initial price baseline
+        if assets:
+            self.discovered_assets = assets
             tickers = await self.client.get_tickers()
         else:
-            log.info(f"Discovering top assets (cache age: {age_hours:.1f}h)...")
-            tickers = await self.client.get_tickers()
-            # Sort by usdtVolume descending
-            sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
+            if self.db:
+                last_ts, cached_assets = self.db.get_discovered_assets()
+            else:
+                last_ts, cached_assets = 0, []
+            age_hours = (time.time() - last_ts) / 3600
 
-            discovered = []
-            for t in sorted_tickers:
-                sym = t["symbol"]
-                # Filter: only USDT futures, not omitted, not stablecoins (proxy: ends with USDT)
-                if sym.endswith("USDT") and sym not in ASSET_OMITTED:
-                    # Exclude known stables if they show up in volume
-                    if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
-                        continue
-                    discovered.append(sym)
-                    if len(discovered) >= ASSETS_COUNT:
-                        break
+            if cached_assets and age_hours < ASSET_REDISCOVERY_HOURS:
+                log.info(f"Using cached assets from DB (age: {age_hours:.1f}h)")
+                self.discovered_assets = cached_assets
+                # Still need tickers for initial price baseline
+                tickers = await self.client.get_tickers()
+            else:
+                log.info(f"Discovering top assets (cache age: {age_hours:.1f}h)...")
+                tickers = await self.client.get_tickers()
+                # Sort by usdtVolume descending
+                sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
 
-            self.discovered_assets = discovered
-            self.db.save_discovered_assets(discovered)
-            log.info(f"Top {len(discovered)} assets discovered by volume.")
+                discovered = []
+                for t in sorted_tickers:
+                    sym = t["symbol"]
+                    # Filter: only USDT futures, not omitted, not stablecoins (proxy: ends with USDT)
+                    if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                        # Exclude known stables if they show up in volume
+                        if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
+                            continue
+                        discovered.append(sym)
+                        if len(discovered) >= ASSETS_COUNT:
+                            break
+
+                self.discovered_assets = discovered
+                if self.db:
+                    self.db.save_discovered_assets(discovered)
+                log.info(f"Top {len(discovered)} assets discovered by volume.")
 
         # 2. Fetch contract specs for discovered assets
         specs = await self.client.get_symbols()
         spec_map = {s['symbol']: s for s in specs}
 
-        for sym in self.discovered_assets + [BTC_SYMBOL]:
+        # Ensure BTC is always included for confluence
+        symbols = list(set(self.discovered_assets + [BTC_SYMBOL]))
+
+        for sym in symbols:
             s = spec_map.get(sym)
             if s:
                 self.contract_specs[sym] = s
@@ -134,8 +142,6 @@ class Simulator:
                 self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D", "1W"]}
                 self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
                 self.last_price[sym] = price
-
-        symbols = self.discovered_assets + [BTC_SYMBOL]
         semaphore = asyncio.Semaphore(5) # Reduced to stay within strict limits
 
         async def fetch_symbol_data(sym):
@@ -147,7 +153,7 @@ class Simulator:
 
                 for tf in AVAILABLE_TIMEFRAMES:
                     # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
-                    required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 100)
+                    required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
                     lookback_sec = required_limit * tf_map.get(tf, 60)
                     start_ts = time.time() - lookback_sec
                     end_ts = time.time()

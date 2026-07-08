@@ -27,7 +27,13 @@ A high-performance algorithmic trading system for Bitget USDT-M Futures, featuri
    BITGET_API_KEY=your_api_key
    BITGET_SECRET_KEY=your_secret_key
    BITGET_PASSPHRASE=your_passphrase
-   MODE=paper  # or "live"
+
+   # Optional: Demo Mode Credentials
+   BITGET_API_KEY_DEMO=your_demo_api_key
+   BITGET_SECRET_KEY_DEMO=your_demo_secret_key
+   BITGET_PASSPHRASE_DEMO=your_demo_passphrase
+
+   MODE=paper  # or "demo" or "live"
    ```
 
 ## Usage
@@ -38,6 +44,9 @@ Execute the bot using a specific strategy. Strategies are located in the `strate
 ```bash
 # Run with a specific strategy and mode
 python3 main.py --strategy killzone_sweep.1.mustafa --mode paper
+
+# Run with Demo Mode (uses Demo API keys and environment)
+python3 main.py --strategy scalper.1.jules --mode demo
 
 # Run with the ATR-based range strategy
 python3 main.py --strategy range_sweep_ATR.1.mustafa --mode paper

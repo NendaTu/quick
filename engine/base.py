@@ -22,6 +22,10 @@ class BaseExchange(ABC):
     async def scale_position(self, symbol: str, side: str, qty: float, **kwargs) -> Dict:
         pass
 
+    @abstractmethod
+    async def get_trading_equity(self) -> float:
+        pass
+
 class BaseStrategy(ABC):
     def __init__(self, config_overrides: Optional[Dict] = None):
         self.config_overrides = config_overrides or {}
