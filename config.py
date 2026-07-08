@@ -5,17 +5,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Mode & Environment ---
+def get_env_stripped(key, default=None):
+    val = os.getenv(key, default)
+    if val:
+        return val.strip(' "').strip("'")
+    return val
+
+# --- Mode & Environment ---
 # Sets whether the bot runs in "paper" (simulated) or "live" (real funds) mode.
-MODE = os.getenv("MODE", "paper").lower()
+MODE = get_env_stripped("MODE", "paper").lower()
 
 # Exchange credentials sourced from your .env file.
-BITGET_API_KEY = os.getenv("BITGET_API_KEY")
-BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
-BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
+BITGET_API_KEY = get_env_stripped("BITGET_API_KEY")
+BITGET_SECRET_KEY = get_env_stripped("BITGET_SECRET_KEY")
+BITGET_PASSPHRASE = get_env_stripped("BITGET_PASSPHRASE")
 
-BITGET_API_KEY_DEMO = os.getenv("BITGET_API_KEY_DEMO")
-BITGET_SECRET_KEY_DEMO = os.getenv("BITGET_SECRET_KEY_DEMO")
-BITGET_PASSPHRASE_DEMO = os.getenv("BITGET_PASSPHRASE_DEMO")
+BITGET_API_KEY_DEMO = get_env_stripped("BITGET_API_KEY_DEMO")
+BITGET_SECRET_KEY_DEMO = get_env_stripped("BITGET_SECRET_KEY_DEMO")
+BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO")
 
 # --- Account & Risk ---
 # The simulated starting balance used for all PnL and risk calculations.

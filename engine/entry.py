@@ -8,7 +8,7 @@ log = logging.getLogger("engine.router")
 
 class SignalRouter:
     def __init__(self, mode: str = MODE, exchange: Optional[BaseExchange] = None):
-        self.mode = mode
+        self.mode = mode.lower().strip(' "').strip("'")
         self.exchange = exchange
         if not self.exchange:
             self._init_exchange()

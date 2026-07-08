@@ -28,6 +28,8 @@ class BitGetClient:
         return self._session
 
     def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        if not self.secret_key:
+            raise ValueError(f"BITGET_SECRET_KEY missing for {'DEMO' if self.is_demo else 'LIVE'} mode")
         message = timestamp + method.upper() + request_path + body
         mac = hmac.new(self.secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
         return base64.b64encode(mac.digest()).decode("utf-8")

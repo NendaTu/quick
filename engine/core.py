@@ -13,7 +13,7 @@ class Engine:
     def __init__(self, use_db=True, mode=None):
         global MODE
         if mode:
-            MODE = mode.lower()
+            MODE = mode.lower().strip(' "').strip("'")
 
         self.books: Dict[str, OrderBook] = {}
         self.leverage_limits = {}

@@ -89,9 +89,13 @@ def load_strategy(strategy_path: str, simulator=None, overrides=None):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--strategy", type=str, default="scalper.1.jules")
+    parser.add_argument("strategy_pos", type=str, nargs="?", default=None)
+    parser.add_argument("--strategy", type=str, default=None)
     parser.add_argument("--mode", type=str, default=MODE)
     args, unknown = parser.parse_known_args()
+
+    # Determine strategy - positional argument takes precedence
+    strategy_query = args.strategy_pos or args.strategy or "scalper.1.jules"
 
     # Parse unknown args as config overrides
     overrides = {}
@@ -114,10 +118,10 @@ async def main():
     setup_logging(db=getattr(engine.exchange, 'db', None))
 
     # Load strategy
-    strategies = load_strategy(args.strategy, simulator=engine.exchange, overrides=overrides)
+    strategies = load_strategy(strategy_query, simulator=engine.exchange, overrides=overrides)
     if strategies:
         if isinstance(strategies, list):
-            log.info(f"Loaded Strategy Family: {args.strategy} ({len(strategies)} members)")
+            log.info(f"Loaded Strategy Family: {strategy_query} ({len(strategies)} members)")
             engine.strategies = strategies
             # Backwards compatibility for single strategy check
             engine.strategy = strategies[0]
@@ -126,7 +130,7 @@ async def main():
             engine.strategy = strategies
             engine.strategies = [strategies]
     else:
-        log.error(f"Failed to load strategy: {args.strategy}")
+        log.error(f"Failed to load strategy: {strategy_query}")
         return
 
     try:
