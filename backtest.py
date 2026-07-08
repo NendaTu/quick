@@ -538,6 +538,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     sim.leverage_limits = {s: float(spec_map[s].get('maxLever', 20)) for s in spec_map if s in [asset, BTC_SYMBOL]}
     engine.leverage_limits = sim.leverage_limits
     sim.discovered_assets = [asset]
+    sim.ready_assets = {asset, BTC_SYMBOL} # Mark as ready for backtest loop
 
     from orderbook import SimulatedOrderBook, OrderBook
     for sym in [asset, BTC_SYMBOL]:

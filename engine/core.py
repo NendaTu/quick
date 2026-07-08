@@ -137,7 +137,8 @@ class Engine:
             # 3. Warm up indicators for discovered assets (Filtered list)
             await self.exchange.warm_up(assets=self.enabled_assets)
 
-        self._classify_asset_regimes()
+        # [NEW] Regime classification is now handled on-demand in the trading loop
+        # as assets become ready in the background.
 
         if self.mode == "paper":
             self.leverage_limits = self.exchange.get_leverage_limits()
@@ -161,6 +162,10 @@ class Engine:
         for sym in self.enabled_assets + [BTC_SYMBOL]:
             self.books[sym] = OrderBook(sym)
         log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
+
+        # [REPAIR-20260708] Sync existing state from exchange before starting
+        if self.mode != "paper":
+            await self._sync_exchange_state()
 
         asyncio.create_task(self.exchange.data_feed_task(self, external_feed=external_feed))
         asyncio.create_task(self._equity_monitor())
@@ -471,9 +476,10 @@ class Engine:
                          f"Short: {stats['sell_wins']}/{s_total} ({s_winrate:5.1f}%) | "
                          f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
-    def _classify_asset_regimes(self):
+    def _classify_asset_regimes(self, symbol=None):
         """[OP Roadmap] Group assets into volatility buckets."""
-        for sym in self.enabled_assets:
+        targets = [symbol] if symbol else self.enabled_assets
+        for sym in targets:
             # Classification based on 1H ATR / Price
             h = self.exchange.ohlcv.get(sym, {}).get("1H", [])
             if not h:
@@ -495,8 +501,9 @@ class Engine:
             else:
                 self.asset_regimes[sym] = 'stable'
 
-        counts = {r: list(self.asset_regimes.values()).count(r) for r in ['major', 'high_beta', 'stable']}
-        log.info(f"REGIMES | Classification Complete: {counts}")
+        if not symbol:
+            counts = {r: list(self.asset_regimes.values()).count(r) for r in ['major', 'high_beta', 'stable']}
+            log.info(f"REGIMES | Classification Complete: {counts}")
 
     def _asset_is_tradable(self, symbol: str, side: str, features: dict = None, signal: dict = None) -> bool:
         """
@@ -603,6 +610,14 @@ class Engine:
                 # Ensure each unique symbol is processed only once
                 for sym in set(self.enabled_assets + [BTC_SYMBOL]):
                     try:
+                        # [NEW] Skip if asset is not yet ready (Simulator-based)
+                        if hasattr(self.exchange, "ready_assets") and sym not in self.exchange.ready_assets:
+                            continue
+
+                        # [NEW] On-demand regime classification as assets become ready
+                        if sym not in self.asset_regimes and sym != BTC_SYMBOL:
+                            self._classify_asset_regimes(sym)
+
                         book = self.books[sym]
                         if book.best_bid <= 0 or book.best_ask <= 0:
                             continue
@@ -696,6 +711,10 @@ class Engine:
                 # 4. Check Signal and Trade (Skip if shutting down)
                 if not self.stop_event.is_set() and (len(self.open_positions) + len(self.pending_entries)) < MAX_CONCURRENT_POSITIONS:
                     for sym in self.enabled_assets:
+                        # [NEW] Skip if asset is not yet ready (Simulator-based)
+                        if hasattr(self.exchange, "ready_assets") and sym not in self.exchange.ready_assets:
+                            continue
+
                         # Re-check limit inside loop to avoid burst over-trading
                         if (len(self.open_positions) + len(self.pending_entries)) >= MAX_CONCURRENT_POSITIONS:
                             break
@@ -832,6 +851,81 @@ class Engine:
             except Exception as e:
                 log.error(f"Summary task error: {e}")
             await asyncio.sleep(SUMMARY_INTERVAL_SECONDS)
+
+    async def _sync_exchange_state(self):
+        """
+        [REPAIR-20260708] Reconciles Engine state with actual Exchange state (Positions & Orders).
+        Now handles removals (exits/cancellations) and realized PnL reporting.
+        """
+        log.info(f"Synchronizing state with {self.mode.upper()} exchange...")
+        try:
+            # 1. Sync Positions
+            positions = await self.exchange.get_positions()
+            current_pos_keys = set()
+            for p in positions:
+                sym = p['symbol']
+                side = 'buy' if p.get('holdSide') in ['long', 'buy'] else 'sell'
+                qty = float(p.get('total', 0))
+                entry = float(p.get('averageOpenPrice', 0))
+
+                if qty > 0:
+                    pos_key = f"{sym}_{side}"
+                    current_pos_keys.add(pos_key)
+                    if pos_key not in self.open_positions:
+                        # New position discovered (possibly opened externally or during restart)
+                        self.open_positions[pos_key] = {
+                            "side": side, "qty": qty, "entry": entry,
+                            "orig_side": side, "is_contr": False,
+                            "margin": (qty * entry) / float(p.get('leverage', 20)),
+                            "ts": time.time(),
+                            "strategy_id": "legacy_sync"
+                        }
+                        log.info(f"Synced Position: {pos_key} | Qty: {qty} @ {entry}")
+                    else:
+                        # Update existing position details
+                        self.open_positions[pos_key].update({"qty": qty, "entry": entry})
+
+            # Detect Exited Positions
+            for pos_key in list(self.open_positions.keys()):
+                if pos_key not in current_pos_keys:
+                    p = self.open_positions[pos_key]
+                    if p.get("strategy_id") != "legacy_sync":
+                        # Position is gone from exchange!
+                        log.info(f"Position {pos_key} gone from exchange. Reporting exit...")
+                        # For real trades, we'd ideally fetch the PnL from history.
+                        # As a fallback, we'll use the last known price to estimate if not provided.
+                        exit_price = self.exchange.last_price.get(pos_key.split("_")[0], p["entry"])
+                        # Simple PnL calculation
+                        pnl = (exit_price - p["entry"]) * p["qty"] if p["side"] == "buy" else (p["entry"] - exit_price) * p["qty"]
+                        # [TODO] Better PnL attribution from exchange history
+                        self._report_exit(pos_key.split("_")[0], p["side"], pnl, exit_type="exchange_sync")
+                    else:
+                        # Just clear legacy sync position without reporting
+                        log.info(f"Legacy synced position {pos_key} cleared.")
+                        if pos_key in self.open_positions:
+                            del self.open_positions[pos_key]
+
+            # 2. Sync Pending Orders
+            orders = await self.exchange.get_open_orders()
+            current_order_keys = set()
+            for o in orders:
+                sym = o['symbol']
+                side = o['side'].lower()
+                pos_key = f"{sym}_{side}"
+                current_order_keys.add(pos_key)
+                if pos_key not in self.pending_entries:
+                    self.pending_entries.add(pos_key)
+                    log.info(f"Synced Pending Order: {pos_key} | OrderId: {o.get('orderId')}")
+
+            # Reconcile pending removals
+            # Only remove if it's not in self.open_positions (as it might have just filled)
+            for pk in list(self.pending_entries):
+                if pk not in current_order_keys and pk not in current_pos_keys:
+                    self.pending_entries.remove(pk)
+                    log.info(f"Cleared Stale Pending Entry: {pk}")
+
+        except Exception as e:
+            log.error(f"Failed to sync exchange state: {e}")
 
     def _log_periodic_summary(self):
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0

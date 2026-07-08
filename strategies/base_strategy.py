@@ -13,6 +13,7 @@ class JBaseStrategy(BaseStrategy):
         self.version = version
         self.author = author
         self.strategy_id = name # Default to name, to be overriden by loader
+        self.logger = logging.getLogger(f"strategies.{name}")
         self.file_name = f"{name}.{version}.{author}.py"
         self._mem_state = {} # In-memory fallback
         self.milestones = {} # Event tracking

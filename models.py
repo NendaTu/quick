@@ -471,7 +471,9 @@ class LearningModel:
 
         # 2. Synchronize TP_MOVE to maintain the 1:2 Net RRR
         net_sl_cost = sl_move + entry_fee_rate + sl_exit_fee_rate
-        tp_move_from_roe = (getattr(config, 'TARGET_NET_ROE', 0.20) / max_lev) + entry_fee_rate + tp_exit_fee_rate + getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
+        # Use a strategy-specific target ROE (Default: 20%)
+        target_roe = 0.20
+        tp_move_from_roe = (target_roe / max_lev) + entry_fee_rate + tp_exit_fee_rate + getattr(config, 'EXPECTED_SLIPPAGE', 0.001)
         tp_move = max(tp_move_from_roe, (net_sl_cost * 2) + entry_fee_rate + tp_exit_fee_rate + getattr(config, 'EXPECTED_SLIPPAGE', 0.001))
 
         # 3. Apply TP Relaxation if needed (reduces RRR to 1.5:1 if flat)

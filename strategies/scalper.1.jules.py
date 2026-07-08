@@ -36,8 +36,6 @@ from strategies.base_strategy import JBaseStrategy
 from models import LearningModel
 import config
 
-log = logging.getLogger("strategies.scalper")
-
 class ScalperStrategy(JBaseStrategy):
     def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
         super().__init__(

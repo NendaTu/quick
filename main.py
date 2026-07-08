@@ -1,7 +1,7 @@
 import asyncio, logging, argparse, importlib.util, os, sys
 from engine.core import Engine
 from engine.entry import SignalRouter
-from config import MODE, RISK_PER_TRADE, TARGET_NET_ROE
+from config import MODE, RISK_PER_TRADE
 
 class DBLogHandler(logging.Handler):
     def __init__(self, db):
@@ -107,10 +107,6 @@ async def main():
                 overrides[k] = ast.literal_eval(v)
             except:
                 overrides[k] = v
-
-    # Final configuration safety checks
-    if TARGET_NET_ROE >= 1.0:
-        log.warning(f"HIGH TARGET_NET_ROE DETECTED: {TARGET_NET_ROE}. This is a decimal ROE (0.05 = 5%). Please verify config.")
 
     engine = Engine(mode=args.mode)
 

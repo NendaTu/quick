@@ -26,6 +26,22 @@ class BaseExchange(ABC):
     async def get_trading_equity(self) -> float:
         pass
 
+    @abstractmethod
+    async def get_positions(self) -> List[Dict]:
+        pass
+
+    @abstractmethod
+    async def get_open_orders(self) -> List[Dict]:
+        pass
+
+    @abstractmethod
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict:
+        pass
+
+    @abstractmethod
+    async def get_order_status(self, symbol: str, order_id: str) -> Dict:
+        pass
+
 class BaseStrategy(ABC):
     def __init__(self, config_overrides: Optional[Dict] = None):
         self.config_overrides = config_overrides or {}

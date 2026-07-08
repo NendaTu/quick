@@ -63,12 +63,14 @@ class Simulator:
         self._btc_confluence_cache = {}
         self._last_confluence_update = 0
         self.discovered_assets: List[str] = []
+        self.ready_assets: Set[str] = set()
         self.asset_correlations: Dict[str, Dict[str, float]] = {}
 
     async def warm_up(self, preloaded_data=None, assets=None):
         if preloaded_data:
             log.info("Warming up with preloaded data...")
             self.discovered_assets = preloaded_data["discovered_assets"]
+            self.ready_assets = set(self.discovered_assets)
             self.contract_specs = preloaded_data["contract_specs"]
             self.leverage_limits = preloaded_data["leverage_limits"]
             self.ohlcv = preloaded_data["ohlcv"]
@@ -82,8 +84,16 @@ class Simulator:
             log.info(f"Warm-up complete (preloaded {len(self.discovered_assets)} assets).")
             return
 
-        log.info("Starting warm-up...")
+        # 1. Metadata Initialization (Fast)
+        log.info("Initializing metadata...")
+        await self.initialize_metadata(assets)
 
+        # 2. Async Data Acquisition (Slow)
+        log.info("Starting background data acquisition...")
+        asyncio.create_task(self.fetch_all_data())
+
+    async def initialize_metadata(self, assets=None):
+        """Discovers assets, fetches contract specs, and initializes book/price baseline."""
         # 1. Discover Assets by Volume (with persistence)
         if assets:
             self.discovered_assets = assets
@@ -130,103 +140,145 @@ class Simulator:
         # Ensure BTC is always included for confluence
         symbols = list(set(self.discovered_assets + [BTC_SYMBOL]))
 
+        # tickers might not be available if get_tickers failed, but usually it's fetched above
+        tickers_list = locals().get('tickers', [])
+
         for sym in symbols:
             s = spec_map.get(sym)
             if s:
                 self.contract_specs[sym] = s
                 self.leverage_limits[sym] = float(s.get('maxLever', 20))
                 # Initialize structures
-                price = float(next((t['lastPr'] for t in tickers if t['symbol'] == sym), 1.0))
+                price = float(next((t['lastPr'] for t in tickers_list if t['symbol'] == sym), 1.0))
                 self.books[sym] = SimulatedOrderBook(sym, price)
                 self.ohlcv[sym] = {tf: [] for tf in AVAILABLE_TIMEFRAMES}
                 self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D", "1W"]}
                 self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
                 self.last_price[sym] = price
-        semaphore = asyncio.Semaphore(5) # Reduced to stay within strict limits
+        log.info(f"Metadata initialized for {len(symbols)} assets.")
 
-        async def fetch_symbol_data(sym):
+    async def fetch_all_data(self):
+        """Fetches historical candles for all assets and marks them ready as completed."""
+        symbols = list(set(self.discovered_assets + [BTC_SYMBOL]))
+
+        # Priority: Fetch BTC first to unlock confluence for other assets
+        if BTC_SYMBOL in symbols:
+            log.info(f"Fetching priority data for {BTC_SYMBOL}...")
+            await self.fetch_symbol_data(BTC_SYMBOL)
+            self.ready_assets.add(BTC_SYMBOL)
+            symbols.remove(BTC_SYMBOL)
+
+        total = len(symbols)
+        done = 0
+        semaphore = asyncio.Semaphore(5)
+
+        async def worker(sym):
+            nonlocal done
             async with semaphore:
-                # Add a small staggered delay to prevent burst 429s
-                await asyncio.sleep(0.1 * random.random())
-                # 1. Fetch OHLCV for all relevant timeframes
-                tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
+                await self.fetch_symbol_data(sym)
+                self.ready_assets.add(sym)
+                done += 1
+                if done % 10 == 0 or done == total:
+                    log.info(f"Background Warm-up: {done}/{total} assets ready.")
+                log.debug(f"Asset {sym} is ready for trading.")
 
-                for tf in AVAILABLE_TIMEFRAMES:
-                    # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
-                    required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
-                    lookback_sec = required_limit * tf_map.get(tf, 60)
-                    start_ts = time.time() - lookback_sec
-                    end_ts = time.time()
+        if symbols:
+            await asyncio.gather(*(worker(s) for s in symbols))
 
-                    # [TECH-001] Use range-based gap detection
-                    gaps = []
-                    if self.db:
-                        gaps = self.db.get_data_gaps(sym, tf, start_ts, end_ts)
-                    else:
-                        gaps = [(start_ts, end_ts)]
+        # Calculate Initial Asset Correlations
+        await self.recalculate_correlations()
+        log.info(f"Warm-up complete. {len(self.ready_assets)} assets active.")
 
-                    if not gaps:
-                        # Data is complete in DB
-                        log.debug(f"Using cached {tf} candles for {sym}")
-                        db_candles = self.db.get_recent_candles(sym, tf, limit=required_limit)
-                        for c in db_candles:
-                            ts, o, h, l, cl, v = c
-                            self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-                            self.last_candle_ts[sym][tf] = ts
-                    else:
-                        # We have gaps, fetch from API
-                        data = await self.client.get_candles(sym, tf, limit=required_limit)
-                        if isinstance(data, list):
-                            for c in reversed(data):
-                                ts = float(c[0]) / 1000
-                                o, h, l, cl, v = map(float, c[1:6])
-                                if self.db:
-                                    self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
-                                self.ohlcv[sym][tf].append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-                                self.last_candle_ts[sym][tf] = ts
-                        else:
-                            log.warning(f"Failed to fetch {tf} candles for {sym}")
+    async def fetch_symbol_data(self, sym):
+        """Fetch OHLCV and confluence history for a single symbol."""
+        # Add a small staggered delay to prevent burst 429s
+        await asyncio.sleep(0.1 * random.random())
+        # 1. Fetch OHLCV for all relevant timeframes
+        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
-                    if tf == ACTIVE_TIMEFRAME and self.ohlcv[sym][tf]:
-                        price = self.ohlcv[sym][tf][-1]['c']
-                        self.books[sym].mid_price = price
-                        self.last_price[sym] = price
-                        self.books[sym]._regenerate()
+        for tf in AVAILABLE_TIMEFRAMES:
+            # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
+            required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
+            lookback_sec = required_limit * tf_map.get(tf, 60)
+            start_ts = time.time() - lookback_sec
+            end_ts = time.time()
 
-                # 2. Fetch confluence history (closes only)
-                for tf in ["15m", "1H", "4H", "1D", "1W"]:
-                    c_data = await self.client.get_candles(sym, tf, limit=100)
-                    if isinstance(c_data, list):
-                        for c in reversed(c_data):
-                            ts = float(c[0]) / 1000
-                            cl = float(c[4])
-                            self.confluence_history[sym][tf].append(cl)
-                            self.last_candle_ts[sym][tf] = ts
-                    else:
-                        log.warning(f"Failed to fetch {tf} candles for {sym}")
+            new_candles = []
 
-        await asyncio.gather(*(fetch_symbol_data(s) for s in symbols))
+            # [TECH-001] Use range-based gap detection
+            gaps = []
+            if self.db:
+                gaps = self.db.get_data_gaps(sym, tf, start_ts, end_ts)
+            else:
+                gaps = [(start_ts, end_ts)]
 
-        # Calculate Asset Correlations for Statistical Arbitrage Filter
-        log.info("Calculating asset correlations...")
-        for s1 in self.discovered_assets:
-            self.asset_correlations[s1] = {}
-            h1 = self.confluence_history.get(s1, {}).get("1H", [])
-            if len(h1) < 20: continue
-            for s2 in self.discovered_assets:
-                if s1 == s2: continue
-                h2 = self.confluence_history.get(s2, {}).get("1H", [])
-                if len(h2) < 20: continue
+            if not gaps:
+                # Data is complete in DB
+                log.debug(f"Using cached {tf} candles for {sym}")
+                db_candles = self.db.get_recent_candles(sym, tf, limit=required_limit)
+                for c in db_candles:
+                    ts, o, h, l, cl, v = c
+                    new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+            else:
+                # We have gaps, fetch from API
+                data = await self.client.get_candles(sym, tf, limit=required_limit)
+                if isinstance(data, list):
+                    for c in reversed(data):
+                        ts = float(c[0]) / 1000
+                        o, h, l, cl, v = map(float, c[1:6])
+                        if self.db:
+                            self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
+                        new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
+                else:
+                    log.warning(f"Failed to fetch {tf} candles for {sym}")
 
-                # Simple Pearson Correlation
-                n = min(len(h1), len(h2))
-                x, y = h1[-n:], h2[-n:]
-                mu_x, mu_y = sum(x)/n, sum(y)/n
-                num = sum((xi - mu_x) * (yi - mu_y) for xi, yi in zip(x, y))
-                den = math.sqrt(sum((xi - mu_x)**2 for xi in x) * sum((yi - mu_y)**2 for yi in y))
-                self.asset_correlations[s1][s2] = num / den if den != 0 else 0.0
+            # Merge with existing (possibly already populated by real-time WS)
+            if new_candles:
+                existing = self.ohlcv.get(sym, {}).get(tf, [])
+                # Combine, unique by timestamp (historical data takes precedence for accuracy)
+                combined = {c['ts']: c for c in (existing + new_candles)}
+                # Sort by timestamp
+                sorted_candles = sorted(combined.values(), key=lambda x: x['ts'])
+                # Enforce limit to prevent memory bloat
+                self.ohlcv[sym][tf] = sorted_candles[-1000:]
 
-        log.info("Warm-up complete.")
+                # Sync last known candle timestamp
+                if self.ohlcv[sym][tf]:
+                    self.last_candle_ts[sym][tf] = self.ohlcv[sym][tf][-1]['ts']
+
+            if tf == ACTIVE_TIMEFRAME and self.ohlcv[sym][tf]:
+                price = self.ohlcv[sym][tf][-1]['c']
+                self.books[sym].mid_price = price
+                self.last_price[sym] = price
+                self.books[sym]._regenerate()
+
+        # 2. Fetch confluence history (closes only)
+        for tf in ["15m", "1H", "4H", "1D", "1W"]:
+            c_data = await self.client.get_candles(sym, tf, limit=100)
+            new_confluence = []
+            if isinstance(c_data, list):
+                for c in reversed(c_data):
+                    ts = float(c[0]) / 1000
+                    cl = float(c[4])
+                    new_confluence.append((ts, cl))
+
+                # Merge confluence history
+                existing_c = self.confluence_history.get(sym, {}).get(tf, [])
+                # We don't have timestamps in confluence_history typically, but we can use them to unique
+                # Actually confluence_history is just a list of floats.
+                # Let's improve Simulator to store timestamps in confluence history too if needed,
+                # or just use the OHLCV data which we just fetched.
+
+                # Use freshly fetched confluence data
+                self.confluence_history[sym][tf] = [cl for ts, cl in new_confluence][-100:]
+
+                # If this timeframe is also tracked in OHLCV, ensure they are in sync
+                if tf in AVAILABLE_TIMEFRAMES and self.ohlcv[sym].get(tf):
+                     # Historical data from confluence fetch is sometimes more authoritative
+                     # than fragmented OHLCV if we had gaps.
+                     pass
+            else:
+                log.warning(f"Failed to fetch {tf} confluence for {sym}")
 
     async def recalculate_correlations(self):
         """[OP-008] Updates asset correlations using the most recent data."""
@@ -471,6 +523,10 @@ class Simulator:
             self.books[instId].asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
             self.books[instId].mid_price = (self.books[instId].best_bid + self.books[instId].best_ask) / 2
 
+            # Update Engine mirror if available (Paper Mode)
+            if self.engine and instId in self.engine.books:
+                self.engine.books[instId].update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
+
         elif channel == "trade":
             for t in data:
                 price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
@@ -527,7 +583,7 @@ class Simulator:
                     curr["c"] = price
                     curr["v"] += size
 
-                    if tf_name in self.confluence_history[symbol]:
+                    if tf_name in self.confluence_history[symbol] and self.confluence_history[symbol][tf_name]:
                         self.confluence_history[symbol][tf_name][-1] = price
 
     async def _external_feed_loop(self, queue):
@@ -546,7 +602,13 @@ class Simulator:
                 log.error(f"External feed error: {e}")
 
     async def data_feed_task(self, engine, external_feed=None):
-        symbols = self.discovered_assets + [BTC_SYMBOL]
+        """
+        Base data feed task.
+        Note: Subclasses (BitgetExchange, SimulationEngine) provide specialized implementations.
+        """
+        symbols = list(set(self.discovered_assets + [BTC_SYMBOL]))
+        self.engine = engine
+
         if external_feed is None:
             ws_client = BitGetWSClient(symbols, self._ws_callback)
             asyncio.create_task(ws_client.run())
@@ -555,14 +617,6 @@ class Simulator:
 
         last_heartbeat = time.time()
         while True:
-            for sym in symbols:
-                book = self.books[sym]
-                # Check for activity before updating
-                if engine.books[sym].bids != book.bids or engine.books[sym].asks != book.asks:
-                    engine.books[sym].bids = list(book.bids)
-                    engine.books[sym].asks = list(book.asks)
-                    engine.books[sym].timestamp = time.time()
-
             await self._process_orders()
             engine.equity = self.equity
 
@@ -571,6 +625,9 @@ class Simulator:
             if now - last_heartbeat > 60:
                 log.debug("Simulator data_feed heartbeat")
                 last_heartbeat = now
+
+            if engine.stop_event.is_set():
+                break
 
             await asyncio.sleep(0.1)
 
@@ -621,32 +678,26 @@ class Simulator:
                 if side == "buy" and price <= o["price"]: fills.append((o, "entry"))
                 elif side == "sell" and price >= o["price"]: fills.append((o, "entry"))
 
-                # Chase/Timeout logic
+                # Chase/Timeout logic: Cancel stale limit orders [REPAIR-20260708]
                 elif now - o.get("ts", now) > LIMIT_CHASE_TIMEOUT:
-                    # In a real bot, we'd reposition. For simulation, let's just "take" it
-                    # to keep the data flowing, or expire it. Let's convert to market-ish fill.
+                    log.info(f"TIMEOUT: Cancelling stale limit entry for {o['symbol']} {o['pos_side'].upper()}")
+                    if o in self.pending_orders:
+                        self.used_margin -= o.get("reserved_margin", 0)
+                        self.pending_orders.remove(o)
 
-                    # Re-verify margin at current price before filling timeout
-                    fill_price = self.last_price.get(o["symbol"])
-                    max_lev = self.leverage_limits.get(o["symbol"], 20)
-                    new_margin = (o["qty"] * fill_price) / max_lev
-                    estimated_fee = o["qty"] * fill_price * TAKER_FEE
+                    # Also notify exchange if real
+                    if hasattr(self, "cancel_order"):
+                        # We use eid as orderId in simulator, but for real exchange we need the real ID
+                        # Simulator pending_orders for real exchange should store the exchange orderId
+                        real_oid = o.get("orderId")
+                        if real_oid:
+                             asyncio.create_task(self.cancel_order(o['symbol'], real_oid))
 
-                    # available_balance already accounts for the 'reserved_margin' (o["reserved_margin"])
-                    # so we check if the new required total fits.
-                    current_avail = self.equity - (self.used_margin - o.get("reserved_margin", 0))
-                    if current_avail < (new_margin + estimated_fee):
-                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {o['pos_side'].upper()}: Insufficient margin at new price {fill_price:.8f}")
-                        if o in self.pending_orders:
-                            self.used_margin -= o.get("reserved_margin", 0)
-                            self.pending_orders.remove(o)
-                        if self.engine:
-                            pos_key = f"{o['symbol']}_{o['pos_side']}"
-                            if pos_key in self.engine.pending_entries:
-                                self.engine.pending_entries.remove(pos_key)
-                        continue
-
-                    fills.append((o, "entry_timeout"))
+                    if self.engine:
+                        pos_key = f"{o['symbol']}_{o['pos_side']}"
+                        if pos_key in self.engine.pending_entries:
+                            self.engine.pending_entries.remove(pos_key)
+                    continue
 
             elif o["type"] == "stop":
                 # Soft Stop Logic
@@ -860,7 +911,7 @@ class Simulator:
 
                 tp_orders.extend([
                     {"id": tid1, "symbol": symbol, "pos_side": side, "type": "tp", "price": kwargs["tp1_price"], "qty": kwargs["tp1_qty"], "is_tp1": True, "original_side": original_side, "is_contrarian": is_contrarian},
-                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contr},
+                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contrarian},
                 ])
             else:
                 tid = self.order_id_counter; self.order_id_counter += 1

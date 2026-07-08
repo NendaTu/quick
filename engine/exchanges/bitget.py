@@ -1,4 +1,4 @@
-import logging, asyncio
+import logging, asyncio, time
 from typing import Dict, List, Optional
 from engine.base import BaseExchange
 from bitget_client import BitGetClient, BitGetWSClient
@@ -27,6 +27,7 @@ class BitgetExchange(Simulator, BaseExchange):
         Simulator.__init__(self, use_db=True, client=self.data_client)
 
         self.ws_client: Optional[BitGetWSClient] = None
+        self.ws_private: Optional[BitGetWSClient] = None
         self.is_demo = is_demo
         self.engine = None
 
@@ -107,15 +108,137 @@ class BitgetExchange(Simulator, BaseExchange):
         # For Bitget, scaling up is just another order in the same direction
         return await self.place_order(symbol, side, "market", qty, **kwargs)
 
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.cancel_order(exch_symbol, order_id)
+
+    async def get_order_status(self, symbol: str, order_id: str) -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.get_order_status(exch_symbol, order_id)
+
+    async def get_positions(self) -> List[Dict]:
+        raw_positions = await self.client_exec.get_positions()
+        # Map back to canonical symbols
+        for p in raw_positions:
+            p['symbol'] = self._normalize_symbol(p.get('symbol', ''))
+        return raw_positions
+
+    async def get_open_orders(self) -> List[Dict]:
+        raw_orders = await self.client_exec.get_open_orders()
+        for o in raw_orders:
+            o['symbol'] = self._normalize_symbol(o.get('symbol', ''))
+        return raw_orders
+
     async def data_feed_task(self, engine, external_feed=None):
         """
-        Connects to Bitget WebSocket for real-time updates.
+        Connects to Bitget WebSocket for real-time updates and manages exchange background tasks.
         """
         if not self.ws_client:
-            # Subscribe to exchange-specific symbols (denormalized)
+            # 1. Public Data Feed
             symbols = [self._denormalize_symbol(s) for s in engine.enabled_assets + [config.BTC_SYMBOL]]
             self.ws_client = BitGetWSClient(symbols, self._ws_callback)
             asyncio.create_task(self.ws_client.run())
+
+            # 2. Private Execution Feed (Fills, Status)
+            if not self.ws_private:
+                self.ws_private = BitGetWSClient(
+                    [], self._ws_private_callback, is_private=True,
+                    api_key=self.client_exec.api_key,
+                    secret_key=self.client_exec.secret_key,
+                    passphrase=self.client_exec.passphrase
+                )
+                asyncio.create_task(self.ws_private.run())
+
+            # 3. Safety Poller (REST reconciliation)
+            asyncio.create_task(self._safety_poller(engine))
+
+        # 4. Background Maintenance & Processing Loop
+        last_heartbeat = time.time()
+        while True:
+            try:
+                # Synchronize Simulator's virtual equity with Engine's tracked equity
+                # (Engine._equity_monitor handles the reverse: polling exchange for real balance)
+                self.equity = engine.equity
+
+                # Process timeouts and chase logic
+                await self._process_orders()
+
+                # Heartbeat log
+                now = time.time()
+                if now - last_heartbeat > 60:
+                    log.debug("BitgetExchange background loop heartbeat")
+                    last_heartbeat = now
+
+                if engine.stop_event.is_set():
+                    break
+
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                log.error(f"BitgetExchange background loop error: {e}")
+                await asyncio.sleep(5)
+
+    async def _ws_private_callback(self, msg):
+        """
+        Handles private execution updates (fills, position changes).
+        """
+        if "data" not in msg: return
+        data = msg["data"]
+        arg = msg.get("arg", {})
+        channel = arg.get("channel")
+
+        if channel == "orders":
+            for o in data:
+                status = o.get("status")
+                order_id = o.get("orderId")
+                symbol = self._normalize_symbol(o.get("instId"))
+                log.info(f"PRIVATE EVENT | Order {order_id} ({symbol}) status: {status}")
+                # Fills and cancellations are primary triggers for engine reconciliation
+                if status in ["filled", "cancelled", "partially_filled"]:
+                    await self.engine._sync_exchange_state()
+
+        elif channel == "positions":
+            # Position changes trigger a full sync to ensure Engine and Exchange are aligned
+            await self.engine._sync_exchange_state()
+
+        elif channel == "account":
+            # Balance updates
+            pass
+
+    async def _safety_poller(self, engine):
+        """
+        Periodically reconciles state via REST to handle missed WS events.
+        """
+        while True:
+            try:
+                await asyncio.sleep(60) # Poll every 60 seconds
+                if engine.stop_event.is_set(): break
+                await engine._sync_exchange_state()
+            except Exception as e:
+                log.error(f"Safety Poller Error: {e}")
+
+    async def _process_orders(self):
+        """
+        [REPAIR-20260708] Overrides Simulator._process_orders for real exchange.
+        In Live/Demo, we only handle entry timeouts. Fills/Exits are handled via Private WS.
+        """
+        now = time.time()
+        for o in list(self.pending_orders):
+            if o["type"] == "entry_limit":
+                # Only handle timeouts
+                if now - o.get("ts", now) > config.LIMIT_CHASE_TIMEOUT:
+                    log.info(f"TIMEOUT: Cancelling stale limit entry for {o['symbol']} {o['pos_side'].upper()}")
+                    if o in self.pending_orders:
+                        self.used_margin -= o.get("reserved_margin", 0)
+                        self.pending_orders.remove(o)
+
+                    real_oid = o.get("orderId")
+                    if real_oid:
+                        asyncio.create_task(self.cancel_order(o['symbol'], real_oid))
+
+                    if self.engine:
+                        pos_key = f"{o['symbol']}_{o['pos_side']}"
+                        if pos_key in self.engine.pending_entries:
+                            self.engine.pending_entries.remove(pos_key)
 
     async def _ws_callback(self, msg):
         """
@@ -150,9 +273,26 @@ class BitgetExchange(Simulator, BaseExchange):
             for d in data:
                 book.update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
         elif channel == "trade":
-            # For now we just use orderbook for mid price,
-            # but we could track trades if needed.
-            pass
+            for t in data:
+                # Bitget V2 trade format: [ts, price, size, side]
+                price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
+                size = float(t[2]) if isinstance(t, list) else float(t.get("size", 0))
+                ts_ms = float(t[0]) if isinstance(t, list) else float(t.get("ts", 0))
+                ts = ts_ms / 1000
+                side = t[3] if isinstance(t, list) else t.get("side", "buy")
+
+                self.last_price[norm_sym] = price
+
+                # Update trade history for feature extraction
+                if norm_sym not in self.trade_history: self.trade_history[norm_sym] = []
+                self.trade_history[norm_sym].append({"price": price, "size": size, "side": side, "ts": ts})
+                if len(self.trade_history[norm_sym]) > 200: self.trade_history[norm_sym].pop(0)
+
+                if self.db:
+                    self.db.save_tick(norm_sym, ts, price, side, size)
+
+                # [REPAIR-20260708] Update real-time candles in simulator
+                self._update_candles(norm_sym, price, size, ts)
 
     async def close(self):
         # Simulator (parent) might have its own close or needs its client closed
@@ -162,3 +302,5 @@ class BitgetExchange(Simulator, BaseExchange):
             await self.client_exec.close()
         if self.ws_client:
             self.ws_client.stop()
+        if self.ws_private:
+            self.ws_private.stop()

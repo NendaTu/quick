@@ -72,8 +72,6 @@ from ta.patterns.swings import detect_swings
 from ta.utils import convert_to_local
 import config
 
-log = logging.getLogger("strategies.mustafa")
-
 class KillzoneSweepStrategy(JBaseStrategy):
     def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
         super().__init__(
@@ -197,7 +195,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
             if sweep_detected:
                 if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", m15[-1]['ts'], "15m"):
-                    log.info(f"MUSTAFA | {symbol} 15m Sweep detected ({sweep_side.upper()})! Entering WAITING_FOR_BOS1")
+                    self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Entering WAITING_FOR_BOS1")
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_sweep_side", sweep_side, self.simulator)
                 state = "WAITING_FOR_BOS1"
@@ -212,7 +210,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
         if state == "WAITING_FOR_BOS1":
             if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
                 self.record_milestone("Phase 4: 1m BOS1", m1[-1]['ts'], "1m")
-                log.info(f"MUSTAFA | {symbol} 1m BOS1 detected ({m1_sig})! Entering WAITING_FOR_FVG")
+                self.logger.info(f"[{symbol}] 1m BOS1 detected ({m1_sig})! Entering WAITING_FOR_FVG")
                 self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
                 state = "WAITING_FOR_FVG"
 
@@ -226,7 +224,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 # detect_fvgs only returns 'nearest', let's trust it for now
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
                     self.record_milestone("Phase 5: 1m FVG Formed", m1[-1]['ts'], "1m")
-                    log.info(f"MUSTAFA | {symbol} 1m {target_fvg.upper()} FVG detected! Entering WAITING_FOR_RETEST")
+                    self.logger.info(f"[{symbol}] 1m {target_fvg.upper()} FVG detected! Entering WAITING_FOR_RETEST")
                     self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
                     state = "WAITING_FOR_RETEST"
 
@@ -241,7 +239,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
             if retested:
                 self.record_milestone("Phase 6: 1m FVG Retest", m1[-1]['ts'], "1m")
-                log.info(f"MUSTAFA | {symbol} 1m FVG Retest complete! Entering WAITING_FOR_BOS2")
+                self.logger.info(f"[{symbol}] 1m FVG Retest complete! Entering WAITING_FOR_BOS2")
                 self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                 state = "WAITING_FOR_BOS2"
 
@@ -291,9 +289,17 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     for level in liq_15m.get('all_ssl', []):
                         if level <= tp2: tp2 = level; break
 
-                # Calculate Quantity based on risk
+                # Calculate Quantity based on risk and reinvestment settings
                 equity = market_data.get("equity") or (self.simulator.equity if self.simulator else config.INITIAL_EQUITY)
-                qty = calculate_position_size(equity, config.RISK_PER_TRADE, entry_price, stop_price)
+                starting_equity = getattr(config, 'INITIAL_EQUITY', 15.0)
+                reinvest_pct = getattr(config, 'REINVESTMENT_PERCENTAGE', 1.0)
+
+                if equity > starting_equity:
+                    riskable_equity = starting_equity + (equity - starting_equity) * reinvest_pct
+                else:
+                    riskable_equity = equity
+
+                qty = calculate_position_size(riskable_equity, config.RISK_PER_TRADE, entry_price, stop_price)
 
                 # Round quantity based on asset specs
                 if self.simulator and symbol in self.simulator.contract_specs:
@@ -309,16 +315,16 @@ class KillzoneSweepStrategy(JBaseStrategy):
                         # Re-verify we still have margin for this rounded-up qty
                         max_lev = float(spec.get('maxLever', 20))
                         if (qty * entry_price) / max_lev > equity * 0.95: # Safety buffer
-                            log.warning(f"MUSTAFA | {symbol} Rounded qty {qty} exceeds available margin. Skipping.")
+                            self.logger.warning(f"[{symbol}] Rounded qty {qty} exceeds available margin. Skipping.")
                             return None
 
                 # TRIGGER ENTRY & LOG DATA
                 if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
-                    log.info(f"MUSTAFA | {symbol} {sweep_side.upper()} BOS2 Triggered ({m1_sig})! Hub: {hub}")
-                    log.info(f"  - Entry: {entry_price:.8f}")
-                    log.info(f"  - SL   : {stop_price:.8f} (Risk: {risk:.8f})")
-                    log.info(f"  - TP1  : {tp1:.8f} | TP2: {tp2:.8f}")
-                    log.info(f"  - Qty  : {qty:.3f} (Equity: {equity:.2f})")
+                    self.logger.info(f"[{symbol}] {sweep_side.upper()} BOS2 Triggered ({m1_sig})! Hub: {hub}")
+                    self.logger.info(f"  - Entry: {entry_price:.8f}")
+                    self.logger.info(f"  - SL   : {stop_price:.8f} (Risk: {risk:.8f})")
+                    self.logger.info(f"  - TP1  : {tp1:.8f} | TP2: {tp2:.8f}")
+                    self.logger.info(f"  - Qty  : {qty:.3f} (Equity: {equity:.2f})")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
 
@@ -374,7 +380,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
         if is_retracement:
             dd_count = int(self.get_state(f"{symbol}_dd_count", self.simulator) or 0)
             if dd_count < self.params["max_double_downs"]:
-                log.info(f"DOUBLE DOWN for {symbol} {side}")
+                self.logger.info(f"DOUBLE DOWN for {symbol} {side}")
                 self.save_state(f"{symbol}_dd_count", dd_count + 1, self.simulator)
                 # Return update signal to double size
                 # In this foundation, we'll return a 'double' command
