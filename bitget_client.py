@@ -180,15 +180,50 @@ class BitGetClient:
         res = await self.request("GET", path, params=params)
         return res.get("data", [])
 
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict:
+        path = "/api/v2/mix/order/cancel-order"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "orderId": order_id
+        }
+        return await self.request("POST", path, data=data)
+
+    async def get_order_status(self, symbol: str, order_id: str) -> Dict:
+        path = "/api/v2/mix/order/detail"
+        params = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "orderId": order_id
+        }
+        res = await self.request("GET", path, params=params)
+        return res.get("data") or {}
+
+    async def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
+        path = "/api/v2/mix/order/margin-coin-order-list"
+        params = {
+            "productType": "USDT-FUTURES",
+            "marginCoin": "USDT"
+        }
+        if symbol:
+            params["symbol"] = symbol
+        res = await self.request("GET", path, params=params)
+        return res.get("data") or []
+
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()
 
 class BitGetWSClient:
-    def __init__(self, symbols: List[str], callback: Callable):
-        self.url = "wss://ws.bitget.com/v2/ws/public"
+    def __init__(self, symbols: List[str], callback: Callable, is_private: bool = False,
+                 api_key: str = None, secret_key: str = None, passphrase: str = None):
+        self.url = "wss://ws.bitget.com/v2/ws/private" if is_private else "wss://ws.bitget.com/v2/ws/public"
         self.symbols = symbols
         self.callback = callback
+        self.is_private = is_private
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.passphrase = passphrase
         self.stop_event = asyncio.Event()
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -197,12 +232,40 @@ class BitGetWSClient:
         while not self.stop_event.is_set():
             try:
                 async with self._session.ws_connect(self.url) as ws:
-                    log.info("Connected to BitGet WebSocket")
+                    log.info(f"Connected to BitGet {'PRIVATE ' if self.is_private else ''}WebSocket")
+
+                    if self.is_private:
+                        # Authenticate for private WS
+                        ts = str(int(time.time()))
+                        message = ts + "GET" + "/user/verify"
+                        mac = hmac.new(self.secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
+                        sign = base64.b64encode(mac.digest()).decode("utf-8")
+
+                        auth_msg = {
+                            "op": "login",
+                            "args": [{
+                                "apiKey": self.api_key,
+                                "passphrase": self.passphrase,
+                                "timestamp": ts,
+                                "sign": sign
+                            }]
+                        }
+                        await ws.send_json(auth_msg)
+                        # Wait for login confirmation
+                        resp = await ws.receive_json()
+                        if resp.get("code") != "0":
+                            log.error(f"Private WS Login Failed: {resp}")
+                            break
 
                     all_args = []
-                    for sym in self.symbols:
-                        all_args.append({"instType": "USDT-FUTURES", "channel": "books15", "instId": sym})
-                        all_args.append({"instType": "USDT-FUTURES", "channel": "trade", "instId": sym})
+                    if self.is_private:
+                        all_args.append({"instType": "USDT-FUTURES", "channel": "orders"})
+                        all_args.append({"instType": "USDT-FUTURES", "channel": "positions"})
+                        all_args.append({"instType": "USDT-FUTURES", "channel": "account"})
+                    else:
+                        for sym in self.symbols:
+                            all_args.append({"instType": "USDT-FUTURES", "channel": "books15", "instId": sym})
+                            all_args.append({"instType": "USDT-FUTURES", "channel": "trade", "instId": sym})
 
                     # Batch subscriptions to avoid exchange disconnects for large payloads
                     batch_size = 20

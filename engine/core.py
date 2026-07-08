@@ -162,6 +162,10 @@ class Engine:
             self.books[sym] = OrderBook(sym)
         log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
 
+        # [REPAIR-20260708] Sync existing state from exchange before starting
+        if self.mode != "paper":
+            await self._sync_exchange_state()
+
         asyncio.create_task(self.exchange.data_feed_task(self, external_feed=external_feed))
         asyncio.create_task(self._equity_monitor())
         asyncio.create_task(self._maintenance_loop())
@@ -832,6 +836,44 @@ class Engine:
             except Exception as e:
                 log.error(f"Summary task error: {e}")
             await asyncio.sleep(SUMMARY_INTERVAL_SECONDS)
+
+    async def _sync_exchange_state(self):
+        """
+        [REPAIR-20260708] Reconciles Engine state with actual Exchange state (Positions & Orders).
+        """
+        log.info(f"Synchronizing state with {self.mode.upper()} exchange...")
+        try:
+            # 1. Sync Positions
+            positions = await self.exchange.get_positions()
+            for p in positions:
+                sym = p['symbol']
+                side = 'buy' if p.get('holdSide') == 'long' else 'sell'
+                qty = float(p.get('total', 0))
+                entry = float(p.get('averageOpenPrice', 0))
+
+                if qty > 0:
+                    pos_key = f"{sym}_{side}"
+                    # For existing positions, we attribute to 'legacy' if unknown
+                    self.open_positions[pos_key] = {
+                        "side": side, "qty": qty, "entry": entry,
+                        "orig_side": side, "is_contr": False,
+                        "margin": (qty * entry) / float(p.get('leverage', 20)),
+                        "ts": time.time(),
+                        "strategy_id": "legacy_sync"
+                    }
+                    log.info(f"Synced Position: {pos_key} | Qty: {qty} @ {entry}")
+
+            # 2. Sync Pending Orders
+            orders = await self.exchange.get_open_orders()
+            for o in orders:
+                sym = o['symbol']
+                side = o['side'].lower()
+                pos_key = f"{sym}_{side}"
+                self.pending_entries.add(pos_key)
+                log.info(f"Synced Pending Order: {pos_key} | OrderId: {o.get('orderId')}")
+
+        except Exception as e:
+            log.error(f"Failed to sync exchange state: {e}")
 
     def _log_periodic_summary(self):
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
