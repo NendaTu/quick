@@ -178,7 +178,12 @@ class BitGetClient:
         if symbol:
             params["symbol"] = symbol
         res = await self.request("GET", path, params=params)
-        return res.get("data") or []
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("entrustedList") or []
+        elif isinstance(data, list):
+            return data
+        return []
 
     async def cancel_order(self, symbol: str, order_id: str) -> Dict:
         path = "/api/v2/mix/order/cancel-order"
