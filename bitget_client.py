@@ -77,6 +77,10 @@ class BitGetClient:
 
                     try:
                         result = await response.json()
+                        if not isinstance(result, dict):
+                            # Bitget sometimes returns a JSON string instead of an object in error cases
+                            log.warning(f"API returned non-dict JSON: {type(result)}: {str(result)[:200]}")
+                            result = {"code": "error", "msg": str(result), "data": result}
                     except Exception as json_err:
                         # Fallback for non-JSON responses
                         text = await response.text()
@@ -127,19 +131,28 @@ class BitGetClient:
             "limit": str(limit)
         }
         res = await self.request("GET", path, params=params)
-        return res.get("data") or []
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_symbols(self) -> List:
         path = "/api/v2/mix/market/contracts"
         params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
-        return res.get("data", [])
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_tickers(self) -> List:
         path = "/api/v2/mix/market/tickers"
         params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
-        return res.get("data", [])
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None,
                           trade_side: str = "open", margin_mode: str = "isolated", tp_price: Optional[float] = None,
@@ -170,7 +183,10 @@ class BitGetClient:
         path = "/api/v2/mix/account/accounts"
         params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
-        return res.get("data", [])
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_positions(self, symbol: Optional[str] = None) -> List[Dict]:
         path = "/api/v2/mix/position/all-position"
@@ -180,8 +196,9 @@ class BitGetClient:
         res = await self.request("GET", path, params=params)
         data = res.get("data")
         if isinstance(data, dict):
-            return data.get("entrustedList") or []
-        elif isinstance(data, list):
+            # Bitget V2 positions is actually a list, but handle dict wrapper just in case
+            return data.get("list") or data.get("positions") or []
+        if isinstance(data, list):
             return data
         return []
 
@@ -202,7 +219,8 @@ class BitGetClient:
             "orderId": order_id
         }
         res = await self.request("GET", path, params=params)
-        return res.get("data") or {}
+        data = res.get("data")
+        return data if isinstance(data, dict) else {}
 
     async def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
         path = "/api/v2/mix/order/orders-pending"
@@ -212,7 +230,12 @@ class BitGetClient:
         if symbol:
             params["symbol"] = symbol
         res = await self.request("GET", path, params=params)
-        return res.get("data") or []
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("entrustedList") or []
+        if isinstance(data, list):
+            return data
+        return []
 
     async def close(self):
         if self._session and not self._session.closed:

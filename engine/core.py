@@ -925,7 +925,7 @@ class Engine:
                     log.info(f"Cleared Stale Pending Entry: {pk}")
 
         except Exception as e:
-            log.error(f"Failed to sync exchange state: {e}")
+            log.exception(f"Failed to sync exchange state: {e}")
 
     def _log_periodic_summary(self):
         win_rate = self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
