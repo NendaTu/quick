@@ -13,6 +13,10 @@ BITGET_API_KEY = os.getenv("BITGET_API_KEY")
 BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
 BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 
+BITGET_API_KEY_DEMO = os.getenv("BITGET_API_KEY_DEMO")
+BITGET_SECRET_KEY_DEMO = os.getenv("BITGET_SECRET_KEY_DEMO")
+BITGET_PASSPHRASE_DEMO = os.getenv("BITGET_PASSPHRASE_DEMO")
+
 # --- Account & Risk ---
 # The simulated starting balance used for all PnL and risk calculations.
 INITIAL_EQUITY = 15.0

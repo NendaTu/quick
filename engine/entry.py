@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 from engine.base import BaseExchange, BaseStrategy
 from engine.exchanges.bitget import BitgetExchange
-from config import MODE, BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
+from config import MODE, BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO
 
 log = logging.getLogger("engine.router")
 
@@ -18,10 +18,9 @@ class SignalRouter:
             from engine.simulation import SimulationEngine
             self.exchange = SimulationEngine()
         elif self.mode == "demo":
-            # For now, demo uses BitgetExchange but would point to demo endpoints
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+            self.exchange = BitgetExchange(BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO, is_demo=True)
         elif self.mode == "live":
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, is_demo=False)
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 

@@ -14,10 +14,11 @@ from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
 log = logging.getLogger("scalper.bitget")
 
 class BitGetClient:
-    def __init__(self, api_key: str, secret_key: str, passphrase: str):
+    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
         self.api_key = api_key
         self.secret_key = secret_key
         self.passphrase = passphrase
+        self.is_demo = is_demo
         self.base_url = "https://api.bitget.com"
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -34,7 +35,7 @@ class BitGetClient:
     def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
         timestamp = str(int(time.time() * 1000))
         sign = self._generate_signature(timestamp, method, request_path, body)
-        return {
+        headers = {
             "ACCESS-KEY": self.api_key,
             "ACCESS-SIGN": sign,
             "ACCESS-PASSPHRASE": self.passphrase,
@@ -42,6 +43,9 @@ class BitGetClient:
             "Content-Type": "application/json",
             "locale": "en-US"
         }
+        if self.is_demo:
+            headers["paptrading"] = "1"
+        return headers
 
     async def request(self, method: str, path: str, params: Dict = None, data: Dict = None, retries: int = 7) -> Dict:
         session = await self.get_session()
@@ -121,13 +125,52 @@ class BitGetClient:
 
     async def get_symbols(self) -> List:
         path = "/api/v2/mix/market/contracts"
-        params = {"productType": "usdt-futures"}
+        params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
         return res.get("data", [])
 
     async def get_tickers(self) -> List:
         path = "/api/v2/mix/market/tickers"
-        params = {"productType": "usdt-futures"}
+        params = {"productType": "USDT-FUTURES"}
+        res = await self.request("GET", path, params=params)
+        return res.get("data", [])
+
+    async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None,
+                          trade_side: str = "open", margin_mode: str = "crossed", tp_price: Optional[float] = None,
+                          sl_price: Optional[float] = None, **kwargs) -> Dict:
+        path = "/api/v2/mix/order/place-order"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginMode": margin_mode,
+            "marginCoin": "USDT",
+            "size": str(qty),
+            "side": side.lower(),
+            "orderType": order_type.lower(),
+            "tradeSide": trade_side,
+            "force": "gtc" if order_type.lower() == "limit" else None
+        }
+        if price:
+            data["price"] = str(price)
+        if tp_price:
+            data["presetStopSurplusPrice"] = str(tp_price)
+        if sl_price:
+            data["presetStopLossPrice"] = str(sl_price)
+
+        data.update(kwargs)
+        return await self.request("POST", path, data=data)
+
+    async def get_account_balance(self) -> List[Dict]:
+        path = "/api/v2/mix/account/accounts"
+        params = {"productType": "USDT-FUTURES"}
+        res = await self.request("GET", path, params=params)
+        return res.get("data", [])
+
+    async def get_positions(self, symbol: Optional[str] = None) -> List[Dict]:
+        path = "/api/v2/mix/position/all-position"
+        params = {"productType": "USDT-FUTURES"}
+        if symbol:
+            params["symbol"] = symbol
         res = await self.request("GET", path, params=params)
         return res.get("data", [])
 

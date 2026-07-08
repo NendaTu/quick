@@ -51,11 +51,20 @@ class Engine:
             self.exchange = SimulationEngine(use_db=use_db)
             self.exchange.engine = self
             self.model = LearningModel(self.exchange)
-        else:
+        elif MODE == "demo":
             from engine.exchanges.bitget import BitgetExchange
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+            self.exchange = BitgetExchange(BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO, is_demo=True)
+            self.exchange.engine = self
             self.model = DummyModel()
-            log.warning("Live/testnet mode support is in foundation.")
+            log.info("Initialized Bitget in DEMO mode.")
+        elif MODE == "live":
+            from engine.exchanges.bitget import BitgetExchange
+            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, is_demo=False)
+            self.exchange.engine = self
+            self.model = DummyModel()
+            log.info("Initialized Bitget in LIVE mode.")
+        else:
+            raise ValueError(f"Unknown mode: {MODE}")
 
         self.router = SignalRouter(mode=MODE, exchange=self.exchange)
 
@@ -82,20 +91,35 @@ class Engine:
             await self.exchange.warm_up(preloaded_data=preloaded_data)
             self.enabled_assets = self.exchange.discovered_assets
         else:
-            # Future: Discover assets from live exchange
+            # Discover assets from exchange
+            tickers = await self.exchange.get_tickers()
+            sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
             self.enabled_assets = []
+            for t in sorted_tickers:
+                sym = t["symbol"]
+                if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                    if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
+                    self.enabled_assets.append(sym)
+                    if len(self.enabled_assets) >= ASSETS_COUNT: break
+            log.info(f"Exchange Initialization: {len(self.enabled_assets)} assets discovered.")
 
         self._classify_asset_regimes()
 
         if MODE == "paper":
             self.leverage_limits = self.exchange.get_leverage_limits()
-            # Initialize books for discovered assets
-            for sym in self.enabled_assets + [BTC_SYMBOL]:
-                self.books[sym] = OrderBook(sym)
-            log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
         else:
-            log.error("Only paper mode is implemented.")
-            return
+            # For Live/Demo, fetch leverage limits from exchange
+            try:
+                specs = await self.exchange.get_symbols()
+                self.leverage_limits = {s['symbol']: float(s.get('maxLever', 20)) for s in specs}
+            except Exception as e:
+                log.error(f"Failed to fetch leverage limits: {e}")
+                self.leverage_limits = {sym: 20 for sym in self.enabled_assets + [BTC_SYMBOL]}
+
+        # Initialize books for discovered assets
+        for sym in self.enabled_assets + [BTC_SYMBOL]:
+            self.books[sym] = OrderBook(sym)
+        log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
 
         asyncio.create_task(self.exchange.data_feed_task(self, external_feed=external_feed))
         asyncio.create_task(self._equity_monitor())
@@ -116,7 +140,17 @@ class Engine:
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
             # Sync equity
-            self.equity = self.exchange.equity
+            if MODE == "paper":
+                self.equity = self.exchange.equity
+            else:
+                # Real balance from exchange
+                # For high frequency, we might want to cache this or use WS updates
+                try:
+                    real_balance = await self.exchange.get_balance()
+                    if real_balance is not None:
+                        self.equity = real_balance
+                except Exception as e:
+                    log.error(f"Failed to sync real equity: {e}")
 
             # 1. Drawdown Limit
             if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
