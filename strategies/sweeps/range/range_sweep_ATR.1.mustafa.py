@@ -153,7 +153,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         # DEBUG
         # if len(h4) % 10 == 0:
-        #    log.info(f"DEBUG | {symbol} {range_tf} len={len(h4)} exp={expansion.get('is_expansion')} ratio={expansion.get('ratio', 0):.2f}")
+        #    self.logger.info(f"DEBUG | {symbol} {range_tf} len={len(h4)} exp={expansion.get('is_expansion')} ratio={expansion.get('ratio', 0):.2f}")
 
         if expansion['is_expansion']:
             cand = expansion['candle']
