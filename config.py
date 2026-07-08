@@ -20,9 +20,10 @@ BITGET_API_KEY = get_env_stripped("BITGET_API_KEY")
 BITGET_SECRET_KEY = get_env_stripped("BITGET_SECRET_KEY")
 BITGET_PASSPHRASE = get_env_stripped("BITGET_PASSPHRASE")
 
-BITGET_API_KEY_DEMO = get_env_stripped("BITGET_API_KEY_DEMO")
-BITGET_SECRET_KEY_DEMO = get_env_stripped("BITGET_SECRET_KEY_DEMO")
-BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO")
+# Demo Mode Credentials (fallback to standard keys if not provided)
+BITGET_API_KEY_DEMO = get_env_stripped("BITGET_API_KEY_DEMO") or BITGET_API_KEY
+BITGET_SECRET_KEY_DEMO = get_env_stripped("BITGET_SECRET_KEY_DEMO") or BITGET_SECRET_KEY
+BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO") or BITGET_PASSPHRASE
 
 # --- Account & Risk ---
 # The simulated starting balance used for all PnL and risk calculations.

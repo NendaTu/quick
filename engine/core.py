@@ -99,8 +99,13 @@ class Engine:
             tickers = await self.exchange.get_tickers()
             sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
             self.enabled_assets = []
+            demo_whitelist = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XAUUSDT", "NEARUSDT"]
+
             for t in sorted_tickers:
                 sym = t["symbol"]
+                if MODE == "demo" and sym not in demo_whitelist:
+                    continue
+
                 if sym.endswith("USDT") and sym not in ASSET_OMITTED:
                     if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
                     self.enabled_assets.append(sym)
