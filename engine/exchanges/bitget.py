@@ -131,7 +131,7 @@ class BitgetExchange(Simulator, BaseExchange):
 
     async def data_feed_task(self, engine, external_feed=None):
         """
-        Connects to Bitget WebSocket for real-time updates.
+        Connects to Bitget WebSocket for real-time updates and manages exchange background tasks.
         """
         if not self.ws_client:
             # 1. Public Data Feed
@@ -152,14 +152,29 @@ class BitgetExchange(Simulator, BaseExchange):
             # 3. Safety Poller (REST reconciliation)
             asyncio.create_task(self._safety_poller(engine))
 
-        # 4. Background Order Processor Loop [REPAIR-20260708]
+        # 4. Background Maintenance & Processing Loop
+        last_heartbeat = time.time()
         while True:
             try:
+                # Synchronize Simulator's virtual equity with Engine's tracked equity
+                # (Engine._equity_monitor handles the reverse: polling exchange for real balance)
+                self.equity = engine.equity
+
+                # Process timeouts and chase logic
                 await self._process_orders()
-                if engine.stop_event.is_set(): break
-                await asyncio.sleep(1.0) # Check timeouts every second
+
+                # Heartbeat log
+                now = time.time()
+                if now - last_heartbeat > 60:
+                    log.debug("BitgetExchange background loop heartbeat")
+                    last_heartbeat = now
+
+                if engine.stop_event.is_set():
+                    break
+
+                await asyncio.sleep(0.5)
             except Exception as e:
-                log.error(f"Order Processor Loop Error: {e}")
+                log.error(f"BitgetExchange background loop error: {e}")
                 await asyncio.sleep(5)
 
     async def _ws_private_callback(self, msg):

@@ -2,8 +2,10 @@ import logging
 import asyncio
 import time
 from typing import Dict, List, Optional, Any
+import config
 from simulator import Simulator
 from engine.base import BaseExchange
+from bitget_client import BitGetWSClient
 
 log = logging.getLogger("engine.simulation")
 
@@ -95,5 +97,40 @@ class SimulationEngine(BaseExchange, Simulator):
         found = any(str(o.get('id')) == str(order_id) for o in self.pending_orders)
         return {"orderId": order_id, "status": "live" if found else "filled"}
 
-    # Additional methods to support backtesting loop directly will be added here
-    # in Step 4 of the plan.
+    async def data_feed_task(self, engine, external_feed=None):
+        """
+        Unified Paper feed task: links Simulator logic to Engine state.
+        """
+        self.engine = engine # Ensure Simulator has reference to Engine
+
+        if external_feed is None:
+            # Paper mode usually needs a real-time feed if running in main.py
+            symbols = list(set(self.discovered_assets + [config.BTC_SYMBOL]))
+            ws_client = BitGetWSClient(symbols, self._ws_callback)
+            asyncio.create_task(ws_client.run())
+        else:
+            asyncio.create_task(self._external_feed_loop(external_feed))
+
+        last_heartbeat = time.time()
+        while True:
+            try:
+                # 1. Simulator maintains self.equity based on trade fills.
+                # Engine needs to know this value.
+                engine.equity = self.equity
+
+                # 2. Simulator logic: process pending orders (TP/SL/Limits)
+                await self._process_orders()
+
+                # 3. Heartbeat
+                now = time.time()
+                if now - last_heartbeat > 60:
+                    log.debug("SimulationEngine heartbeat")
+                    last_heartbeat = now
+
+                if engine.stop_event.is_set():
+                    break
+
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                log.error(f"SimulationEngine loop error: {e}")
+                await asyncio.sleep(1)

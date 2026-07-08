@@ -137,7 +137,8 @@ class Engine:
             # 3. Warm up indicators for discovered assets (Filtered list)
             await self.exchange.warm_up(assets=self.enabled_assets)
 
-        self._classify_asset_regimes()
+        # [NEW] Regime classification is now handled on-demand in the trading loop
+        # as assets become ready in the background.
 
         if self.mode == "paper":
             self.leverage_limits = self.exchange.get_leverage_limits()
@@ -475,9 +476,10 @@ class Engine:
                          f"Short: {stats['sell_wins']}/{s_total} ({s_winrate:5.1f}%) | "
                          f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
-    def _classify_asset_regimes(self):
+    def _classify_asset_regimes(self, symbol=None):
         """[OP Roadmap] Group assets into volatility buckets."""
-        for sym in self.enabled_assets:
+        targets = [symbol] if symbol else self.enabled_assets
+        for sym in targets:
             # Classification based on 1H ATR / Price
             h = self.exchange.ohlcv.get(sym, {}).get("1H", [])
             if not h:
@@ -499,8 +501,9 @@ class Engine:
             else:
                 self.asset_regimes[sym] = 'stable'
 
-        counts = {r: list(self.asset_regimes.values()).count(r) for r in ['major', 'high_beta', 'stable']}
-        log.info(f"REGIMES | Classification Complete: {counts}")
+        if not symbol:
+            counts = {r: list(self.asset_regimes.values()).count(r) for r in ['major', 'high_beta', 'stable']}
+            log.info(f"REGIMES | Classification Complete: {counts}")
 
     def _asset_is_tradable(self, symbol: str, side: str, features: dict = None, signal: dict = None) -> bool:
         """
@@ -607,6 +610,14 @@ class Engine:
                 # Ensure each unique symbol is processed only once
                 for sym in set(self.enabled_assets + [BTC_SYMBOL]):
                     try:
+                        # [NEW] Skip if asset is not yet ready (Simulator-based)
+                        if hasattr(self.exchange, "ready_assets") and sym not in self.exchange.ready_assets:
+                            continue
+
+                        # [NEW] On-demand regime classification as assets become ready
+                        if sym not in self.asset_regimes and sym != BTC_SYMBOL:
+                            self._classify_asset_regimes(sym)
+
                         book = self.books[sym]
                         if book.best_bid <= 0 or book.best_ask <= 0:
                             continue
@@ -700,6 +711,10 @@ class Engine:
                 # 4. Check Signal and Trade (Skip if shutting down)
                 if not self.stop_event.is_set() and (len(self.open_positions) + len(self.pending_entries)) < MAX_CONCURRENT_POSITIONS:
                     for sym in self.enabled_assets:
+                        # [NEW] Skip if asset is not yet ready (Simulator-based)
+                        if hasattr(self.exchange, "ready_assets") and sym not in self.exchange.ready_assets:
+                            continue
+
                         # Re-check limit inside loop to avoid burst over-trading
                         if (len(self.open_positions) + len(self.pending_entries)) >= MAX_CONCURRENT_POSITIONS:
                             break
