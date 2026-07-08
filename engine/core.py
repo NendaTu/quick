@@ -644,6 +644,10 @@ class Engine:
 
                         # Process if: BTC, Has Position, or Recent Activity (< 1s ago)
                         if sym == BTC_SYMBOL or has_pos or (now - last_act < 1.0):
+                            # [REPAIR-20260708] Skip if asset is being omited (double check)
+                            if sym in ASSET_OMITTED:
+                                continue
+
                             # Optimization: only get expensive features if we might trade
                             if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
                                  # Skip if BOTH sides are already open or pending
@@ -814,6 +818,9 @@ class Engine:
                                 continue
 
                             # Add regime to features for predict logic
+                            # [REPAIR-20260708] Add diagnostic logging for signal attempt
+                            log.debug(f"ROUTING SIGNAL: {sym} {side.upper()} via {signal.get('strategy_id')}")
+
                             if feat is not None:
                                 feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
 

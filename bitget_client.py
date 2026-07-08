@@ -136,6 +136,22 @@ class BitGetClient:
             return data
         return []
 
+    async def get_history_candles(self, symbol: str, granularity: str, end_time: Optional[int] = None, limit: int = 200) -> List:
+        path = "/api/v2/mix/market/history-candles"
+        params = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "granularity": granularity,
+            "limit": str(limit)
+        }
+        if end_time:
+            params["endTime"] = str(end_time)
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
+
     async def get_symbols(self) -> List:
         path = "/api/v2/mix/market/contracts"
         params = {"productType": "USDT-FUTURES"}
@@ -281,9 +297,14 @@ class BitGetWSClient:
                         # Wait for login confirmation
                         resp = await ws.receive_json()
                         # Success can be "0" or 0 depending on the API version/response type
-                        if str(resp.get("code")) != "0":
-                            log.error(f"Private WS Login Failed: {resp}")
-                            break
+                        # Also handle case where code might be in a different field or nested
+                        code = resp.get("code") or resp.get("data", {}).get("code") if isinstance(resp.get("data"), dict) else resp.get("code")
+                        if str(code) != "0" and resp.get("event") != "login":
+                             log.error(f"Private WS Login Failed: {resp}")
+                             break
+                        elif str(code) != "0" and resp.get("code") is not None:
+                             log.error(f"Private WS Login Error: {resp}")
+                             break
 
                     all_args = []
                     if self.is_private:
