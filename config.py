@@ -13,6 +13,7 @@ def get_env_stripped(key, default=None):
 
 # --- Mode & Environment ---
 # Sets whether the bot runs in "paper" (simulated) or "live" (real funds) mode.
+# [BT-002] Default mode. Prefer passing mode explicitly to constructors.
 MODE = get_env_stripped("MODE", "paper").lower()
 
 # Exchange credentials sourced from your .env file.

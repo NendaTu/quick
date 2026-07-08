@@ -11,9 +11,7 @@ log = logging.getLogger("scalper.engine")
 
 class Engine:
     def __init__(self, use_db=True, mode=None):
-        global MODE
-        if mode:
-            MODE = mode.lower().strip(' "').strip("'")
+        self.mode = (mode or config.MODE).lower().strip(' "').strip("'")
 
         self.books: Dict[str, OrderBook] = {}
         self.leverage_limits = {}
@@ -50,27 +48,27 @@ class Engine:
         self.stop_event = asyncio.Event()
         self.start_time = time.time()
 
-        if MODE == "paper":
+        if self.mode == "paper":
             from engine.simulation import SimulationEngine
             self.exchange = SimulationEngine(use_db=use_db)
             self.exchange.engine = self
             self.model = LearningModel(self.exchange)
-        elif MODE == "demo":
+        elif self.mode == "demo":
             from engine.exchanges.bitget import BitgetExchange
             self.exchange = BitgetExchange(BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO, is_demo=True)
             self.exchange.engine = self
             self.model = DummyModel()
             log.info("Initialized Bitget in DEMO mode.")
-        elif MODE == "live":
+        elif self.mode == "live":
             from engine.exchanges.bitget import BitgetExchange
             self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, is_demo=False)
             self.exchange.engine = self
             self.model = DummyModel()
             log.info("Initialized Bitget in LIVE mode.")
         else:
-            raise ValueError(f"Unknown mode: {MODE}")
+            raise ValueError(f"Unknown mode: {self.mode}")
 
-        self.router = SignalRouter(mode=MODE, exchange=self.exchange)
+        self.router = SignalRouter(mode=self.mode, exchange=self.exchange)
 
     async def start(self, preloaded_data=None, external_feed=None):
         self.start_time = time.time()
@@ -91,19 +89,40 @@ class Engine:
         except Exception as e:
             log.debug(f"Signal handlers not supported: {e}")
 
-        if MODE == "paper":
+        if self.mode == "paper":
             await self.exchange.warm_up(preloaded_data=preloaded_data)
             self.enabled_assets = self.exchange.discovered_assets
         else:
-            # Discover assets from exchange
+            # 1. Discover assets from exchange
             tickers = await self.exchange.get_tickers()
             sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
 
             demo_whitelist = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XAUUSDT", "NEARUSDT"]
 
-            # If in Demo mode, ONLY monitor the whitelist
-            if MODE == "demo":
-                self.enabled_assets = [s for s in demo_whitelist if any(t['symbol'] == s for t in sorted_tickers)]
+            # Ensure BTC is always mapped even if not in enabled_assets
+            if self.mode == "demo" and hasattr(self.exchange, "symbol_map"):
+                for t in sorted_tickers:
+                    if t['symbol'] in ["BTCUSDT", "SBTCUSDT"]:
+                         self.exchange.symbol_map["BTCUSDT"] = t['symbol']
+                         self.exchange.rev_symbol_map[t['symbol']] = "BTCUSDT"
+                         break
+
+            # 2. Apply Whitelist / Discovery
+            if self.mode == "demo":
+                self.enabled_assets = []
+                for s in demo_whitelist:
+                    # Check for exact match or S-prefix (common in Bitget Demo)
+                    for t in sorted_tickers:
+                        sym = t['symbol']
+                        if sym == s or sym == f"S{s}":
+                            # Store CANONICAL symbol as the primary reference
+                            self.enabled_assets.append(s)
+
+                            # Update exchange-specific mapping for internal routing
+                            if hasattr(self.exchange, "symbol_map"):
+                                self.exchange.symbol_map[s] = sym
+                                self.exchange.rev_symbol_map[sym] = s
+                            break
             else:
                 self.enabled_assets = []
                 for t in sorted_tickers:
@@ -115,12 +134,12 @@ class Engine:
 
             log.info(f"Exchange Initialization: {len(self.enabled_assets)} assets discovered.")
 
-            # For Demo/Live, we also warm up to get initial indicators
-            await self.exchange.warm_up()
+            # 3. Warm up indicators for discovered assets (Filtered list)
+            await self.exchange.warm_up(assets=self.enabled_assets)
 
         self._classify_asset_regimes()
 
-        if MODE == "paper":
+        if self.mode == "paper":
             self.leverage_limits = self.exchange.get_leverage_limits()
         else:
             # For Live/Demo, fetch leverage limits from exchange
@@ -194,9 +213,12 @@ class Engine:
                 self.peak_equity = self.equity
 
             # Slow down monitor for real exchanges to avoid rate limits
-            await asyncio.sleep(0.5 if MODE == "paper" else 5.0)
+            await asyncio.sleep(0.5 if self.mode == "paper" else 5.0)
 
     async def _maintenance_loop(self):
+        # [REPAIR-20260707] Delay initial purge to allow bot to finish initialization
+        await asyncio.sleep(600)
+
         while not self.stop_event.is_set():
             try:
                 if getattr(self.exchange, "db", None):

@@ -94,7 +94,11 @@ class BitGetClient:
                         continue
 
                     if result.get("code") != "00000":
-                        log.error(f"BitGet Error: {result} on {url}")
+                        # [REPAIR-20260707] Specific error for incorrect environment (40099)
+                        if result.get("code") == "40099":
+                            log.critical(f"BITGET CRITICAL: Exchange environment incorrect. Check your API Keys and MODE config. URL: {url}")
+                        else:
+                            log.error(f"BitGet Error: {result} on {url}")
                     return result
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 log.error(f"Connection error ({type(e).__name__}): {e} on {url}")
@@ -118,7 +122,7 @@ class BitGetClient:
         path = "/api/v2/mix/market/candles"
         params = {
             "symbol": symbol,
-            "productType": "usdt-futures",
+            "productType": "USDT-FUTURES",
             "granularity": granularity, # Do not lowercase
             "limit": str(limit)
         }
@@ -155,7 +159,7 @@ class BitGetClient:
         if price:
             data["price"] = str(price)
         if tp_price:
-            data["presetStopSurplusPrice"] = str(tp_price)
+            data["presetTakeProfitPrice"] = str(tp_price)
         if sl_price:
             data["presetStopLossPrice"] = str(sl_price)
 

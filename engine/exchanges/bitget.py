@@ -30,6 +30,18 @@ class BitgetExchange(Simulator, BaseExchange):
         self.is_demo = is_demo
         self.engine = None
 
+        # Symbol mapping for Demo Mode (Canonical <-> Exchange)
+        self.symbol_map = {} # canonical -> exchange
+        self.rev_symbol_map = {} # exchange -> canonical
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Maps an exchange-specific symbol (like SBTCUSDT) to its canonical form (BTCUSDT)."""
+        return self.rev_symbol_map.get(symbol, symbol)
+
+    def _denormalize_symbol(self, symbol: str) -> str:
+        """Maps a canonical symbol (like BTCUSDT) to its exchange-specific form (SBTCUSDT)."""
+        return self.symbol_map.get(symbol, symbol)
+
     async def get_tickers(self) -> List[Dict]:
         return await self.data_client.get_tickers()
 
@@ -42,9 +54,12 @@ class BitgetExchange(Simulator, BaseExchange):
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None, **kwargs) -> Dict:
         """
         Implementation for Bitget V2 order placement.
-        Supports embedded SL and TP via presetStopLossPrice and presetStopSurplusPrice.
+        Supports embedded SL and TP via presetStopLossPrice and presetTakeProfitPrice.
         """
-        tp_price = kwargs.get("exit_price") or kwargs.get("tp_price") or kwargs.get("presetStopSurplusPrice")
+        # Map canonical symbol to exchange symbol for Demo mode
+        exch_symbol = self._denormalize_symbol(symbol)
+
+        tp_price = kwargs.get("exit_price") or kwargs.get("tp_price") or kwargs.get("presetTakeProfitPrice")
         sl_price = kwargs.get("stop_price") or kwargs.get("sl_price") or kwargs.get("presetStopLossPrice")
 
         # Filter out keys already handled or not needed by API
@@ -52,10 +67,10 @@ class BitgetExchange(Simulator, BaseExchange):
         for key in ["exit_price", "tp_price", "stop_price", "sl_price", "features", "strategy_id"]:
             filtered_kwargs.pop(key, None)
 
-        log.info(f"Bitget: Placing {order_type} {side} order for {qty} {symbol} @ {price} (TP: {tp_price}, SL: {sl_price})")
+        log.info(f"Bitget: Placing {order_type} {side} order for {qty} {exch_symbol} @ {price} (TP: {tp_price}, SL: {sl_price})")
 
         res = await self.client_exec.place_order(
-            symbol=symbol,
+            symbol=exch_symbol,
             side=side,
             order_type=order_type,
             qty=qty,
@@ -88,14 +103,6 @@ class BitgetExchange(Simulator, BaseExchange):
         real = await self.get_balance()
         return real if real is not None else self.equity
 
-    def get_features(self, symbol: str) -> Dict:
-        """
-        Placeholder for technical features.
-        Live/Demo mode features should ideally be calculated from OHLCV.
-        """
-        # For now, return empty as strategies handle their own logic via Simulator
-        return {}
-
     async def scale_position(self, symbol: str, side: str, qty: float, **kwargs) -> Dict:
         # For Bitget, scaling up is just another order in the same direction
         return await self.place_order(symbol, side, "market", qty, **kwargs)
@@ -105,7 +112,9 @@ class BitgetExchange(Simulator, BaseExchange):
         Connects to Bitget WebSocket for real-time updates.
         """
         if not self.ws_client:
-            self.ws_client = BitGetWSClient(engine.enabled_assets + ["BTCUSDT"], self._ws_callback)
+            # Subscribe to exchange-specific symbols (denormalized)
+            symbols = [self._denormalize_symbol(s) for s in engine.enabled_assets + [config.BTC_SYMBOL]]
+            self.ws_client = BitGetWSClient(symbols, self._ws_callback)
             asyncio.create_task(self.ws_client.run())
 
     async def _ws_callback(self, msg):
@@ -123,13 +132,21 @@ class BitgetExchange(Simulator, BaseExchange):
         if not symbol:
             return
 
-        from orderbook import OrderBook
-        if symbol not in self.engine.books:
-            self.engine.books[symbol] = OrderBook(symbol)
+        norm_sym = self._normalize_symbol(symbol)
 
-        book = self.engine.books[symbol]
+        from orderbook import OrderBook
+        if norm_sym not in self.engine.books:
+            self.engine.books[norm_sym] = OrderBook(norm_sym)
+
+        book = self.engine.books[norm_sym]
 
         if channel == "books15":
+            # Update canonical simulator state via normalized symbol
+            if norm_sym in self.books:
+                 self.books[norm_sym].bids = [(float(p), float(q)) for p, q in data[0].get("bids", [])]
+                 self.books[norm_sym].asks = [(float(p), float(q)) for p, q in data[0].get("asks", [])]
+                 self.books[norm_sym].mid_price = (self.books[norm_sym].best_bid + self.books[norm_sym].best_ask) / 2
+
             for d in data:
                 book.update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
         elif channel == "trade":
@@ -138,6 +155,10 @@ class BitgetExchange(Simulator, BaseExchange):
             pass
 
     async def close(self):
-        await self.client.close()
+        # Simulator (parent) might have its own close or needs its client closed
+        if hasattr(self, "data_client"):
+            await self.data_client.close()
+        if hasattr(self, "client_exec"):
+            await self.client_exec.close()
         if self.ws_client:
             self.ws_client.stop()
