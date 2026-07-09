@@ -14,7 +14,7 @@ def get_env_stripped(key, default=None):
 # --- Mode & Environment ---
 # Sets whether the bot runs in "paper" (simulated) or "live" (real funds) mode.
 # [BT-002] Default mode. Prefer passing mode explicitly to constructors.
-MODE = get_env_stripped("MODE", "paper").lower()
+MODE = get_env_stripped("MODE", "paper").lower() # currently set to "live" in .env
 
 # Exchange credentials sourced from your .env file.
 BITGET_API_KEY = get_env_stripped("BITGET_API_KEY")
@@ -28,7 +28,7 @@ BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO") or BITGET_PA
 
 # --- Account & Risk ---
 # If True, Live/Demo modes use INITIAL_EQUITY instead of real account balance for sizing.
-USE_VIRTUAL_BALANCE = True
+USE_VIRTUAL_BALANCE = False
 
 # The simulated starting balance used for all PnL and risk calculations.
 INITIAL_EQUITY = 15.0
@@ -37,16 +37,16 @@ INITIAL_EQUITY = 15.0
 REINVESTMENT_PERCENTAGE = 1.0
 
 # Maximum fraction of total balance risked per single trade (0.005 = 0.5%).
-RISK_PER_TRADE = 0.0667
+RISK_PER_TRADE = 0.05
 
 # Maximum number of concurrent positions allowed.
-MAX_CONCURRENT_POSITIONS = 1
+MAX_CONCURRENT_POSITIONS = 100
 
 # Stop bot if balance drops below this fraction of ATH (0.5 = 50% drawdown).
-DRAWDOWN_LIMIT = 0.5
+DRAWDOWN_LIMIT = 0.8
 
 # Stop bot if total ROI reaches this fraction (1.0 = 100% profit).
-TOTAL_ROI_LIMIT = 10.0
+TOTAL_ROI_LIMIT = 1000.0
 
 # Stop bot after this many total trades.
 MAX_TRADES_LIMIT = 5000
@@ -56,7 +56,7 @@ MAX_DURATION = 86400
 
 # --- Assets ---
 # Number of top-volume assets to monitor simultaneously.
-ASSETS_COUNT = 250
+ASSETS_COUNT = 250 # trading should still happen for assets where all warm-up/historical data is available, while warm-up/historical data downloads in the background for other assets, which can begin trading once their data is complete.
 
 # Refresh top assets list every N hours.
 ASSET_REDISCOVERY_HOURS = 6.0
@@ -67,6 +67,7 @@ BTC_SYMBOL = "BTCUSDT"
 
 # --- Acquisition & Timeframes ---
 # June 1, 2022 to June 1, 2026 (Global Range)
+# tools/downloader.py should be using these dates
 MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
 MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
