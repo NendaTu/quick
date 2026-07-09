@@ -36,28 +36,31 @@ clear out remaining retail orders before the next day's open.
 ## The Intended Flow
 1. **Overnight Hub Detection**: Strategy identifies if it is currently in an Overnight
    session for a major hub.
-2. **Day Range (1H)**: Retrieves the High and Low established during that same hub's
+2. **Historical Catch-up (Fast-Forward)**: On startup, scans up to 8 hours of history to identify
+   day-extreme sweeps already in progress. Jumps to the appropriate reversal state if found.
+3. **Day Range (1H)**: Retrieves the High and Low established during that same hub's
    immediately preceding main trading day (Core Session).
-3. **Bias (1H)**: Directional bias (Bullish/Bearish) from 1H structure.
-4. **Liquidity Sweep (15m)**: Waits for price to "sweep" a Day Range extreme during
+4. **Bias (1H)**: Directional bias (Bullish/Bearish) from 1H structure.
+5. **Liquidity Sweep (15m)**: Waits for price to "sweep" a Day Range extreme during
    the overnight session. (e.g., Bearish Bias -> Sweep of Day High).
-5. **Reversal Sequence (1m)**:
+6. **Reversal Sequence (1m)**:
    - **BOS1**: Internal structure shift back toward the bias.
    - **FVG**: Imbalance creation.
    - **Retest**: Validation of the imbalance.
    - **BOS2**: Final execution trigger.
-6. **Execution**: Entry at BOS2 close.
+7. **Execution**: Entry at BOS2 close.
    - **SL**: 1 tick beyond the FVG extreme.
    - **TP1 (50%)**: First 15m liquidity level from the day session (1:1.2+ RRR).
    - **TP2**: Next 15m liquidity level (1:2.0+ RRR).
+8. **Cooldown & Reset**: Enters a 1-hour cooldown after any signal event or abandonment
+   to enable multiple overnight setups on the same asset.
 
 ## Limitations & Assumptions
-- **Volume Sensitivity**: Overnight markets can be thin; requires assets with high 24/7
-  liquidity to ensure fills with minimal slippage.
-- **Weekend Persistence**: On Friday nights and through the weekend, the Friday Day Range
-  is used as the anchor until Monday morning.
-- **Lower Volatility**: Expectations for "parabolic" follow-through are lower than during
-  the main day session.
+- **Wick Parity**: Utilizes REST-Patching to ensure live wicks match historical backtest wicks exactly.
+- **Volume Sensitivity**: Overnight markets can be thin; requires assets with high 24/7 liquidity.
+- **Weekend Persistence**: On Friday nights and through the weekend, the Friday Day Range is used as the anchor.
+- **History Requirement**: Needs 120 1H candles for range/bias and 300 1m candles for trajectory catch-up.
+- **Lower Volatility**: Expectations for follow-through are lower than during the main day session.
 """
 
 import logging

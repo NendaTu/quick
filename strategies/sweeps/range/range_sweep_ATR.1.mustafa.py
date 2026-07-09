@@ -35,27 +35,31 @@ reversal sequence.
 ## The Intended Flow
 1. **Expansion Detection (4H)**: Strategy monitors the 4H timeframe for a candle
    whose range (High-Low) is > 5x the preceding 14-period ATR.
-2. **Anchor Range**: The High and Low of this expansion candle become the active "Range".
-3. **Sequence Reset**: If a new 4H candle closes without being an expansion candle
+2. **Historical Catch-up (Fast-Forward)**: On startup, scans up to 8 hours of history for setup
+   milestones (Sweeps, BOS) related to the current ATR anchor. Jumps to the ready state if found.
+3. **Anchor Range**: The High and Low of this expansion candle become the active "Range".
+4. **Sequence Reset**: If a new 4H candle closes without being an expansion candle
    AND the sequence has not yet reached the "Sweep" phase (Phase 3), the range is discarded.
-4. **Bias (1H)**: Establish trend bias from 1H market structure.
-5. **Liquidity Sweep (15m)**: Wait for a wick sweep of the anchor range extreme
+5. **Bias (1H)**: Establish trend bias from 1H market structure.
+6. **Liquidity Sweep (15m)**: Wait for a wick sweep of the anchor range extreme
    opposite to the bias.
-6. **Reversal Sequence (1m)**:
+7. **Reversal Sequence (1m)**:
    - **BOS1**: Internal shift back toward bias.
    - **FVG**: Imbalance creation.
    - **Retest**: Validation of institutional interest.
    - **BOS2**: Final entry trigger.
-7. **Execution**:
+8. **Execution**:
    - **SL**: 1 tick beyond the FVG extreme.
    - **TP1 (50%)**: 15m liquidity levels formed since the expansion (1:1.5+ RRR).
    - **TP2**: Next 15m level (1:2.5+ RRR).
+9. **Cooldown & Reset**: Enters a 1-hour cooldown after any trade event to allow for
+   potential secondary setups on the same expansion anchor.
 
 ## Limitations & Assumptions
-- **Patience Requirement**: Expansion candles (5x ATR) are rare; the strategy
-  may go days without a signal on a single asset.
-- **Trend Exhaustion**: Assumes expansion candles at structural extremes represent
-  exhaustion and liquidity raids rather than simple trend continuation.
+- **Wick Parity**: Relies on REST-Patching to ensure expansion high/low and sweeps match backtest.
+- **Patience Requirement**: Expansion candles (5x ATR) are rare; the strategy may go days without a signal.
+- **History Requirement**: Needs 40 4H candles for ATR baseline and 300 1m candles for trajectory catch-up.
+- **Trend Exhaustion**: Assumes expansion candles at extremes represent exhaustion.
 """
 
 import logging

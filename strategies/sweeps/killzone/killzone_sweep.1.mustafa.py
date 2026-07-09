@@ -35,28 +35,33 @@ high precision across three timeframes.
 ## The Intended Flow
 1. **Hub Detection**: The strategy identifies the current active Hub (US, UK, etc.) and determines
    if it is within the 2-hour "Killzone" of the Core Session start.
-2. **Overnight Range (1H)**: Scans back to find the High and Low established during the hub's preceding
-   overnight session. For Monday opens, this range spans back to the previous Friday's close.
-3. **Bias (1H)**: Establishes directional bias (Bullish/Bearish) based on 1H Market Structure.
-4. **Liquidity Sweep (15m)**: Waits for price to "sweep" (wick beyond) the overnight extreme *opposite*
+2. **Historical Catch-up (Fast-Forward)**: On startup, scans up to 8 hours of history to see if a
+   liquidity sweep and reversal sequence are already in progress. If found, jumps to the advanced state.
+3. **Overnight Range (1H)**: Scans back to find the High and Low established during the hub's preceding
+   overnight session.
+4. **Bias (1H)**: Establishes directional bias (Bullish/Bearish) based on 1H Market Structure.
+5. **Liquidity Sweep (15m)**: Waits for price to "sweep" (wick beyond) the overnight extreme *opposite*
    to the bias. (e.g., Bullish Bias -> Sweep of Overnight Low).
-5. **Reversal Sequence (1m)**:
+6. **Reversal Sequence (1m)**:
    - **BOS1**: Confirms the first shift in internal structure back toward the bias.
    - **FVG**: Identifies an imbalance created during the impulsive BOS1 move.
    - **Retest**: Waits for price to re-enter the FVG zone, confirming institutional interest.
    - **BOS2**: Final trigger—a second break of structure following the retest, signaling
      continuation of the reversal.
-6. **Execution**: Entry at the close of the BOS2 candle.
+7. **Execution**: Entry at the close of the BOS2 candle.
    - **SL**: Placed 1 tick beyond the 1m FVG.
    - **TP1 (50%)**: Targeted at the first 15m liquidity level providing at least 1:1.5 RRR.
    - **TP2**: Targeted at the next 15m liquidity level at/beyond 1:2.5 RRR.
+8. **Cooldown & Reset**: After a successful signal or abandonment, the strategy enters a 1-hour
+   cooldown before resetting to `IDLE` to allow multiple setups per session.
 
 ## Limitations & Assumptions
-- **Volume Dependence**: Expects standard exchange hours for liquidity (London/NY overlap is optimal); may underperform during low-volume bank holidays or late Asian session "drifts".
+- **Volume Dependence**: Expects standard exchange hours for liquidity; may underperform during bank holidays.
+- **Wick Parity**: Relies on the Engine's REST-Patching mechanism to ensure 100% wick alignment between live and backtest.
 - **Latency Sensitivity**: Requires low-latency execution as 1m BOS2 triggers can move significantly within seconds.
-- **History Requirement**: Needs at least 3-5 days of 1H/15m data to accurately calculate multi-day overnight ranges and establish consistent MTF bias.
-- **Market Conditions**: Highly effective in Trending or Range-Expansion markets. May suffer from "paper cuts" in low-volatility, sideways-grinding markets where liquidity sweeps lack follow-through.
-- **Asset Universe**: Designed for high-volume USDT-M futures on Bitget; requires assets with tight spreads (<0.1%) and sufficient order book depth to support the intended position sizes.
+- **History Requirement**: Needs 120 1H candles for bias and 300 1m candles for trajectory catch-up.
+- **Market Conditions**: Highly effective in Trending or Range-Expansion markets.
+- **Asset Universe**: Designed for high-volume USDT-M futures on Bitget.
 """
 
 import logging
