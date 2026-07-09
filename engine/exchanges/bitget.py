@@ -181,7 +181,10 @@ class BitgetExchange(Simulator, BaseExchange):
             # 4. Time Synchronization Poller
             asyncio.create_task(self._time_sync_poller(engine))
 
-        # 5. Background Maintenance & Processing Loop
+            # 5. [REPAIR-20260708] Wick Parity Patcher
+            asyncio.create_task(self._wick_parity_patcher(engine))
+
+        # 6. Background Maintenance & Processing Loop
         last_heartbeat = time.time()
         while True:
             try:
@@ -257,6 +260,64 @@ class BitgetExchange(Simulator, BaseExchange):
                 await self.client_exec.sync_time()
             except Exception as e:
                 log.error(f"Time Sync Poller Error: {e}")
+
+    async def _wick_parity_patcher(self, engine):
+        """
+        [REPAIR-20260708] Ensures Wick Parity between Live and Backtest.
+        Every minute, fetches official REST candles to overwrite WebSocket-formed ones.
+        """
+        # Wait for initial warm-up
+        await asyncio.sleep(30)
+
+        while not engine.stop_event.is_set():
+            try:
+                # Align with 1m candle close + 5s buffer for exchange finalization
+                now = time.time()
+                wait_sec = 60 - (now % 60) + 5
+                await asyncio.sleep(wait_sec)
+
+                if engine.stop_event.is_set(): break
+
+                assets = engine.enabled_assets + [config.BTC_SYMBOL]
+                # Filter to assets that are currently being processed
+                active_assets = [s for s in assets if s in self.ohlcv and self.ohlcv[s].get("1m")]
+
+                log.debug(f"PARITY | Starting REST patch for {len(active_assets)} assets...")
+
+                for sym in active_assets:
+                    if engine.stop_event.is_set(): break
+                    try:
+                        # Fetch the last 2 candles to ensure the most recently closed one is perfect
+                        res = await self.data_client.get_candles(sym, "1m", limit=2)
+                        if isinstance(res, list) and len(res) >= 1:
+                            for c in res:
+                                ts = float(c[0]) / 1000
+                                o, h, l, cl, v = map(float, c[1:6])
+
+                                # Update internal simulator state
+                                if sym in self.ohlcv and "1m" in self.ohlcv[sym]:
+                                    # Find matching candle by timestamp
+                                    for entry in reversed(self.ohlcv[sym]["1m"]):
+                                        if entry["ts"] == ts:
+                                            # Patch the wicks and close
+                                            if entry["h"] != h or entry["l"] != l or entry["c"] != cl:
+                                                log.debug(f"PARITY | Patched {sym} 1m @ {ts}: wicks=[{entry['h']:.2f}/{entry['l']:.2f}] -> [{h:.2f}/{l:.2f}]")
+                                                entry.update({"o": o, "h": h, "l": l, "c": cl, "v": v})
+                                            break
+
+                                # Backpacking: Also save to DB
+                                if self.db:
+                                    self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+
+                    except Exception as e:
+                        log.error(f"PARITY | Patch error for {sym}: {e}")
+
+                    # Yield to event loop to keep WS responsive
+                    await asyncio.sleep(0.01)
+
+            except Exception as e:
+                log.error(f"PARITY | Global patcher error: {e}")
+                await asyncio.sleep(60)
 
     async def _process_orders(self):
         """

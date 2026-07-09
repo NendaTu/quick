@@ -641,6 +641,9 @@ class Simulator:
         else:
             asyncio.create_task(self._external_feed_loop(external_feed))
 
+        # [REPAIR-20260708] Wick Parity Patcher (Shared for all live/paper/demo)
+        asyncio.create_task(self._wick_parity_patcher(engine))
+
         last_heartbeat = time.time()
         while True:
             await self._process_orders()
@@ -656,6 +659,84 @@ class Simulator:
                 break
 
             await asyncio.sleep(0.1)
+
+    async def _wick_parity_patcher(self, engine):
+        """
+        [REPAIR-20260708] Ensures Wick Parity between Live and Backtest.
+        Every minute, fetches official REST candles to overwrite WebSocket-formed ones.
+        Also performs 'Backpacking' persistence to populate historical DB.
+        """
+        # Wait for initial warm-up
+        await asyncio.sleep(60)
+
+        while not engine.stop_event.is_set():
+            try:
+                # Align with 1m candle close + 5s buffer for exchange finalization
+                now = time.time()
+                wait_sec = 60 - (now % 60) + 5
+                await asyncio.sleep(wait_sec)
+
+                if engine.stop_event.is_set(): break
+
+                current_min_epoch = int(time.time() // 60)
+
+                # Determine which higher timeframes just closed
+                tfs_to_patch = ["1m"]
+                if current_min_epoch % 5 == 0: tfs_to_patch.append("5m")
+                if current_min_epoch % 15 == 0: tfs_to_patch.append("15m")
+                if current_min_epoch % 30 == 0: tfs_to_patch.append("30m")
+                if current_min_epoch % 60 == 0: tfs_to_patch.append("1H")
+                if current_min_epoch % 240 == 0: tfs_to_patch.append("4H")
+                if current_min_epoch % 1440 == 0: tfs_to_patch.append("1D")
+
+                # Filter to configured timeframes
+                tfs_to_patch = [tf for tf in tfs_to_patch if tf in AVAILABLE_TIMEFRAMES]
+
+                assets = list(set(self.discovered_assets + [BTC_SYMBOL]))
+                active_assets = [s for s in assets if s in self.ohlcv and self.ohlcv[s].get("1m")]
+
+                if not active_assets: continue
+
+                log.debug(f"PARITY | Starting REST patch for {len(active_assets)} assets across {tfs_to_patch}...")
+
+                # Prioritize entry timeframe (usually 1m)
+                for tf in tfs_to_patch:
+                    # Give 1m priority in the next cycle if we fall behind
+                    if tf != "1m" and (time.time() % 60) > 55:
+                        log.warning(f"PARITY | Cycle for {tf} interrupted to prioritize next 1m boundary")
+                        break
+
+                    for sym in active_assets:
+                        if engine.stop_event.is_set(): break
+                        try:
+                            # Fetch last 2 candles
+                            res = await self.client.get_candles(sym, tf, limit=2)
+                            if isinstance(res, list) and len(res) >= 1:
+                                for c in res:
+                                    ts = float(c[0]) / 1000
+                                    o, h, l, cl, v = map(float, c[1:6])
+
+                                    # Update internal simulator state
+                                    if sym in self.ohlcv and tf in self.ohlcv[sym]:
+                                        for entry in reversed(self.ohlcv[sym][tf]):
+                                            if entry["ts"] == ts:
+                                                if entry["h"] != h or entry["l"] != l or entry["c"] != cl:
+                                                    entry.update({"o": o, "h": h, "l": l, "c": cl, "v": v})
+                                                break
+
+                                    # Backpacking: Persist official data to DB
+                                    if self.db:
+                                        self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
+
+                        except Exception as e:
+                            log.error(f"PARITY | Patch error for {sym} {tf}: {e}")
+
+                        # Yield control
+                        await asyncio.sleep(0.01)
+
+            except Exception as e:
+                log.error(f"PARITY | Global patcher error: {e}")
+                await asyncio.sleep(10)
 
     async def _process_orders(self):
         fills = []
