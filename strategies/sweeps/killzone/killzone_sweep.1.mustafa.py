@@ -112,7 +112,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
             for k in self.params:
                 if k in config_overrides:
                     self.params[k] = config_overrides[k]
-                    log.info(f"STRATEGY | Override {k} = {self.params[k]}")
+                    self.logger.info(f"STRATEGY | Override {k} = {self.params[k]}")
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         symbol = market_data["symbol"]

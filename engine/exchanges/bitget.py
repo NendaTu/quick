@@ -22,6 +22,10 @@ class BitgetExchange(Simulator, BaseExchange):
         # 2. execution_client: Handles private actions (orders, balance) in Live or Demo environment.
         self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo)
 
+        # 3. Synchronize time immediately
+        asyncio.create_task(self.data_client.sync_time())
+        asyncio.create_task(self.client_exec.sync_time())
+
         # Initialize Simulator first with the data client to get OHLCV/TA capabilities
         # This ensures Simulator.warm_up uses the correct keys and environment.
         Simulator.__init__(self, use_db=True, client=self.data_client)
@@ -88,9 +92,10 @@ class BitgetExchange(Simulator, BaseExchange):
         Fetches the actual USDT balance from the exchange.
         """
         accounts = await self.client_exec.get_account_balance()
-        if not accounts: return None
+        if not accounts or not isinstance(accounts, list):
+            return None
         for acc in accounts:
-            if acc.get("marginCoin") == "USDT":
+            if isinstance(acc, dict) and acc.get("marginCoin") == "USDT":
                 return float(acc.get("available", 0))
         return 0.0
 
@@ -118,16 +123,26 @@ class BitgetExchange(Simulator, BaseExchange):
 
     async def get_positions(self) -> List[Dict]:
         raw_positions = await self.client_exec.get_positions()
+        if not isinstance(raw_positions, list):
+            return []
         # Map back to canonical symbols
+        valid_positions = []
         for p in raw_positions:
-            p['symbol'] = self._normalize_symbol(p.get('symbol', ''))
-        return raw_positions
+            if isinstance(p, dict):
+                p['symbol'] = self._normalize_symbol(p.get('symbol', ''))
+                valid_positions.append(p)
+        return valid_positions
 
     async def get_open_orders(self) -> List[Dict]:
         raw_orders = await self.client_exec.get_open_orders()
+        if not isinstance(raw_orders, list):
+            return []
+        valid_orders = []
         for o in raw_orders:
-            o['symbol'] = self._normalize_symbol(o.get('symbol', ''))
-        return raw_orders
+            if isinstance(o, dict):
+                o['symbol'] = self._normalize_symbol(o.get('symbol', ''))
+                valid_orders.append(o)
+        return valid_orders
 
     async def data_feed_task(self, engine, external_feed=None):
         """

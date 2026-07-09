@@ -220,17 +220,29 @@ class Simulator:
                     ts, o, h, l, cl, v = c
                     new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
             else:
-                # We have gaps, fetch from API
-                data = await self.client.get_candles(sym, tf, limit=required_limit)
-                if isinstance(data, list):
-                    for c in reversed(data):
-                        ts = float(c[0]) / 1000
+                # [REPAIR-20260708] Paginated historical fetch to bypass 100-candle limit
+                log.debug(f"Fetching {required_limit} {tf} candles for {sym} via history API...")
+                remaining = required_limit
+                end_ms = int(time.time() * 1000)
+
+                while remaining > 0:
+                    batch_size = min(200, remaining)
+                    data = await self.client.get_history_candles(sym, tf, end_time=end_ms, limit=batch_size)
+                    if not data:
+                        break
+
+                    for c in data: # History API returns newest first
+                        ts_ms = int(c[0])
+                        ts = ts_ms / 1000
                         o, h, l, cl, v = map(float, c[1:6])
                         if self.db:
                             self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
                         new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-                else:
-                    log.warning(f"Failed to fetch {tf} candles for {sym}")
+
+                    remaining -= len(data)
+                    if len(data) < batch_size: break # End of available history
+                    end_ms = int(data[-1][0]) - 1 # Use oldest in batch as next end_time
+                    await asyncio.sleep(0.1) # Rate limit respect
 
             # Merge with existing (possibly already populated by real-time WS)
             if new_candles:

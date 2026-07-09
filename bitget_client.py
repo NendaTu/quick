@@ -21,6 +21,7 @@ class BitGetClient:
         self.is_demo = is_demo
         self.base_url = "https://api.bitget.com"
         self._session: Optional[aiohttp.ClientSession] = None
+        self.time_offset = 0
 
     async def get_session(self):
         if self._session is None or self._session.closed:
@@ -34,8 +35,23 @@ class BitGetClient:
         mac = hmac.new(self.secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
         return base64.b64encode(mac.digest()).decode("utf-8")
 
+    async def sync_time(self):
+        try:
+            # Public endpoint to get server time
+            url = f"{self.base_url}/api/v2/public/time"
+            session = await self.get_session()
+            async with session.get(url) as response:
+                result = await response.json()
+                if result.get("code") == "00000":
+                    server_time = int(result["data"])
+                    local_time = int(time.time() * 1000)
+                    self.time_offset = server_time - local_time
+                    log.info(f"Synchronized time with Bitget. Offset: {self.time_offset}ms")
+        except Exception as e:
+            log.error(f"Failed to sync time: {e}")
+
     def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
-        timestamp = str(int(time.time() * 1000))
+        timestamp = str(int(time.time() * 1000) + self.time_offset)
         sign = self._generate_signature(timestamp, method, request_path, body)
         headers = {
             "ACCESS-KEY": str(self.api_key),
@@ -67,7 +83,7 @@ class BitGetClient:
                 if attempt > 0:
                     await asyncio.sleep(0.1 * attempt)
 
-                async with session.request(method, url, data=body, headers=headers, timeout=30) as response:
+                async with session.request(method, url, data=body, headers=headers, timeout=10) as response:
                     if response.status == 429:
                         # [REPAIR-20260702] Jittered exponential backoff
                         wait = (2 ** attempt) + (random.random() * 0.5)
@@ -77,6 +93,10 @@ class BitGetClient:
 
                     try:
                         result = await response.json()
+                        if not isinstance(result, dict):
+                            # Bitget sometimes returns a JSON string instead of an object in error cases
+                            log.warning(f"API returned non-dict JSON: {type(result)}: {str(result)[:200]}")
+                            result = {"code": "error", "msg": str(result), "data": result}
                     except Exception as json_err:
                         # Fallback for non-JSON responses
                         text = await response.text()
@@ -94,6 +114,12 @@ class BitGetClient:
                         continue
 
                     if result.get("code") != "00000":
+                        # [REPAIR-20260708] Handle timestamp expiry
+                        if result.get("code") == "40008":
+                            log.warning("Bitget reported timestamp expiry. Re-syncing time and retrying...")
+                            await self.sync_time()
+                            continue
+
                         # [REPAIR-20260707] Specific error for incorrect environment (40099)
                         if result.get("code") == "40099":
                             log.critical(f"BITGET CRITICAL: Exchange environment incorrect. Check your API Keys and MODE config. URL: {url}")
@@ -127,19 +153,44 @@ class BitGetClient:
             "limit": str(limit)
         }
         res = await self.request("GET", path, params=params)
-        return res.get("data") or []
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def get_history_candles(self, symbol: str, granularity: str, end_time: Optional[int] = None, limit: int = 200) -> List:
+        path = "/api/v2/mix/market/history-candles"
+        params = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "granularity": granularity,
+            "limit": str(limit)
+        }
+        if end_time:
+            params["endTime"] = str(end_time)
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_symbols(self) -> List:
         path = "/api/v2/mix/market/contracts"
         params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
-        return res.get("data", [])
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_tickers(self) -> List:
         path = "/api/v2/mix/market/tickers"
         params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
-        return res.get("data", [])
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None,
                           trade_side: str = "open", margin_mode: str = "isolated", tp_price: Optional[float] = None,
@@ -170,7 +221,10 @@ class BitGetClient:
         path = "/api/v2/mix/account/accounts"
         params = {"productType": "USDT-FUTURES"}
         res = await self.request("GET", path, params=params)
-        return res.get("data", [])
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_positions(self, symbol: Optional[str] = None) -> List[Dict]:
         path = "/api/v2/mix/position/all-position"
@@ -178,7 +232,13 @@ class BitGetClient:
         if symbol:
             params["symbol"] = symbol
         res = await self.request("GET", path, params=params)
-        return res.get("data") or []
+        data = res.get("data")
+        if isinstance(data, dict):
+            # Bitget V2 positions is actually a list, but handle dict wrapper just in case
+            return data.get("list") or data.get("positions") or []
+        if isinstance(data, list):
+            return data
+        return []
 
     async def cancel_order(self, symbol: str, order_id: str) -> Dict:
         path = "/api/v2/mix/order/cancel-order"
@@ -197,18 +257,23 @@ class BitGetClient:
             "orderId": order_id
         }
         res = await self.request("GET", path, params=params)
-        return res.get("data") or {}
+        data = res.get("data")
+        return data if isinstance(data, dict) else {}
 
     async def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
-        path = "/api/v2/mix/order/margin-coin-order-list"
+        path = "/api/v2/mix/order/orders-pending"
         params = {
-            "productType": "USDT-FUTURES",
-            "marginCoin": "USDT"
+            "productType": "USDT-FUTURES"
         }
         if symbol:
             params["symbol"] = symbol
         res = await self.request("GET", path, params=params)
-        return res.get("data") or []
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("entrustedList") or []
+        if isinstance(data, list):
+            return data
+        return []
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -253,9 +318,15 @@ class BitGetWSClient:
                         await ws.send_json(auth_msg)
                         # Wait for login confirmation
                         resp = await ws.receive_json()
-                        if resp.get("code") != "0":
-                            log.error(f"Private WS Login Failed: {resp}")
-                            break
+                        # Success can be "0" or 0 depending on the API version/response type
+                        # Also handle case where code might be in a different field or nested
+                        code = resp.get("code") or resp.get("data", {}).get("code") if isinstance(resp.get("data"), dict) else resp.get("code")
+                        if str(code) != "0" and resp.get("event") != "login":
+                             log.error(f"Private WS Login Failed: {resp}")
+                             break
+                        elif str(code) != "0" and resp.get("code") is not None:
+                             log.error(f"Private WS Login Error: {resp}")
+                             break
 
                     all_args = []
                     if self.is_private:
