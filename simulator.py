@@ -203,9 +203,20 @@ class Simulator:
         # 1. Fetch OHLCV for all relevant timeframes
         tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
+        # [REPAIR-20260708] Dynamic history requirement from active strategies
+        dynamic_req = {}
+        if self.engine and self.engine.strategies:
+            for strat in self.engine.strategies:
+                if hasattr(strat, "required_history"):
+                    for tf, count in strat.required_history.items():
+                        dynamic_req[tf] = max(dynamic_req.get(tf, 0), count)
+
         for tf in AVAILABLE_TIMEFRAMES:
             # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
-            required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
+            # [REPAIR-20260708] Merge static defaults with dynamic strategy requirements
+            default_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
+            required_limit = max(default_limit, dynamic_req.get(tf, 0))
+
             lookback_sec = required_limit * tf_map.get(tf, 60)
             start_ts = time.time() - lookback_sec
             end_ts = time.time()

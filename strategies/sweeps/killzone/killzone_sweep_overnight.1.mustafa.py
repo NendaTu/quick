@@ -83,8 +83,8 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
         # [TECH-001] Explicit history requirements for authenticity
-        # Values matched to technical module scan depths (e.g. sessions.py scans 120 1H candles)
-        self.required_history = {"1H": 120, "15m": 100, "1m": 100}
+        # Values matched to technical module scan depths and catch-up range.
+        self.required_history = {"1H": 120, "15m": 120, "1m": 300}
 
         # --- Strategy-Specific Parameters ---
         # [TECH-001] bypass_external_filters:
