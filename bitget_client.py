@@ -172,16 +172,13 @@ class BitGetClient:
         return {"code": "error", "msg": "Max retries exceeded", "data": None}
 
     async def get_candles(self, symbol: str, granularity: str, limit: int = 100) -> List:
-        # [REPAIR-20260708] BitGet V2 Granularity Mapping
-        # Official formats: 1min, 5min, 15min, 30min, 1h, 4h, 1day, etc.
-        g_map = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1H": "1h", "4H": "4h", "1D": "1day"}
-        gran = g_map.get(granularity, granularity)
-
+        # BitGet V2 granularity is case-sensitive for some timeframes (e.g. 1H, 4H, 1D)
+        # Official formats: 1m, 3m, 5m, 15m, 30m, 1H, 4H, 6H, 12H, 1D, 1W, 1M
         path = "/api/v2/mix/market/candles"
         params = {
             "symbol": symbol,
             "productType": "USDT-FUTURES",
-            "granularity": gran,
+            "granularity": granularity, # Use direct mapping
             "limit": str(limit)
         }
         res = await self.request("GET", path, params=params)
@@ -191,15 +188,11 @@ class BitGetClient:
         return []
 
     async def get_history_candles(self, symbol: str, granularity: str, end_time: Optional[int] = None, limit: int = 200) -> List:
-        # [REPAIR-20260708] BitGet V2 Granularity Mapping
-        g_map = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1H": "1h", "4H": "4h", "1D": "1day"}
-        gran = g_map.get(granularity, granularity)
-
         path = "/api/v2/mix/market/history-candles"
         params = {
             "symbol": symbol,
             "productType": "USDT-FUTURES",
-            "granularity": gran,
+            "granularity": granularity,
             "limit": str(limit)
         }
         if end_time:

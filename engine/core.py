@@ -773,6 +773,12 @@ class Engine:
                             if f"{sym}_{side}" in self.open_positions:
                                 continue
 
+                            # [REPAIR-20260708] Log once when an asset completes warm-up
+                            if not hasattr(self, "_ready_logged"): self._ready_logged = set()
+                            if sym not in self._ready_logged:
+                                log.info(f"ASSET READY: {sym} has completed all historical requirements.")
+                                self._ready_logged.add(sym)
+
                             if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
                                 continue
 
@@ -923,9 +929,13 @@ class Engine:
                 if all_ready: ready_count += 1
         else:
             # Fallback if no strategies (e.g. metadata only)
-            ready_count = len(getattr(self.exchange, "ready_assets", []))
+            # Filter to only count enabled assets to avoid > 100% reports
+            ready_count = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
 
-        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
+        # Coarse progress from simulator
+        sim_ready = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
+
+        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} (Progress: {sim_ready}/{total_count}) | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
 
     async def _sync_exchange_state(self):
         """
