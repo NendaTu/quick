@@ -777,7 +777,12 @@ class Engine:
                             entry = signal.get("entry_price", 0)
                             stop = signal.get("stop_price", 0)
                             tp = signal.get("exit_price", signal.get("tp_price", 0))
-                            btc_conf = signal.get("btc_confluence", "")
+                            btc_conf = signal.get("btc_confluence")
+                            if not btc_conf and feat:
+                                btc_conf = f"1D:{feat.get('btc_1D', 0):.4f} 4H:{feat.get('btc_4H', 0):.4f} 1H:{feat.get('btc_1H', 0):.4f} 15m:{feat.get('btc_15m', 0):.4f}"
+                            elif not btc_conf:
+                                btc_conf = ""
+
                             orig_side = signal.get("original_side", side)
                             is_contr = signal.get("is_contrarian", False)
 

@@ -185,73 +185,77 @@ class KillzoneSweepStrategy(JBaseStrategy):
             self._cache[cache_key_liq] = {'ts': last_m15_ts, 'liq': liq_15m}
 
         if state == "IDLE":
-            # [T-003] Check all 15m candles since session start for a sweep
-            # This ensures we don't miss a sweep that happened before the current 1m tick
+            # [REPAIR-20260708] Scan last 4 hours (16 candles) for a sweep to catch up immediately
             sweep_detected = False
             sweep_side = None
+            sweep_ts = 0
 
-            # Find index of first 15m candle in current core session
-            # (Simplified: check last 8 15m candles = 2 hours)
-            for c in m15[-8:]:
+            for c in m15[-16:]:
                 if bias == 'bullish':
                     if c['l'] < ov_range['overnight_low'] and c['c'] > ov_range['overnight_low']:
-                        sweep_detected = True; sweep_side = 'ssl'; break
+                        sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; break
                 else: # bearish
                     if c['h'] > ov_range['overnight_high'] and c['c'] < ov_range['overnight_high']:
-                        sweep_detected = True; sweep_side = 'bsl'; break
+                        sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; break
 
             if sweep_detected:
-                if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", m15[-1]['ts'], "15m"):
-                    self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Entering WAITING_FOR_BOS1")
+                if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", sweep_ts, "15m"):
+                    self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Catching up sequence.")
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_sweep_side", sweep_side, self.simulator)
+                self.save_state(f"{symbol}_last_milestone_ts", sweep_ts, self.simulator)
                 state = "WAITING_FOR_BOS1"
             else:
                 return None
 
-        # --- Phase 3: Execution Sequence (1m) ---
+        # --- Phase 3: Catch-up & Execution Sequence (1m) ---
         sweep_side = self.get_state(f"{symbol}_sweep_side", self.simulator)
-        m1_struct = identify_structure(m1, strength=self.params["m1_strength"])
-        m1_sig = m1_struct.get('structure_signal') or ''
+        last_ms_ts = float(self.get_state(f"{symbol}_last_milestone_ts", self.simulator) or 0)
 
-        if state == "WAITING_FOR_BOS1":
-            if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                self.record_milestone("Phase 4: 1m BOS1", m1[-1]['ts'], "1m")
-                self.logger.info(f"[{symbol}] 1m BOS1 detected ({m1_sig})! Entering WAITING_FOR_FVG")
-                self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
-                state = "WAITING_FOR_FVG"
+        # Scan history since last milestone to catch up to the current state
+        # Limit scan to last 100 1m candles for performance
+        relevant_m1_indices = [i for i, c in enumerate(m1) if c['ts'] > last_ms_ts]
+        if len(relevant_m1_indices) > 100: relevant_m1_indices = relevant_m1_indices[-100:]
 
-        if state == "WAITING_FOR_FVG":
-            fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
-            # Check for FVG in the direction of our bias
-            target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
+        for idx in relevant_m1_indices:
+            ctx_m1 = m1[:idx+1]
+            curr_c = ctx_m1[-1]
 
-            if fvg_data.get('fvg_count', 0) > 0:
-                # Check if ANY of the detected FVGs match our target type
-                # detect_fvgs only returns 'nearest', let's trust it for now
+            if state == "WAITING_FOR_BOS1":
+                m1_struct = identify_structure(ctx_m1, strength=self.params["m1_strength"])
+                m1_sig = m1_struct.get('structure_signal') or ''
+                if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
+                    self.record_milestone("Phase 4: 1m BOS1", curr_c['ts'], "1m")
+                    self.logger.info(f"[{symbol}] 1m BOS1 detected in history! Entering WAITING_FOR_FVG")
+                    self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
+                    self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
+                    state = "WAITING_FOR_FVG"
+
+            if state == "WAITING_FOR_FVG":
+                fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
+                target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 5: 1m FVG Formed", m1[-1]['ts'], "1m")
-                    self.logger.info(f"[{symbol}] 1m {target_fvg.upper()} FVG detected! Entering WAITING_FOR_RETEST")
+                    self.record_milestone("Phase 5: 1m FVG Formed", curr_c['ts'], "1m")
+                    self.logger.info(f"[{symbol}] 1m FVG detected in history! Entering WAITING_FOR_RETEST")
                     self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
+                    self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_RETEST"
 
-        if state == "WAITING_FOR_RETEST":
-            fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
-            target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
-            retested = False
+            if state == "WAITING_FOR_RETEST":
+                fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
+                target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
+                if fvg_data.get('nearest_fvg_type') == target_fvg:
+                    self.record_milestone("Phase 6: 1m FVG Retest", curr_c['ts'], "1m")
+                    self.logger.info(f"[{symbol}] 1m FVG Retest complete in history! Entering WAITING_FOR_BOS2")
+                    self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
+                    self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
+                    state = "WAITING_FOR_BOS2"
 
-            # More lenient retest logic: any overlap with the target FVG
-            if fvg_data.get('nearest_fvg_type') == target_fvg:
-                retested = True
+            if state == "WAITING_FOR_BOS2":
+                break
 
-            if retested:
-                self.record_milestone("Phase 6: 1m FVG Retest", m1[-1]['ts'], "1m")
-                self.logger.info(f"[{symbol}] 1m FVG Retest complete! Entering WAITING_FOR_BOS2")
-                self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
-                state = "WAITING_FOR_BOS2"
-
+        # Final check for entry trigger (must be fresh/current)
         if state == "WAITING_FOR_BOS2":
-            # Re-check structure with latest params
             m1_struct = identify_structure(m1, strength=self.params["m1_strength"])
             m1_sig = m1_struct.get('structure_signal') or ''
 
