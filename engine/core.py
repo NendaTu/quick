@@ -910,7 +910,11 @@ class Engine:
         minutes, seconds = divmod(rem, 60)
         elapsed_str = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
 
-        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
+        # Asset Readiness
+        ready_count = len(getattr(self.exchange, "ready_assets", []))
+        total_count = len(self.enabled_assets)
+
+        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
 
     async def _sync_exchange_state(self):
         """
