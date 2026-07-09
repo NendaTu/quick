@@ -222,60 +222,51 @@ class Simulator:
             start_ts = time.time() - lookback_sec
             end_ts = time.time()
 
-            new_candles = []
-
-            # [TECH-001] Use range-based gap detection
+            # 1. Fill Gaps in DB
             gaps = []
             if self.db:
                 gaps = self.db.get_data_gaps(sym, tf, start_ts, end_ts)
             else:
                 gaps = [(start_ts, end_ts)]
 
-            if not gaps:
-                # Data is complete in DB
-                log.debug(f"Using cached {tf} candles for {sym}")
+            if gaps:
+                log.debug(f"Filling {len(gaps)} gaps for {sym} {tf} via history API...")
+                for g_start, g_end in gaps:
+                    # Paginated fetch for this specific gap
+                    curr_end_ms = int(g_end * 1000)
+
+                    while curr_end_ms > g_start * 1000:
+                        batch_size = 200
+                        data = await self.client.get_history_candles(sym, tf, end_time=curr_end_ms, limit=batch_size)
+                        if not data: break
+
+                        valid_in_gap = 0
+                        for c in data:
+                            ts = int(c[0]) / 1000
+                            if ts < g_start: continue
+                            if ts > g_end: continue
+                            o, h, l, cl, v = map(float, c[1:6])
+                            if self.db:
+                                self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
+                            valid_in_gap += 1
+
+                        if valid_in_gap == 0: break # No more data in this gap
+                        curr_end_ms = int(data[-1][0]) - 1
+                        await asyncio.sleep(0.1)
+
+            # 2. LOAD complete data from DB into memory (Ensure memory is fully populated)
+            if self.db:
                 db_candles = self.db.get_recent_candles(sym, tf, limit=required_limit)
-                for c in db_candles:
-                    ts, o, h, l, cl, v = c
-                    new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-            else:
-                # [REPAIR-20260708] Paginated historical fetch to bypass 100-candle limit
-                log.debug(f"Fetching {required_limit} {tf} candles for {sym} via history API...")
-                remaining = required_limit
-                end_ms = int(time.time() * 1000)
+                if db_candles:
+                    new_candles = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v}
+                                   for ts, o, h, l, cl, v in db_candles]
 
-                while remaining > 0:
-                    batch_size = min(200, remaining)
-                    data = await self.client.get_history_candles(sym, tf, end_time=end_ms, limit=batch_size)
-                    if not data:
-                        break
-
-                    for c in data: # History API returns newest first
-                        ts_ms = int(c[0])
-                        ts = ts_ms / 1000
-                        o, h, l, cl, v = map(float, c[1:6])
-                        if self.db:
-                            self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
-                        new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-
-                    remaining -= len(data)
-                    if len(data) < batch_size: break # End of available history
-                    end_ms = int(data[-1][0]) - 1 # Use oldest in batch as next end_time
-                    await asyncio.sleep(0.1) # Rate limit respect
-
-            # Merge with existing (possibly already populated by real-time WS)
-            if new_candles:
-                existing = self.ohlcv.get(sym, {}).get(tf, [])
-                # Combine, unique by timestamp (historical data takes precedence for accuracy)
-                combined = {c['ts']: c for c in (existing + new_candles)}
-                # Sort by timestamp
-                sorted_candles = sorted(combined.values(), key=lambda x: x['ts'])
-                # Enforce limit to prevent memory bloat
-                self.ohlcv[sym][tf] = sorted_candles[-1000:]
-
-                # Sync last known candle timestamp
-                if self.ohlcv[sym][tf]:
+                    existing = self.ohlcv.get(sym, {}).get(tf, [])
+                    combined = {c['ts']: c for c in (existing + new_candles)}
+                    sorted_candles = sorted(combined.values(), key=lambda x: x['ts'])
+                    self.ohlcv[sym][tf] = sorted_candles[-1000:]
                     self.last_candle_ts[sym][tf] = self.ohlcv[sym][tf][-1]['ts']
+                    log.debug(f"Memory Populated: {sym} {tf} | {len(self.ohlcv[sym][tf])} candles")
 
             if tf == ACTIVE_TIMEFRAME and self.ohlcv[sym][tf]:
                 price = self.ohlcv[sym][tf][-1]['c']
