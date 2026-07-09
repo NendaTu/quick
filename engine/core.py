@@ -905,7 +905,12 @@ class Engine:
                             elif state == "ABANDONED":
                                 abandoned += 1
 
-        log.info(f"HEARTBEAT | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
+        elapsed = time.time() - self.start_time
+        hours, rem = divmod(elapsed, 3600)
+        minutes, seconds = divmod(rem, 60)
+        elapsed_str = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+
+        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
 
     async def _sync_exchange_state(self):
         """
