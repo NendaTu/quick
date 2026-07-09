@@ -11,7 +11,8 @@ import config
 class BitgetExchange(Simulator, BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
     # Targeting a zero-429 baseline for long historical runs.
-    DEFAULT_RPS = 20 # Bitget limit is 20 RPS
+    # Note: Bitget historical candles has a tighter limit than standard public API.
+    DEFAULT_RPS = 10
     DEFAULT_CONCURRENCY = 5
 
     def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
@@ -376,6 +377,12 @@ class BitgetExchange(Simulator, BaseExchange):
             for d in data:
                 book.update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
         elif channel == "trade":
+            # [REPAIR-20260708] WS Activity Proof
+            if not hasattr(self, "_ws_logged"): self._ws_logged = set()
+            if norm_sym not in self._ws_logged:
+                log.info(f"WS Feed Active: {norm_sym}")
+                self._ws_logged.add(norm_sym)
+
             for t in data:
                 # Bitget V2 trade format: [ts, price, size, side]
                 price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))

@@ -190,7 +190,8 @@ class Simulator:
                 log.debug(f"Asset {sym} is ready for trading.")
 
         if symbols:
-            await asyncio.gather(*(worker(s) for s in symbols))
+            # [REPAIR-20260708] Resilient gathering: continue even if some assets fail
+            await asyncio.gather(*(worker(s) for s in symbols), return_exceptions=True)
 
         # Calculate Initial Asset Correlations
         await self.recalculate_correlations()
