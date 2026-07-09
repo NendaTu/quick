@@ -910,9 +910,20 @@ class Engine:
         minutes, seconds = divmod(rem, 60)
         elapsed_str = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
 
-        # Asset Readiness
-        ready_count = len(getattr(self.exchange, "ready_assets", []))
+        # Asset Readiness (Authentic Strategy-based Check)
+        ready_count = 0
         total_count = len(self.enabled_assets)
+        if self.strategies:
+            for sym in self.enabled_assets:
+                # All active strategies must be ready for the asset to be "Loaded"
+                all_ready = True
+                for strat in self.strategies:
+                    if hasattr(strat, "is_ready") and not strat.is_ready(sym):
+                        all_ready = False; break
+                if all_ready: ready_count += 1
+        else:
+            # Fallback if no strategies (e.g. metadata only)
+            ready_count = len(getattr(self.exchange, "ready_assets", []))
 
         log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
 
