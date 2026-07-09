@@ -43,7 +43,11 @@ class BitGetClient:
             async with session.get(url) as response:
                 result = await response.json()
                 if result.get("code") == "00000":
-                    server_time = int(result["data"])
+                    data = result.get("data")
+                    if isinstance(data, dict):
+                        server_time = int(data.get("serverTime") or data.get("ts") or 0)
+                    else:
+                        server_time = int(data)
                     local_time = int(time.time() * 1000)
                     self.time_offset = server_time - local_time
                     log.info(f"Synchronized time with Bitget. Offset: {self.time_offset}ms")

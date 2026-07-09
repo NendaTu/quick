@@ -642,8 +642,8 @@ class Engine:
                         has_pos = f"{sym}_buy" in self.open_positions or f"{sym}_sell" in self.open_positions
                         last_act = self._last_activity.get(sym, 0)
 
-                        # Process if: BTC, Has Position, or Recent Activity (< 1s ago)
-                        if sym == BTC_SYMBOL or has_pos or (now - last_act < 1.0):
+                        # Process if: BTC, Has Position, or Recent Activity (< 10s ago)
+                        if sym == BTC_SYMBOL or has_pos or (now - last_act < 10.0):
                             # [REPAIR-20260708] Skip if asset is being omited (double check)
                             if sym in ASSET_OMITTED:
                                 continue
@@ -773,11 +773,11 @@ class Engine:
                             if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
                                 continue
 
-                            qty = signal["qty"]
-                            entry = signal["entry_price"]
-                            stop = signal["stop_price"]
-                            tp = signal["exit_price"]
-                            btc_conf = signal["btc_confluence"]
+                            qty = signal.get("qty", 0)
+                            entry = signal.get("entry_price", 0)
+                            stop = signal.get("stop_price", 0)
+                            tp = signal.get("exit_price", signal.get("tp_price", 0))
+                            btc_conf = signal.get("btc_confluence", "")
                             orig_side = signal.get("original_side", side)
                             is_contr = signal.get("is_contrarian", False)
 
@@ -835,6 +835,9 @@ class Engine:
                                 "symbol": sym,
                                 "features": feat
                             })
+
+                            # [REPAIR-20260708] Log every signal evaluation to metrics-log
+                            self._write_metrics_log(sym, side, signal.get("strategy_id", "unknown"), signal)
 
                             resp = await self.router.route_signal(signal)
                             if resp.get("code") == "00000" and not LOG_SIGNALS:

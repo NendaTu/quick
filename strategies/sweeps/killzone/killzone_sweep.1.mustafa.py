@@ -157,6 +157,13 @@ class KillzoneSweepStrategy(JBaseStrategy):
         state_key = f"{symbol}_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
+        # [REPAIR-20260708] Cooldown reset to allow multiple trades per session
+        if state == "COMPLETED":
+            last_trigger = self.get_state(f"{symbol}_last_trigger_ts", self.simulator)
+            if last_trigger and m1[-1]['ts'] - float(last_trigger) > 3600: # 1 hour cooldown
+                self.save_state(state_key, "IDLE", self.simulator)
+                state = "IDLE"
+
         # Hub & Session Tracking for Reset
         hub = ov_range.get('hub', 'UNKNOWN')
         last_hub = self.get_state(f"{symbol}_last_hub", self.simulator)
@@ -327,10 +334,16 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     self.logger.info(f"  - Qty  : {qty:.3f} (Equity: {equity:.2f})")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
+                self.save_state(f"{symbol}_last_trigger_ts", m1[-1]['ts'], self.simulator)
 
                 tp1_qty = qty * self.params["tp1_qty_ratio"]
-                # Ensure tp1_qty also follows asset precision
-                tp1_qty = round(tp1_qty, qty_place)
+                # Ensure tp1_qty also follows asset precision and is at least one tick
+                min_qty_tick = 1 / (10**qty_place)
+                if tp1_qty < min_qty_tick:
+                    tp1_qty = 0 # Disable split if too small
+                else:
+                    tp1_qty = round(tp1_qty, qty_place)
+
                 tp2_qty = qty - tp1_qty
 
                 return {

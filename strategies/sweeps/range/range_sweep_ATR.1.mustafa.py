@@ -125,6 +125,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
         state_key = f"{symbol}_atr_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
+        # [REPAIR-20260708] Cooldown reset to allow multiple trades per expansion
+        if state == "COMPLETED":
+            last_trigger = self.get_state(f"{symbol}_atr_last_trigger_ts", self.simulator)
+            if last_trigger and m1[-1]['ts'] - float(last_trigger) > 3600: # 1 hour cooldown
+                self.save_state(state_key, "IDLE", self.simulator)
+                state = "IDLE"
+
         anchor_raw = self.get_state(f"{symbol}_atr_anchor", self.simulator) # {high, low, ts}
         anchor = None
         if anchor_raw and anchor_raw != "None":
@@ -329,6 +336,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     self.logger.info(f"[{symbol}] {sweep_side.upper()} Entry Triggered!")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
+                self.save_state(f"{symbol}_atr_last_trigger_ts", m1[-1]['ts'], self.simulator)
 
                 tp1_qty = round(qty * self.params["tp1_qty_ratio"], qty_place)
                 return {

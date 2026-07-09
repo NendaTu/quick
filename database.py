@@ -383,8 +383,8 @@ class Database:
 
     def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:
         """
-        [REPAIR-20260707] Fast Block-based Gap Detection.
-        Checks bounds first, then uses block counts to find gaps without loading every row.
+        [REPAIR-20260708] Improved Gap Detection.
+        Identifies actual missing segments by comparing consecutive timestamps.
         """
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
@@ -392,32 +392,34 @@ class Database:
         }
         step = tf_seconds.get(timeframe, 60)
 
-        # 1. Check Bounds
+        # 1. Get all timestamps in range
         cursor = self.connection.execute("""
-            SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM candles
+            SELECT timestamp FROM candles
             WHERE symbol = ? AND timeframe = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp ASC
         """, (symbol, timeframe, start_ts, end_ts))
-        db_min, db_max, db_count = cursor.fetchone()
+        rows = cursor.fetchall()
 
-        if not db_count or db_count == 0:
+        if not rows:
             return [(start_ts, end_ts)]
 
+        timestamps = [row[0] for row in rows] # Flatten
         gaps = []
+
         # Check Leading Gap
-        if db_min > start_ts + step * 2:
-            gaps.append((start_ts, db_min - step))
+        if timestamps[0] > start_ts + step:
+            gaps.append((start_ts, timestamps[0] - step))
+
+        # Check Internal Gaps
+        for i in range(len(timestamps) - 1):
+            curr_ts = timestamps[i]
+            next_ts = timestamps[i+1]
+            if next_ts - curr_ts > step * 1.5: # Allow some tolerance
+                gaps.append((curr_ts + step, next_ts - step))
 
         # Check Trailing Gap
-        if db_max < end_ts - step * 2:
-            gaps.append((db_max + step, end_ts))
-
-        # Check Internal Continuity using count heuristic
-        expected_total = int((db_max - db_min) / step) + 1
-        if db_count < expected_total - 2:
-            # We have internal gaps. For speed, we only return the primary missing range
-            # rather than scanning for tiny 1-candle holes which causes the freeze.
-            # We'll fetch the whole range from min to max to fill holes.
-            gaps.append((db_min, db_max))
+        if timestamps[-1] < end_ts - step:
+            gaps.append((timestamps[-1] + step, end_ts))
 
         # Merge overlapping or adjacent gaps
         if not gaps: return []

@@ -167,6 +167,39 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
             res = await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
             if res == -1: break # Reached beginning of history
 
+def report_coverage(db: Database, assets: list, start_ts: float, end_ts: float):
+    """
+    [REPAIR-20260708] Reports the data coverage percentage for each asset.
+    """
+    print("\n" + "="*60)
+    print(f"{'Asset':<15} | {'Coverage %':>10}")
+    print("-" * 60)
+
+    # Pre-fetch all stats for efficiency
+    all_stats = db.get_all_candle_stats()
+
+    total_range_sec = end_ts - start_ts
+
+    sorted_assets = sorted(assets)
+    for asset in sorted_assets:
+        asset_coverage = []
+        for tf in AVAILABLE_TIMEFRAMES:
+            step = TF_SECONDS.get(tf, 60)
+            expected_total = int(total_range_sec / step) + 1
+
+            stat = all_stats.get(asset, {}).get(tf)
+            if stat:
+                count = stat['count']
+                pct = (count / expected_total) * 100
+                asset_coverage.append(pct)
+            else:
+                asset_coverage.append(0.0)
+
+        avg_pct = sum(asset_coverage) / len(asset_coverage)
+        print(f"{asset:<15} | {avg_pct:>9.1f}%")
+
+    print("="*60 + "\n")
+
 async def main():
     db = Database()
     client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
@@ -177,6 +210,9 @@ async def main():
         # [REPAIR-20260702] Optimized Startup Check
         start_ts = MAX_START_DATE.timestamp()
         end_ts = MAX_END_DATE.timestamp()
+
+        # [REPAIR-20260708] Pre-download coverage report
+        report_coverage(db, assets, start_ts, end_ts)
 
         # Use single-query stats to avoid N+1 startup freeze
         stats_cache = db.get_all_candle_stats()

@@ -167,7 +167,10 @@ class BitgetExchange(Simulator, BaseExchange):
             # 3. Safety Poller (REST reconciliation)
             asyncio.create_task(self._safety_poller(engine))
 
-        # 4. Background Maintenance & Processing Loop
+            # 4. Time Synchronization Poller
+            asyncio.create_task(self._time_sync_poller(engine))
+
+        # 5. Background Maintenance & Processing Loop
         last_heartbeat = time.time()
         while True:
             try:
@@ -230,6 +233,19 @@ class BitgetExchange(Simulator, BaseExchange):
                 await engine._sync_exchange_state()
             except Exception as e:
                 log.error(f"Safety Poller Error: {e}")
+
+    async def _time_sync_poller(self, engine):
+        """
+        Periodically synchronizes time with Bitget to prevent 40008 errors.
+        """
+        while True:
+            try:
+                await asyncio.sleep(300) # Sync every 5 minutes
+                if engine.stop_event.is_set(): break
+                await self.data_client.sync_time()
+                await self.client_exec.sync_time()
+            except Exception as e:
+                log.error(f"Time Sync Poller Error: {e}")
 
     async def _process_orders(self):
         """

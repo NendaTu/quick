@@ -40,7 +40,8 @@ REINVESTMENT_PERCENTAGE = 1.0
 RISK_PER_TRADE = 0.05
 
 # Maximum number of concurrent positions allowed.
-MAX_CONCURRENT_POSITIONS = 100
+# [BT-003] Set to 1 for initial live transition to ensure tight monitoring
+MAX_CONCURRENT_POSITIONS = 1
 
 # Stop bot if balance drops below this fraction of ATH (0.5 = 50% drawdown).
 DRAWDOWN_LIMIT = 0.8

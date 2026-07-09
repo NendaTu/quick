@@ -78,7 +78,16 @@ class JBaseStrategy(BaseStrategy):
 
     def get_state(self, key: str, simulator=None) -> Optional[str]:
         if simulator and hasattr(simulator, "db") and simulator.db:
-            return simulator.db.get_strategy_state(self.strategy_id, key)
+            val = simulator.db.get_strategy_state(self.strategy_id, key)
+            if val is not None:
+                # Handle potential stringification from DB
+                if isinstance(val, str) and (val.startswith('{') or val.startswith('[')):
+                    try:
+                        import ast
+                        return ast.literal_eval(val)
+                    except:
+                        return val
+            return val
         return self._mem_state.get(key)
 
     def record_milestone(self, key: str, timestamp: float = 0, timeframe: str = ""):
