@@ -13,8 +13,27 @@ from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
 
 log = logging.getLogger("scalper.bitget")
 
+class RateLimiter:
+    """
+    [REPAIR-20260708] Proactive Rate Limiter with safety buffer.
+    Ensures cumulative requests don't exceed exchange limits.
+    """
+    def __init__(self, rps: float = 20.0, safety_factor: float = 0.98):
+        # Target slightly less than max to account for network jitter and other clients
+        self.interval = 1.0 / (rps * safety_factor)
+        self.last_call = 0
+        self.lock = asyncio.Lock()
+
+    async def wait(self):
+        async with self.lock:
+            now = time.time()
+            wait_time = self.last_call + self.interval - now
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self.last_call = time.time()
+
 class BitGetClient:
-    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
+    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False, rate_limiter: Optional[RateLimiter] = None):
         self.api_key = api_key
         self.secret_key = secret_key
         self.passphrase = passphrase
@@ -22,6 +41,7 @@ class BitGetClient:
         self.base_url = "https://api.bitget.com"
         self._session: Optional[aiohttp.ClientSession] = None
         self.time_offset = 0
+        self.rate_limiter = rate_limiter
 
     async def get_session(self):
         if self._session is None or self._session.closed:
@@ -70,6 +90,10 @@ class BitGetClient:
         return headers
 
     async def request(self, method: str, path: str, params: Dict = None, data: Dict = None, retries: int = 7) -> Dict:
+        # [REPAIR-20260708] Enforce proactive rate limiting
+        if self.rate_limiter:
+            await self.rate_limiter.wait()
+
         session = await self.get_session()
 
         signed_path = path

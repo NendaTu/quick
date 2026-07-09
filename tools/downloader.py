@@ -21,7 +21,7 @@ sys.path.append(os.getcwd())
 
 from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, ASSETS_COUNT, ASSET_OMITTED, AVAILABLE_TIMEFRAMES, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
 from database import Database
-from bitget_client import BitGetClient
+from bitget_client import BitGetClient, RateLimiter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,20 +90,6 @@ async def discover_assets(client: BitGetClient) -> list:
             if len(discovered) >= ASSETS_COUNT:
                 break
     return discovered
-
-class RateLimiter:
-    def __init__(self, rps):
-        self.interval = 1.0 / rps
-        self.last_call = 0
-        self.lock = asyncio.Lock()
-
-    async def wait(self):
-        async with self.lock:
-            now = time.time()
-            wait_time = self.last_call + self.interval - now
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-            self.last_call = time.time()
 
 async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter, progress: Progress, worker_id: int):
     """
@@ -202,7 +188,9 @@ def report_coverage(db: Database, assets: list, start_ts: float, end_ts: float):
 
 async def main():
     db = Database()
-    client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+    # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+    limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+    client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, rate_limiter=limiter)
 
     try:
         assets = await discover_assets(client)

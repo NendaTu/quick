@@ -1,7 +1,7 @@
 import logging, asyncio, time
 from typing import Dict, List, Optional
 from engine.base import BaseExchange
-from bitget_client import BitGetClient, BitGetWSClient
+from bitget_client import BitGetClient, BitGetWSClient, RateLimiter
 
 log = logging.getLogger("engine.exchanges.bitget")
 
@@ -11,16 +11,20 @@ import config
 class BitgetExchange(Simulator, BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
     # Targeting a zero-429 baseline for long historical runs.
-    DEFAULT_RPS = 10
+    DEFAULT_RPS = 20 # Bitget limit is 20 RPS
     DEFAULT_CONCURRENCY = 5
 
     def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
+        # [REPAIR-20260708] Unified Rate Limiter (Cumulative across all internal clients)
+        # Using 20 RPS as base, applying 98% safety cap via RateLimiter class.
+        self.rate_limiter = RateLimiter(rps=self.DEFAULT_RPS, safety_factor=0.98)
+
         # Dual-Client Architecture:
         # 1. data_client: Always uses Live keys for market data to ensure availability and fix 40099.
-        self.data_client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, is_demo=False)
+        self.data_client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, is_demo=False, rate_limiter=self.rate_limiter)
 
         # 2. execution_client: Handles private actions (orders, balance) in Live or Demo environment.
-        self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo)
+        self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo, rate_limiter=self.rate_limiter)
 
         # 3. Synchronize time immediately
         asyncio.create_task(self.data_client.sync_time())

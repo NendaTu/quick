@@ -17,7 +17,7 @@ sys.path.append(os.getcwd())
 
 import config
 from database import Database
-from bitget_client import BitGetClient
+from bitget_client import BitGetClient, RateLimiter
 from engine.simulation import SimulationEngine
 from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
 from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
@@ -930,7 +930,11 @@ async def main():
         query_cmd = " -> ".join(query_parts)
 
     db = Database()
-    client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE)
+
+    # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+    from engine.exchanges.bitget import BitgetExchange
+    limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+    client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, rate_limiter=limiter)
 
     # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
     if not assets_to_run:

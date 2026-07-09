@@ -33,7 +33,7 @@ from ta.indicators.book_delta import compute_imbalance_delta
 from ta.patterns.volume_profile import identify_poc
 from ta.indicators.atr import get_volatility_forecast
 from database import Database
-from bitget_client import BitGetClient, BitGetWSClient
+from bitget_client import BitGetClient, BitGetWSClient, RateLimiter
 
 log = logging.getLogger("scalper.simulator")
 
@@ -53,7 +53,14 @@ class Simulator:
         self.engine = None
         self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
-        self.client = client or BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+
+        # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+        if client:
+            self.client = client
+        else:
+            from engine.exchanges.bitget import BitgetExchange
+            limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+            self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, rate_limiter=limiter)
 
         self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
         self.trade_history: Dict[str, List[dict]] = {}
