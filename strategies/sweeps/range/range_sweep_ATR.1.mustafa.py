@@ -227,6 +227,12 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 self.record_milestone(f"Phase 2: 1H {bias.upper()} Bias", h1[-1]['ts'], "1H")
                 self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", sweep_ts, "15m")
                 self.logger.info(f"[{symbol}] Sweep of ATR Anchor detected! Catching up sequence.")
+
+                # Check for abandonment
+                if m1[-1]['ts'] - sweep_ts > (6 * 3600): # 6 hours limit for ATR range
+                    self.save_state(state_key, "ABANDONED", self.simulator)
+                    return None
+
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_atr_sweep_side", sweep_side, self.simulator)
                 self.save_state(f"{symbol}_atr_last_milestone_ts", sweep_ts, self.simulator)

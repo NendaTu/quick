@@ -192,6 +192,12 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             if sweep_detected:
                 if self.record_milestone(f"Phase 3: Day {sweep_side.upper()} Sweep", sweep_ts, "15m"):
                     self.logger.info(f"[{symbol}] Overnight Sweep of Day {sweep_side.upper()} detected! Catching up sequence.")
+
+                # Check for abandonment
+                if m1[-1]['ts'] - sweep_ts > (8 * 3600): # 8 hours limit for overnight
+                    self.save_state(state_key, "ABANDONED", self.simulator)
+                    return None
+
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_ov_sweep_side", sweep_side, self.simulator)
                 self.save_state(f"{symbol}_ov_last_milestone_ts", sweep_ts, self.simulator)

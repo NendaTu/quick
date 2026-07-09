@@ -201,6 +201,13 @@ class KillzoneSweepStrategy(JBaseStrategy):
             if sweep_detected:
                 if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", sweep_ts, "15m"):
                     self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Catching up sequence.")
+
+                # Check for abandonment (sweep was too long ago)
+                if m1[-1]['ts'] - sweep_ts > (4 * 3600): # 4 hours limit
+                    self.logger.debug(f"[{symbol}] Sweep abandoned (too old).")
+                    self.save_state(state_key, "ABANDONED", self.simulator)
+                    return None
+
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_sweep_side", sweep_side, self.simulator)
                 self.save_state(f"{symbol}_last_milestone_ts", sweep_ts, self.simulator)

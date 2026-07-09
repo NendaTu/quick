@@ -31,6 +31,7 @@ class Engine:
         self.be_wins = 0        # Breakeven protected wins
         self.losing_trades = 0
         self.cumulative_pnl = 0.0
+        self.session_signals = 0 # [REPAIR-20260708] Track total signals emitted
 
         # Performance tracking
         self.asset_stats: Dict[str, Dict[str, any]] = {}
@@ -173,6 +174,8 @@ class Engine:
         trading_task = asyncio.create_task(self._trading_loop())
         if SHOW_PERIODIC_SUMMARY:
             asyncio.create_task(self._summary_task())
+        if config.SHOW_HEARTBEAT:
+            asyncio.create_task(self._heartbeat_task())
 
         await self.stop_event.wait()
         log.info("Shutdown signal received. Waiting for open positions to finalize...")
@@ -844,6 +847,7 @@ class Engine:
                             # [REPAIR-20260708] Log every signal evaluation to metrics-log
                             self._write_metrics_log(sym, side, signal.get("strategy_id", "unknown"), signal)
 
+                            self.session_signals += 1
                             resp = await self.router.route_signal(signal)
                             if resp.get("code") == "00000" and not LOG_SIGNALS:
                                 # Show signal with fill/place if LOG_SIGNALS is False
@@ -866,6 +870,42 @@ class Engine:
             except Exception as e:
                 log.error(f"Summary task error: {e}")
             await asyncio.sleep(SUMMARY_INTERVAL_SECONDS)
+
+    async def _heartbeat_task(self):
+        while not self.stop_event.is_set():
+            try:
+                self._log_heartbeat()
+            except Exception as e:
+                log.error(f"Heartbeat task error: {e}")
+            await asyncio.sleep(config.HEARTBEAT_INTERVAL_SECONDS)
+
+    def _log_heartbeat(self):
+        """
+        [REPAIR-20260708] Session Heartbeat Analysis.
+        Tracks pursued, abandoned, and signaled setups across all active strategies.
+        """
+        pursued = 0
+        abandoned = 0
+        signaled = self.session_signals
+
+        # Pursued/Abandoned require strategy state inspection
+        if self.strategies:
+            for sym in self.enabled_assets:
+                for strat in self.strategies:
+                    # Generic state check
+                    state_keys = [f"{sym}_setup_state", f"{sym}_ov_setup_state", f"{sym}_atr_setup_state"]
+                    for sk in state_keys:
+                        state = self.exchange.db.get_strategy_state(strat.strategy_id, sk)
+                        if state:
+                            if "WAITING" in state:
+                                # For ATR, pursued starts AFTER the sweep (Phase 3)
+                                if sk == f"{sym}_atr_setup_state" and state == "WAITING_FOR_SWEEP":
+                                    continue
+                                pursued += 1
+                            elif state == "ABANDONED":
+                                abandoned += 1
+
+        log.info(f"HEARTBEAT | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
 
     async def _sync_exchange_state(self):
         """
