@@ -86,6 +86,13 @@ SL_ORDER_TYPE = "limit"
 # Safety buffer for limit stop-losses (0.001 = 0.1%).
 SL_DISASTER_BUFFER = 0.001
 
+# Fallback move percentages for TP/SL (fraction of price, 0.004 = 0.4%)
+SL_MOVE = 0.004
+TP_MOVE = 0.008
+
+# Legacy parameter utilized only by LearningModel
+TARGET_NET_ROE = 0.20
+
 # How long (s) to wait for a limit entry to fill before converting to market.
 LIMIT_CHASE_TIMEOUT = 10.0
 

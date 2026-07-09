@@ -291,6 +291,13 @@ class Simulator:
                 # Use freshly fetched confluence data
                 self.confluence_history[sym][tf] = [cl for ts, cl in new_confluence][-100:]
 
+                # [REPAIR-20260708] Backpacking: Save confluence candles to DB
+                if self.db:
+                    for c in reversed(c_data):
+                        ts = float(c[0]) / 1000
+                        o, h, l, cl, v = map(float, c[1:6])
+                        self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
+
                 # If this timeframe is also tracked in OHLCV, ensure they are in sync
                 if tf in AVAILABLE_TIMEFRAMES and self.ohlcv[sym].get(tf):
                      # Historical data from confluence fetch is sometimes more authoritative

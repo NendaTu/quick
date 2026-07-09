@@ -58,7 +58,14 @@ class BitgetExchange(Simulator, BaseExchange):
         return await self.data_client.get_symbols()
 
     async def get_candles(self, symbol: str, timeframe: str, limit: int = 100) -> List[List]:
-        return await self.data_client.get_candles(symbol, timeframe, limit)
+        res = await self.data_client.get_candles(symbol, timeframe, limit)
+        # [REPAIR-20260708] Backpacking: Save fetched candles to DB
+        if self.db and isinstance(res, list):
+            for c in res:
+                ts = float(c[0]) / 1000
+                o, h, l, cl, v = map(float, c[1:6])
+                self.db.save_candle(symbol, timeframe, ts, o, h, l, cl, v)
+        return res
 
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None, **kwargs) -> Dict:
         """
