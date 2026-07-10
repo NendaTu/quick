@@ -311,6 +311,55 @@ class BitGetClient:
             return data
         return []
 
+    async def set_leverage(self, symbol: str, leverage: int, margin_coin: str = "USDT") -> Dict:
+        path = "/api/v2/mix/account/set-leverage"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginCoin": margin_coin,
+            "leverage": str(leverage)
+        }
+        return await self.request("POST", path, data=data)
+
+    async def set_margin_mode(self, symbol: str, margin_mode: str = "isolated", margin_coin: str = "USDT") -> Dict:
+        path = "/api/v2/mix/account/set-margin-mode"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginCoin": margin_coin,
+            "marginMode": margin_mode.lower()
+        }
+        return await self.request("POST", path, data=data)
+
+    async def place_tpsl_order(self, symbol: str, plan_type: str, trigger_price: float, qty: float, hold_side: str, execute_price: Optional[float] = None) -> Dict:
+        path = "/api/v2/mix/order/place-tpsl-order"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginCoin": "USDT",
+            "planType": plan_type.lower(), # "profit" or "loss"
+            "triggerPrice": str(trigger_price),
+            "triggerType": "market",
+            "holdSide": hold_side.lower(), # "long" or "short"
+            "size": str(qty)
+        }
+        if execute_price:
+            data["executePrice"] = str(execute_price)
+        return await self.request("POST", path, data=data)
+
+    async def get_open_tpsl_orders(self, symbol: Optional[str] = None) -> List[Dict]:
+        path = "/api/v2/mix/order/orders-plan-pending"
+        params = {"productType": "USDT-FUTURES"}
+        if symbol:
+            params["symbol"] = symbol
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("entrustedList") or []
+        if isinstance(data, list):
+            return data
+        return []
+
     async def cancel_order(self, symbol: str, order_id: str) -> Dict:
         path = "/api/v2/mix/order/cancel-order"
         data = {

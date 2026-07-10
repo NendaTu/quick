@@ -50,6 +50,10 @@ class TestReconciliation(unittest.IsolatedAsyncioTestCase):
         exchange.engine = MagicMock()
         exchange.engine.leverage_limits = {"BTCUSDT": 50}
 
+        # Mock leverage and margin mode calls to prevent network activity
+        exchange.set_margin_mode = AsyncMock(return_value={"code": "00000"})
+        exchange.set_leverage = AsyncMock(return_value={"code": "00000"})
+
         # Place a limit entry order
         res = await exchange.place_order(
             symbol="BTCUSDT",
@@ -74,6 +78,8 @@ class TestReconciliation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(o["orderId"], "mock_order_999")
         self.assertEqual(o["stop_price"], 59000.0)
         self.assertEqual(o["tp_price"], 62000.0)
+
+        await exchange.close()
 
     @patch("engine.exchanges.bitget.BitGetClient.get_positions", new_callable=AsyncMock)
     @patch("engine.exchanges.bitget.BitGetClient.get_open_orders", new_callable=AsyncMock)
@@ -120,6 +126,8 @@ class TestReconciliation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.winning_trades, 1)
         self.assertGreater(engine.cumulative_pnl, 0.0)
 
+        await engine.exchange.close()
+
     @patch("engine.exchanges.bitget.BitGetClient.get_positions", new_callable=AsyncMock)
     @patch("engine.exchanges.bitget.BitGetClient.get_open_orders", new_callable=AsyncMock)
     @patch("engine.exchanges.bitget.BitGetClient.get_history_positions", new_callable=AsyncMock)
@@ -159,6 +167,8 @@ class TestReconciliation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.total_trades, 1)
         self.assertEqual(engine.losing_trades, 1)
         self.assertLess(engine.cumulative_pnl, 0.0)
+
+        await engine.exchange.close()
 
 if __name__ == "__main__":
     unittest.main()

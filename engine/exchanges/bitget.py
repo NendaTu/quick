@@ -68,6 +68,14 @@ class BitgetExchange(Simulator, BaseExchange):
                 self.db.save_candle(symbol, timeframe, ts, o, h, l, cl, v)
         return res
 
+    async def set_leverage(self, symbol: str, leverage: int) -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.set_leverage(exch_symbol, leverage)
+
+    async def set_margin_mode(self, symbol: str, margin_mode: str = "isolated") -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.set_margin_mode(exch_symbol, margin_mode)
+
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None, **kwargs) -> Dict:
         """
         Implementation for Bitget V2 order placement.
@@ -78,6 +86,18 @@ class BitgetExchange(Simulator, BaseExchange):
 
         tp_price = kwargs.get("exit_price") or kwargs.get("tp_price") or kwargs.get("presetTakeProfitPrice")
         sl_price = kwargs.get("stop_price") or kwargs.get("sl_price") or kwargs.get("presetStopLossPrice")
+
+        # Ensure Isolated Margin and Max Leverage are set on exchange before order placement
+        try:
+            max_leverage = 20
+            if self.engine and symbol in self.engine.leverage_limits:
+                max_leverage = int(self.engine.leverage_limits[symbol])
+
+            await self.set_margin_mode(symbol, margin_mode="isolated")
+            await self.set_leverage(symbol, leverage=max_leverage)
+            log.info(f"Bitget: Configured isolated margin and {max_leverage}x leverage for {symbol}")
+        except Exception as config_err:
+            log.warning(f"Bitget: Failed to configure isolated margin/leverage for {symbol}: {config_err}")
 
         # Filter out keys already handled or not needed by API
         filtered_kwargs = kwargs.copy()
@@ -194,6 +214,22 @@ class BitgetExchange(Simulator, BaseExchange):
                 f['symbol'] = self._normalize_symbol(f.get('symbol', ''))
                 valid_fills.append(f)
         return valid_fills
+
+    async def place_tpsl_order(self, symbol: str, plan_type: str, trigger_price: float, qty: float, hold_side: str, execute_price: Optional[float] = None) -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.place_tpsl_order(exch_symbol, plan_type, trigger_price, qty, hold_side, execute_price)
+
+    async def get_open_tpsl_orders(self, symbol: Optional[str] = None) -> List[Dict]:
+        exch_symbol = self._denormalize_symbol(symbol) if symbol else None
+        raw_orders = await self.client_exec.get_open_tpsl_orders(exch_symbol)
+        if not isinstance(raw_orders, list):
+            return []
+        valid_orders = []
+        for o in raw_orders:
+            if isinstance(o, dict):
+                o['symbol'] = self._normalize_symbol(o.get('symbol', ''))
+                valid_orders.append(o)
+        return valid_orders
 
     async def get_open_orders(self) -> List[Dict]:
         raw_orders = await self.client_exec.get_open_orders()

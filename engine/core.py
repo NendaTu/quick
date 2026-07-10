@@ -289,9 +289,13 @@ class Engine:
         # Extract target TP/SL prices if available for exact fallback P&L calculations
         stop_price = None
         tp_price = None
+        tp1_price = None
+        tp1_qty = None
         if features:
             stop_price = features.get("stop_price") or features.get("stop")
             tp_price = features.get("exit_price") or features.get("tp_price") or features.get("tp")
+            tp1_price = features.get("tp1_price")
+            tp1_qty = features.get("tp1_qty")
 
         if pos_key in self.open_positions:
             # Scaling up an existing position
@@ -304,6 +308,8 @@ class Engine:
             # Update target TP/SL
             if stop_price: p["stop_price"] = stop_price
             if tp_price: p["tp_price"] = tp_price
+            if tp1_price: p["tp1_price"] = tp1_price
+            if tp1_qty: p["tp1_qty"] = tp1_qty
             # Keep the ORIGINAL strategy_id as the primary owner for attribution
         else:
             self.open_positions[pos_key] = {
@@ -313,7 +319,9 @@ class Engine:
                 "ts": entry_ts,
                 "strategy_id": strategy_id,
                 "stop_price": stop_price,
-                "tp_price": tp_price
+                "tp_price": tp_price,
+                "tp1_price": tp1_price,
+                "tp1_qty": tp1_qty
             }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
@@ -1080,6 +1088,43 @@ class Engine:
                         log.info(f"Legacy synced position {pos_key} cleared.")
                         if pos_key in self.open_positions:
                             del self.open_positions[pos_key]
+
+            # Reconcile custom multi-target TP/SL trigger orders (TP1) for open positions
+            for pos_key, pos_details in list(self.open_positions.items()):
+                sym = pos_key.split("_")[0]
+                side = pos_details["side"]
+                qty = pos_details["qty"]
+                tp1_price = pos_details.get("tp1_price")
+                tp1_qty = pos_details.get("tp1_qty")
+
+                # If the position has a custom TP1 target, ensure it has a corresponding trigger order
+                if tp1_price and tp1_qty:
+                    try:
+                        # Get all currently open trigger/plan orders for this symbol
+                        open_plans = await self.exchange.get_open_tpsl_orders(sym)
+
+                        # Check if a plan order for TP1 is already open
+                        tp1_placed = False
+                        for plan in open_plans:
+                            if plan.get("planType") == "profit":
+                                plan_trigger = float(plan.get("triggerPrice") or 0.0)
+                                if abs(plan_trigger - tp1_price) < 1e-5:
+                                    tp1_placed = True
+                                    break
+
+                        if not tp1_placed:
+                            log.info(f"SYNC STATE | Placing missing TP1 trigger order for {pos_key}: trigger_price={tp1_price}, qty={tp1_qty}")
+                            # Place TP1 trigger order
+                            hold_side = "long" if side == "buy" else "short"
+                            await self.exchange.place_tpsl_order(
+                                symbol=sym,
+                                plan_type="profit",
+                                trigger_price=tp1_price,
+                                qty=tp1_qty,
+                                hold_side=hold_side
+                            )
+                    except Exception as tpsl_err:
+                        log.error(f"SYNC STATE | Failed to reconcile TP1 trigger order for {pos_key}: {tpsl_err}")
 
             # 2. Sync Pending Orders
             orders = await self.exchange.get_open_orders()
