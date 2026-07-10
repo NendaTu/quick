@@ -93,9 +93,21 @@ class BitgetExchange(Simulator, BaseExchange):
             if self.engine and symbol in self.engine.leverage_limits:
                 max_leverage = int(self.engine.leverage_limits[symbol])
 
+            # Enforce dynamic safe leverage to prevent liquidation before SL is hit
+            applied_leverage = max_leverage
+            if price and sl_price:
+                price_distance_pct = abs(price - sl_price) / price
+                if price_distance_pct > 0:
+                    # 1 / leverage is the liquidation distance.
+                    # We need 1 / leverage > price_distance_pct => leverage < 1 / price_distance_pct
+                    # Let's apply a 10% safety margin (0.9 multiplier) to ensure SL is hit safely before liquidation
+                    max_safe_leverage = int(0.9 / price_distance_pct)
+                    applied_leverage = min(max_leverage, max_safe_leverage)
+                    applied_leverage = max(1, applied_leverage)
+
             await self.set_margin_mode(symbol, margin_mode="isolated")
-            await self.set_leverage(symbol, leverage=max_leverage)
-            log.info(f"Bitget: Configured isolated margin and {max_leverage}x leverage for {symbol}")
+            await self.set_leverage(symbol, leverage=applied_leverage)
+            log.info(f"Bitget: Configured isolated margin and {applied_leverage}x leverage (capped from {max_leverage}x) for {symbol}")
         except Exception as config_err:
             log.warning(f"Bitget: Failed to configure isolated margin/leverage for {symbol}: {config_err}")
 
