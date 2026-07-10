@@ -97,6 +97,32 @@ class BitgetExchange(Simulator, BaseExchange):
             **filtered_kwargs
         )
         log.info(f"Bitget Order Result: {res}")
+
+        if order_type.lower() == "limit" and res.get("code") == "00000":
+            data = res.get("data") or {}
+            order_id = data.get("orderId")
+            if order_id:
+                # Calculate reserved margin
+                leverage = self.engine.leverage_limits.get(symbol, 20) if self.engine else 20
+                reserved_margin = (qty * (price or 0.0)) / leverage
+
+                order_data = {
+                    "symbol": symbol,
+                    "pos_side": side,
+                    "type": "entry_limit",
+                    "price": price,
+                    "qty": qty,
+                    "ts": time.time(),
+                    "orderId": order_id,
+                    "stop_price": sl_price,
+                    "tp_price": tp_price,
+                    "reserved_margin": reserved_margin,
+                    "features": kwargs.get("features")
+                }
+                self.pending_orders.append(order_data)
+                self.used_margin += reserved_margin
+                log.info(f"REGISTERED PENDING ENTRY for {symbol} {side.upper()}: orderId={order_id}, price={price}, qty={qty}, reserved_margin={reserved_margin:.2f}")
+
         return res
 
     async def get_balance(self) -> Optional[float]:
@@ -144,6 +170,30 @@ class BitgetExchange(Simulator, BaseExchange):
                 p['symbol'] = self._normalize_symbol(p.get('symbol', ''))
                 valid_positions.append(p)
         return valid_positions
+
+    async def get_history_positions(self, symbol: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        exch_symbol = self._denormalize_symbol(symbol) if symbol else None
+        raw_history = await self.client_exec.get_history_positions(symbol=exch_symbol, startTime=startTime, endTime=endTime, limit=limit)
+        if not isinstance(raw_history, list):
+            return []
+        valid_history = []
+        for p in raw_history:
+            if isinstance(p, dict):
+                p['symbol'] = self._normalize_symbol(p.get('symbol', ''))
+                valid_history.append(p)
+        return valid_history
+
+    async def get_fills(self, symbol: Optional[str] = None, order_id: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        exch_symbol = self._denormalize_symbol(symbol) if symbol else None
+        raw_fills = await self.client_exec.get_fills(symbol=exch_symbol, orderId=order_id, startTime=startTime, endTime=endTime, limit=limit)
+        if not isinstance(raw_fills, list):
+            return []
+        valid_fills = []
+        for f in raw_fills:
+            if isinstance(f, dict):
+                f['symbol'] = self._normalize_symbol(f.get('symbol', ''))
+                valid_fills.append(f)
+        return valid_fills
 
     async def get_open_orders(self) -> List[Dict]:
         raw_orders = await self.client_exec.get_open_orders()

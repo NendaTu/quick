@@ -269,6 +269,48 @@ class BitGetClient:
             return data
         return []
 
+    async def get_history_positions(self, symbol: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        path = "/api/v2/mix/position/history-position"
+        params = {
+            "productType": "USDT-FUTURES",
+            "limit": str(limit)
+        }
+        if symbol:
+            params["symbol"] = symbol
+        if startTime:
+            params["startTime"] = str(startTime)
+        if endTime:
+            params["endTime"] = str(endTime)
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("list") or []
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def get_fills(self, symbol: Optional[str] = None, orderId: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        path = "/api/v2/mix/order/fills"
+        params = {
+            "productType": "USDT-FUTURES",
+            "limit": str(limit)
+        }
+        if symbol:
+            params["symbol"] = symbol
+        if orderId:
+            params["orderId"] = orderId
+        if startTime:
+            params["startTime"] = str(startTime)
+        if endTime:
+            params["endTime"] = str(endTime)
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("list") or []
+        if isinstance(data, list):
+            return data
+        return []
+
     async def cancel_order(self, symbol: str, order_id: str) -> Dict:
         path = "/api/v2/mix/order/cancel-order"
         data = {
