@@ -523,9 +523,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                         db.connection.execute("DELETE FROM strategy_state WHERE strategy_id = ? AND key LIKE ?", (strat_id, f"{asset}%"))
                         db.connection.commit()
 
-    # USE THE UNIFIED SIMULATION ENGINE
+    # USE THE UNIFIED SIMULATION ENGINE FORCED TO PAPER MODE FOR BACKTESTING
     from engine.core import Engine
-    engine = Engine(use_db=False)
+    engine = Engine(use_db=False, mode="paper")
     engine.start_time = time.time()
 
     sim = engine.exchange
@@ -570,9 +570,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             data = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v} for ts, o, h, l, cl, v in c_data]
             asset_history[sym][t] = data
 
-            # Pre-populate simulator with history UP TO START_DATE
+            # Pre-populate simulator with history UP TO START_DATE (fully closed candles only)
             for c in data:
-                if c['ts'] < START_DATE.timestamp():
+                if c['ts'] + TF_SECONDS[t] <= START_DATE.timestamp():
                     sim.ohlcv[sym][t].append(c)
                     if t in sim.confluence_history[sym]:
                         sim.confluence_history[sym][t].append(c['c'])
@@ -619,7 +619,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # Advance pointers to where we pre-populated
     for sym in [asset, BTC_SYMBOL]:
         for t in relevant_tfs:
-            while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] < START_DATE.timestamp():
+            while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] + TF_SECONDS[t] <= START_DATE.timestamp():
                 pointers[sym][t] += 1
 
     # PERFORMANCE: Throttle update processing for confluence timeframes
@@ -670,17 +670,21 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                 for t in relevant_tfs:
                     if sym == asset and t == tf: continue
 
-                    # [PERF-003] Only sync history when needed
-                    while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] <= current_ts:
+                    # [PERF-003] Only sync history when needed (fully closed/completed bars only to prevent look-ahead bias)
+                    while pointers[sym][t] < len(asset_history[sym][t]):
                         new_c = asset_history[sym][t][pointers[sym][t]]
-                        sim.ohlcv[sym][t].append(new_c)
-                        if len(sim.ohlcv[sym][t]) > 1000: sim.ohlcv[sym][t].pop(0)
+                        # Ensure the bar of timeframe t has fully closed before the current timestamp (current_ts)
+                        if new_c['ts'] + TF_SECONDS[t] <= current_ts:
+                            sim.ohlcv[sym][t].append(new_c)
+                            if len(sim.ohlcv[sym][t]) > 1000: sim.ohlcv[sym][t].pop(0)
 
-                        if t in sim.confluence_history[sym]:
-                            sim.confluence_history[sym][t].append(new_c['c'])
-                            if len(sim.confluence_history[sym][t]) > 1000: sim.confluence_history[sym][t].pop(0)
+                            if t in sim.confluence_history[sym]:
+                                sim.confluence_history[sym][t].append(new_c['c'])
+                                if len(sim.confluence_history[sym][t]) > 1000: sim.confluence_history[sym][t].pop(0)
 
-                        pointers[sym][t] += 1
+                            pointers[sym][t] += 1
+                        else:
+                            break
 
             # [TECH-001] Support Strategy Families in Backtests
             active_signals = []

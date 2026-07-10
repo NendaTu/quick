@@ -75,6 +75,13 @@ class BitGetClient:
             log.error(f"Failed to sync time: {e}")
 
     def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
+        if not self.api_key or not self.secret_key:
+            # Public endpoints (e.g. history-candles, public contracts) do not require authentication
+            return {
+                "Content-Type": "application/json",
+                "locale": "en-US"
+            }
+
         timestamp = str(int(time.time() * 1000) + self.time_offset)
         sign = self._generate_signature(timestamp, method, request_path, body)
         headers = {
