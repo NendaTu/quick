@@ -35,28 +35,33 @@ high precision across three timeframes.
 ## The Intended Flow
 1. **Hub Detection**: The strategy identifies the current active Hub (US, UK, etc.) and determines
    if it is within the 2-hour "Killzone" of the Core Session start.
-2. **Overnight Range (1H)**: Scans back to find the High and Low established during the hub's preceding
-   overnight session. For Monday opens, this range spans back to the previous Friday's close.
-3. **Bias (1H)**: Establishes directional bias (Bullish/Bearish) based on 1H Market Structure.
-4. **Liquidity Sweep (15m)**: Waits for price to "sweep" (wick beyond) the overnight extreme *opposite*
+2. **Historical Catch-up (Fast-Forward)**: On startup, scans up to 8 hours of history to see if a
+   liquidity sweep and reversal sequence are already in progress. If found, jumps to the advanced state.
+3. **Overnight Range (1H)**: Scans back to find the High and Low established during the hub's preceding
+   overnight session.
+4. **Bias (1H)**: Establishes directional bias (Bullish/Bearish) based on 1H Market Structure.
+5. **Liquidity Sweep (15m)**: Waits for price to "sweep" (wick beyond) the overnight extreme *opposite*
    to the bias. (e.g., Bullish Bias -> Sweep of Overnight Low).
-5. **Reversal Sequence (1m)**:
+6. **Reversal Sequence (1m)**:
    - **BOS1**: Confirms the first shift in internal structure back toward the bias.
    - **FVG**: Identifies an imbalance created during the impulsive BOS1 move.
    - **Retest**: Waits for price to re-enter the FVG zone, confirming institutional interest.
    - **BOS2**: Final trigger—a second break of structure following the retest, signaling
      continuation of the reversal.
-6. **Execution**: Entry at the close of the BOS2 candle.
+7. **Execution**: Entry at the close of the BOS2 candle.
    - **SL**: Placed 1 tick beyond the 1m FVG.
    - **TP1 (50%)**: Targeted at the first 15m liquidity level providing at least 1:1.5 RRR.
    - **TP2**: Targeted at the next 15m liquidity level at/beyond 1:2.5 RRR.
+8. **Cooldown & Reset**: After a successful signal or abandonment, the strategy enters a 1-hour
+   cooldown before resetting to `IDLE` to allow multiple setups per session.
 
 ## Limitations & Assumptions
-- **Volume Dependence**: Expects standard exchange hours for liquidity (London/NY overlap is optimal); may underperform during low-volume bank holidays or late Asian session "drifts".
+- **Volume Dependence**: Expects standard exchange hours for liquidity; may underperform during bank holidays.
+- **Wick Parity**: Relies on the Engine's REST-Patching mechanism to ensure 100% wick alignment between live and backtest.
 - **Latency Sensitivity**: Requires low-latency execution as 1m BOS2 triggers can move significantly within seconds.
-- **History Requirement**: Needs at least 3-5 days of 1H/15m data to accurately calculate multi-day overnight ranges and establish consistent MTF bias.
-- **Market Conditions**: Highly effective in Trending or Range-Expansion markets. May suffer from "paper cuts" in low-volatility, sideways-grinding markets where liquidity sweeps lack follow-through.
-- **Asset Universe**: Designed for high-volume USDT-M futures on Bitget; requires assets with tight spreads (<0.1%) and sufficient order book depth to support the intended position sizes.
+- **History Requirement**: Needs 120 1H candles for bias and 300 1m candles for trajectory catch-up.
+- **Market Conditions**: Highly effective in Trending or Range-Expansion markets.
+- **Asset Universe**: Designed for high-volume USDT-M futures on Bitget.
 """
 
 import logging
@@ -84,8 +89,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
         # [TECH-001] Explicit history requirements for authenticity
-        # Values matched to technical module scan depths (e.g. sessions.py scans 120 1H candles)
-        self.required_history = {"1H": 120, "15m": 50, "1m": 100}
+        # Values matched to technical module scan depths and catch-up range.
+        self.required_history = {"1H": 120, "15m": 60, "1m": 300}
 
         # --- Strategy-Specific Parameters (with overrides) ---
         # [TECH-001] bypass_external_filters:
@@ -157,6 +162,13 @@ class KillzoneSweepStrategy(JBaseStrategy):
         state_key = f"{symbol}_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
+        # [REPAIR-20260708] Cooldown reset to allow multiple trades per session
+        if state == "COMPLETED":
+            last_trigger = self.get_state(f"{symbol}_last_trigger_ts", self.simulator)
+            if last_trigger and m1[-1]['ts'] - float(last_trigger) > 3600: # 1 hour cooldown
+                self.save_state(state_key, "IDLE", self.simulator)
+                state = "IDLE"
+
         # Hub & Session Tracking for Reset
         hub = ov_range.get('hub', 'UNKNOWN')
         last_hub = self.get_state(f"{symbol}_last_hub", self.simulator)
@@ -178,73 +190,84 @@ class KillzoneSweepStrategy(JBaseStrategy):
             self._cache[cache_key_liq] = {'ts': last_m15_ts, 'liq': liq_15m}
 
         if state == "IDLE":
-            # [T-003] Check all 15m candles since session start for a sweep
-            # This ensures we don't miss a sweep that happened before the current 1m tick
+            # [REPAIR-20260708] Scan last 4 hours (16 candles) for a sweep to catch up immediately
             sweep_detected = False
             sweep_side = None
+            sweep_ts = 0
 
-            # Find index of first 15m candle in current core session
-            # (Simplified: check last 8 15m candles = 2 hours)
-            for c in m15[-8:]:
+            for c in m15[-16:]:
                 if bias == 'bullish':
                     if c['l'] < ov_range['overnight_low'] and c['c'] > ov_range['overnight_low']:
-                        sweep_detected = True; sweep_side = 'ssl'; break
+                        sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; break
                 else: # bearish
                     if c['h'] > ov_range['overnight_high'] and c['c'] < ov_range['overnight_high']:
-                        sweep_detected = True; sweep_side = 'bsl'; break
+                        sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; break
 
             if sweep_detected:
-                if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", m15[-1]['ts'], "15m"):
-                    self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Entering WAITING_FOR_BOS1")
+                if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", sweep_ts, "15m"):
+                    self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Catching up sequence.")
+
+                # Check for abandonment (sweep was too long ago)
+                if m1[-1]['ts'] - sweep_ts > (4 * 3600): # 4 hours limit
+                    self.logger.debug(f"[{symbol}] Sweep abandoned (too old).")
+                    self.save_state(state_key, "ABANDONED", self.simulator)
+                    return None
+
                 self.save_state(state_key, "WAITING_FOR_BOS1", self.simulator)
                 self.save_state(f"{symbol}_sweep_side", sweep_side, self.simulator)
+                self.save_state(f"{symbol}_last_milestone_ts", sweep_ts, self.simulator)
                 state = "WAITING_FOR_BOS1"
             else:
                 return None
 
-        # --- Phase 3: Execution Sequence (1m) ---
+        # --- Phase 3: Catch-up & Execution Sequence (1m) ---
         sweep_side = self.get_state(f"{symbol}_sweep_side", self.simulator)
-        m1_struct = identify_structure(m1, strength=self.params["m1_strength"])
-        m1_sig = m1_struct.get('structure_signal') or ''
+        last_ms_ts = float(self.get_state(f"{symbol}_last_milestone_ts", self.simulator) or 0)
 
-        if state == "WAITING_FOR_BOS1":
-            if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                self.record_milestone("Phase 4: 1m BOS1", m1[-1]['ts'], "1m")
-                self.logger.info(f"[{symbol}] 1m BOS1 detected ({m1_sig})! Entering WAITING_FOR_FVG")
-                self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
-                state = "WAITING_FOR_FVG"
+        # Scan history since last milestone to catch up to the current state
+        # Limit scan to last 100 1m candles for performance
+        relevant_m1_indices = [i for i, c in enumerate(m1) if c['ts'] > last_ms_ts]
+        if len(relevant_m1_indices) > 100: relevant_m1_indices = relevant_m1_indices[-100:]
 
-        if state == "WAITING_FOR_FVG":
-            fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
-            # Check for FVG in the direction of our bias
-            target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
+        for idx in relevant_m1_indices:
+            ctx_m1 = m1[:idx+1]
+            curr_c = ctx_m1[-1]
 
-            if fvg_data.get('fvg_count', 0) > 0:
-                # Check if ANY of the detected FVGs match our target type
-                # detect_fvgs only returns 'nearest', let's trust it for now
+            if state == "WAITING_FOR_BOS1":
+                m1_struct = identify_structure(ctx_m1, strength=self.params["m1_strength"])
+                m1_sig = m1_struct.get('structure_signal') or ''
+                if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
+                    self.record_milestone("Phase 4: 1m BOS1", curr_c['ts'], "1m")
+                    self.logger.info(f"[{symbol}] 1m BOS1 detected in history! Entering WAITING_FOR_FVG")
+                    self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
+                    self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
+                    state = "WAITING_FOR_FVG"
+
+            if state == "WAITING_FOR_FVG":
+                fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
+                target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 5: 1m FVG Formed", m1[-1]['ts'], "1m")
-                    self.logger.info(f"[{symbol}] 1m {target_fvg.upper()} FVG detected! Entering WAITING_FOR_RETEST")
+                    self.record_milestone("Phase 5: 1m FVG Formed", curr_c['ts'], "1m")
+                    self.logger.info(f"[{symbol}] 1m FVG detected in history! Entering WAITING_FOR_RETEST")
                     self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
+                    self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_RETEST"
 
-        if state == "WAITING_FOR_RETEST":
-            fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
-            target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
-            retested = False
+            if state == "WAITING_FOR_RETEST":
+                fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
+                target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
+                if fvg_data.get('nearest_fvg_type') == target_fvg:
+                    self.record_milestone("Phase 6: 1m FVG Retest", curr_c['ts'], "1m")
+                    self.logger.info(f"[{symbol}] 1m FVG Retest complete in history! Entering WAITING_FOR_BOS2")
+                    self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
+                    self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
+                    state = "WAITING_FOR_BOS2"
 
-            # More lenient retest logic: any overlap with the target FVG
-            if fvg_data.get('nearest_fvg_type') == target_fvg:
-                retested = True
+            if state == "WAITING_FOR_BOS2":
+                break
 
-            if retested:
-                self.record_milestone("Phase 6: 1m FVG Retest", m1[-1]['ts'], "1m")
-                self.logger.info(f"[{symbol}] 1m FVG Retest complete! Entering WAITING_FOR_BOS2")
-                self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
-                state = "WAITING_FOR_BOS2"
-
+        # Final check for entry trigger (must be fresh/current)
         if state == "WAITING_FOR_BOS2":
-            # Re-check structure with latest params
             m1_struct = identify_structure(m1, strength=self.params["m1_strength"])
             m1_sig = m1_struct.get('structure_signal') or ''
 
@@ -327,10 +350,16 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     self.logger.info(f"  - Qty  : {qty:.3f} (Equity: {equity:.2f})")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
+                self.save_state(f"{symbol}_last_trigger_ts", m1[-1]['ts'], self.simulator)
 
                 tp1_qty = qty * self.params["tp1_qty_ratio"]
-                # Ensure tp1_qty also follows asset precision
-                tp1_qty = round(tp1_qty, qty_place)
+                # Ensure tp1_qty also follows asset precision and is at least one tick
+                min_qty_tick = 1 / (10**qty_place)
+                if tp1_qty < min_qty_tick:
+                    tp1_qty = 0 # Disable split if too small
+                else:
+                    tp1_qty = round(tp1_qty, qty_place)
+
                 tp2_qty = qty - tp1_qty
 
                 return {

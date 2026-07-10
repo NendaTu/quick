@@ -83,7 +83,15 @@ super().__init__(..., config_overrides={"MAX_CONCURRENT_POSITIONS": 5})
 ### Persistence & State Machines
 Use the built-in database methods to store and retrieve strategy-specific state. This is essential for complex multi-candle sequences (e.g., Sweep -> BOS1 -> FVG -> BOS2):
 - `self.save_state(key, value, simulator)`
-- `self.get_state(key, simulator)`
+- `self.get_state(key, simulator)` (Note: uses `ast.literal_eval` for safe dict/list restoration)
+
+#### Required State Fields for Mustafa Suite compatibility:
+- `[symbol]_setup_state`: Tracks the trajectory (e.g., `WAITING_FOR_BOS1`, `COMPLETED`, `ABANDONED`).
+- `[symbol]_last_trigger_ts`: Timestamp of the last entry trigger (used for 1-hour cooldown resets).
+- `[symbol]_last_milestone_ts`: Timestamp of the most recent milestone (used for Historical Catch-up / Fast-Forward).
+
+### Historical Catch-up (Fast-Forward)
+Strategies should implement logic in `get_entry_signal` to scan history on startup. If a milestone (like a Sweep) is found in the last 4-8 hours, the strategy should "jump" to the appropriate advanced state instead of waiting for a new live event.
 
 ### Scaling & Dynamic Management
 The `manage_position` method supports position scaling. For example, to double a position size during a retracement:

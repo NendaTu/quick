@@ -30,14 +30,16 @@ DEFAULT_TARGET_ROE = 0.01
 SL_TICK_BUFFER = 0.0001
 
 def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
-    if len(ohlcv) < 3:
+    # [REPAIR-20260708] Use only CLOSED candles to prevent look-ahead/repainting bias
+    closed_ohlcv = ohlcv[:-1]
+    if len(closed_ohlcv) < 3:
         return None
 
     dir_count_req = int(params[0]) if params and len(params) > 0 else DEFAULT_DIR_COUNT
     gap_pct_req = float(params[1]) if params and len(params) > 1 else DEFAULT_GAP_PCT
     rrr_override = float(params[2]) if params and len(params) > 2 else None
 
-    c1, c2, c3 = ohlcv[-3], ohlcv[-2], ohlcv[-1]
+    c1, c2, c3 = closed_ohlcv[-3], closed_ohlcv[-2], closed_ohlcv[-1]
 
     fvg_type = None
     gap_top, gap_bottom = 0, 0

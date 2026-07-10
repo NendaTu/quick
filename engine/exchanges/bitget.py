@@ -1,7 +1,7 @@
 import logging, asyncio, time
 from typing import Dict, List, Optional
 from engine.base import BaseExchange
-from bitget_client import BitGetClient, BitGetWSClient
+from bitget_client import BitGetClient, BitGetWSClient, RateLimiter
 
 log = logging.getLogger("engine.exchanges.bitget")
 
@@ -11,16 +11,21 @@ import config
 class BitgetExchange(Simulator, BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
     # Targeting a zero-429 baseline for long historical runs.
+    # Note: Bitget historical candles has a tighter limit than standard public API.
     DEFAULT_RPS = 10
     DEFAULT_CONCURRENCY = 5
 
     def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
+        # [REPAIR-20260708] Unified Rate Limiter (Cumulative across all internal clients)
+        # Using 20 RPS as base, applying 98% safety cap via RateLimiter class.
+        self.rate_limiter = RateLimiter(rps=self.DEFAULT_RPS, safety_factor=0.98)
+
         # Dual-Client Architecture:
         # 1. data_client: Always uses Live keys for market data to ensure availability and fix 40099.
-        self.data_client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, is_demo=False)
+        self.data_client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, is_demo=False, rate_limiter=self.rate_limiter)
 
         # 2. execution_client: Handles private actions (orders, balance) in Live or Demo environment.
-        self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo)
+        self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo, rate_limiter=self.rate_limiter)
 
         # 3. Synchronize time immediately
         asyncio.create_task(self.data_client.sync_time())
@@ -54,7 +59,14 @@ class BitgetExchange(Simulator, BaseExchange):
         return await self.data_client.get_symbols()
 
     async def get_candles(self, symbol: str, timeframe: str, limit: int = 100) -> List[List]:
-        return await self.data_client.get_candles(symbol, timeframe, limit)
+        res = await self.data_client.get_candles(symbol, timeframe, limit)
+        # [REPAIR-20260708] Backpacking: Save fetched candles to DB
+        if self.db and isinstance(res, list):
+            for c in res:
+                ts = float(c[0]) / 1000
+                o, h, l, cl, v = map(float, c[1:6])
+                self.db.save_candle(symbol, timeframe, ts, o, h, l, cl, v)
+        return res
 
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None, **kwargs) -> Dict:
         """
@@ -167,7 +179,13 @@ class BitgetExchange(Simulator, BaseExchange):
             # 3. Safety Poller (REST reconciliation)
             asyncio.create_task(self._safety_poller(engine))
 
-        # 4. Background Maintenance & Processing Loop
+            # 4. Time Synchronization Poller
+            asyncio.create_task(self._time_sync_poller(engine))
+
+            # 5. [REPAIR-20260708] Wick Parity Patcher
+            asyncio.create_task(self._wick_parity_patcher(engine))
+
+        # 6. Background Maintenance & Processing Loop
         last_heartbeat = time.time()
         while True:
             try:
@@ -231,6 +249,77 @@ class BitgetExchange(Simulator, BaseExchange):
             except Exception as e:
                 log.error(f"Safety Poller Error: {e}")
 
+    async def _time_sync_poller(self, engine):
+        """
+        Periodically synchronizes time with Bitget to prevent 40008 errors.
+        """
+        while True:
+            try:
+                await asyncio.sleep(300) # Sync every 5 minutes
+                if engine.stop_event.is_set(): break
+                await self.data_client.sync_time()
+                await self.client_exec.sync_time()
+            except Exception as e:
+                log.error(f"Time Sync Poller Error: {e}")
+
+    async def _wick_parity_patcher(self, engine):
+        """
+        [REPAIR-20260708] Ensures Wick Parity between Live and Backtest.
+        Every minute, fetches official REST candles to overwrite WebSocket-formed ones.
+        """
+        # Wait for initial warm-up
+        await asyncio.sleep(30)
+
+        while not engine.stop_event.is_set():
+            try:
+                # Align with 1m candle close + 5s buffer for exchange finalization
+                now = time.time()
+                wait_sec = 60 - (now % 60) + 5
+                await asyncio.sleep(wait_sec)
+
+                if engine.stop_event.is_set(): break
+
+                assets = engine.enabled_assets + [config.BTC_SYMBOL]
+                # Filter to assets that are currently being processed
+                active_assets = [s for s in assets if s in self.ohlcv and self.ohlcv[s].get("1m")]
+
+                log.debug(f"PARITY | Starting REST patch for {len(active_assets)} assets...")
+
+                for sym in active_assets:
+                    if engine.stop_event.is_set(): break
+                    try:
+                        # Fetch the last 2 candles to ensure the most recently closed one is perfect
+                        res = await self.data_client.get_candles(sym, "1m", limit=2)
+                        if isinstance(res, list) and len(res) >= 1:
+                            for c in res:
+                                ts = float(c[0]) / 1000
+                                o, h, l, cl, v = map(float, c[1:6])
+
+                                # Update internal simulator state
+                                if sym in self.ohlcv and "1m" in self.ohlcv[sym]:
+                                    # Find matching candle by timestamp
+                                    for entry in reversed(self.ohlcv[sym]["1m"]):
+                                        if entry["ts"] == ts:
+                                            # Patch the wicks and close
+                                            if entry["h"] != h or entry["l"] != l or entry["c"] != cl:
+                                                log.debug(f"PARITY | Patched {sym} 1m @ {ts}: wicks=[{entry['h']:.2f}/{entry['l']:.2f}] -> [{h:.2f}/{l:.2f}]")
+                                                entry.update({"o": o, "h": h, "l": l, "c": cl, "v": v})
+                                            break
+
+                                # Backpacking: Also save to DB
+                                if self.db:
+                                    self.db.save_candle(sym, "1m", ts, o, h, l, cl, v)
+
+                    except Exception as e:
+                        log.error(f"PARITY | Patch error for {sym}: {e}")
+
+                    # Yield to event loop to keep WS responsive
+                    await asyncio.sleep(0.01)
+
+            except Exception as e:
+                log.error(f"PARITY | Global patcher error: {e}")
+                await asyncio.sleep(60)
+
     async def _process_orders(self):
         """
         [REPAIR-20260708] Overrides Simulator._process_orders for real exchange.
@@ -288,6 +377,12 @@ class BitgetExchange(Simulator, BaseExchange):
             for d in data:
                 book.update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
         elif channel == "trade":
+            # [REPAIR-20260708] WS Activity Proof
+            if not hasattr(self, "_ws_logged"): self._ws_logged = set()
+            if norm_sym not in self._ws_logged:
+                log.info(f"WS Feed Active: {norm_sym}")
+                self._ws_logged.add(norm_sym)
+
             for t in data:
                 # Bitget V2 trade format: [ts, price, size, side]
                 price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))

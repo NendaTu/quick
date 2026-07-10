@@ -31,6 +31,7 @@ class Engine:
         self.be_wins = 0        # Breakeven protected wins
         self.losing_trades = 0
         self.cumulative_pnl = 0.0
+        self.session_signals = 0 # [REPAIR-20260708] Track total signals emitted
 
         # Performance tracking
         self.asset_stats: Dict[str, Dict[str, any]] = {}
@@ -173,6 +174,8 @@ class Engine:
         trading_task = asyncio.create_task(self._trading_loop())
         if SHOW_PERIODIC_SUMMARY:
             asyncio.create_task(self._summary_task())
+        if config.SHOW_HEARTBEAT:
+            asyncio.create_task(self._heartbeat_task())
 
         await self.stop_event.wait()
         log.info("Shutdown signal received. Waiting for open positions to finalize...")
@@ -642,8 +645,8 @@ class Engine:
                         has_pos = f"{sym}_buy" in self.open_positions or f"{sym}_sell" in self.open_positions
                         last_act = self._last_activity.get(sym, 0)
 
-                        # Process if: BTC, Has Position, or Recent Activity (< 1s ago)
-                        if sym == BTC_SYMBOL or has_pos or (now - last_act < 1.0):
+                        # Process if: BTC, Has Position, or Recent Activity (< 10s ago)
+                        if sym == BTC_SYMBOL or has_pos or (now - last_act < 10.0):
                             # [REPAIR-20260708] Skip if asset is being omited (double check)
                             if sym in ASSET_OMITTED:
                                 continue
@@ -770,14 +773,25 @@ class Engine:
                             if f"{sym}_{side}" in self.open_positions:
                                 continue
 
+                            # [REPAIR-20260708] Log once when an asset completes warm-up
+                            if not hasattr(self, "_ready_logged"): self._ready_logged = set()
+                            if sym not in self._ready_logged:
+                                log.info(f"ASSET READY: {sym} has completed all historical requirements.")
+                                self._ready_logged.add(sym)
+
                             if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
                                 continue
 
-                            qty = signal["qty"]
-                            entry = signal["entry_price"]
-                            stop = signal["stop_price"]
-                            tp = signal["exit_price"]
-                            btc_conf = signal["btc_confluence"]
+                            qty = signal.get("qty", 0)
+                            entry = signal.get("entry_price", 0)
+                            stop = signal.get("stop_price", 0)
+                            tp = signal.get("exit_price", signal.get("tp_price", 0))
+                            btc_conf = signal.get("btc_confluence")
+                            if not btc_conf and feat:
+                                btc_conf = f"1D:{feat.get('btc_1D', 0):.4f} 4H:{feat.get('btc_4H', 0):.4f} 1H:{feat.get('btc_1H', 0):.4f} 15m:{feat.get('btc_15m', 0):.4f}"
+                            elif not btc_conf:
+                                btc_conf = ""
+
                             orig_side = signal.get("original_side", side)
                             is_contr = signal.get("is_contrarian", False)
 
@@ -836,6 +850,10 @@ class Engine:
                                 "features": feat
                             })
 
+                            # [REPAIR-20260708] Log every signal evaluation to metrics-log
+                            self._write_metrics_log(sym, side, signal.get("strategy_id", "unknown"), signal)
+
+                            self.session_signals += 1
                             resp = await self.router.route_signal(signal)
                             if resp.get("code") == "00000" and not LOG_SIGNALS:
                                 # Show signal with fill/place if LOG_SIGNALS is False
@@ -858,6 +876,66 @@ class Engine:
             except Exception as e:
                 log.error(f"Summary task error: {e}")
             await asyncio.sleep(SUMMARY_INTERVAL_SECONDS)
+
+    async def _heartbeat_task(self):
+        while not self.stop_event.is_set():
+            try:
+                self._log_heartbeat()
+            except Exception as e:
+                log.error(f"Heartbeat task error: {e}")
+            await asyncio.sleep(config.HEARTBEAT_INTERVAL_SECONDS)
+
+    def _log_heartbeat(self):
+        """
+        [REPAIR-20260708] Session Heartbeat Analysis.
+        Tracks pursued, abandoned, and signaled setups across all active strategies.
+        """
+        pursued = 0
+        abandoned = 0
+        signaled = self.session_signals
+
+        # Pursued/Abandoned require strategy state inspection
+        if self.strategies:
+            for sym in self.enabled_assets:
+                for strat in self.strategies:
+                    # Generic state check
+                    state_keys = [f"{sym}_setup_state", f"{sym}_ov_setup_state", f"{sym}_atr_setup_state"]
+                    for sk in state_keys:
+                        state = self.exchange.db.get_strategy_state(strat.strategy_id, sk)
+                        if state:
+                            if "WAITING" in state:
+                                # For ATR, pursued starts AFTER the sweep (Phase 3)
+                                if sk == f"{sym}_atr_setup_state" and state == "WAITING_FOR_SWEEP":
+                                    continue
+                                pursued += 1
+                            elif state == "ABANDONED":
+                                abandoned += 1
+
+        elapsed = time.time() - self.start_time
+        hours, rem = divmod(elapsed, 3600)
+        minutes, seconds = divmod(rem, 60)
+        elapsed_str = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+
+        # Asset Readiness (Authentic Strategy-based Check)
+        ready_count = 0
+        total_count = len(self.enabled_assets)
+        if self.strategies:
+            for sym in self.enabled_assets:
+                # All active strategies must be ready for the asset to be "Loaded"
+                all_ready = True
+                for strat in self.strategies:
+                    if hasattr(strat, "is_ready") and not strat.is_ready(sym):
+                        all_ready = False; break
+                if all_ready: ready_count += 1
+        else:
+            # Fallback if no strategies (e.g. metadata only)
+            # Filter to only count enabled assets to avoid > 100% reports
+            ready_count = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
+
+        # Coarse progress from simulator
+        sim_ready = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
+
+        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} (Progress: {sim_ready}/{total_count}) | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
 
     async def _sync_exchange_state(self):
         """

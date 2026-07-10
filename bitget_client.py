@@ -13,8 +13,27 @@ from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
 
 log = logging.getLogger("scalper.bitget")
 
+class RateLimiter:
+    """
+    [REPAIR-20260708] Proactive Rate Limiter with safety buffer.
+    Ensures cumulative requests don't exceed exchange limits.
+    """
+    def __init__(self, rps: float = 20.0, safety_factor: float = 0.98):
+        # Target slightly less than max to account for network jitter and other clients
+        self.interval = 1.0 / (rps * safety_factor)
+        self.last_call = 0
+        self.lock = asyncio.Lock()
+
+    async def wait(self):
+        async with self.lock:
+            now = time.time()
+            wait_time = self.last_call + self.interval - now
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self.last_call = time.time()
+
 class BitGetClient:
-    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
+    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False, rate_limiter: Optional[RateLimiter] = None):
         self.api_key = api_key
         self.secret_key = secret_key
         self.passphrase = passphrase
@@ -22,6 +41,7 @@ class BitGetClient:
         self.base_url = "https://api.bitget.com"
         self._session: Optional[aiohttp.ClientSession] = None
         self.time_offset = 0
+        self.rate_limiter = rate_limiter
 
     async def get_session(self):
         if self._session is None or self._session.closed:
@@ -43,7 +63,11 @@ class BitGetClient:
             async with session.get(url) as response:
                 result = await response.json()
                 if result.get("code") == "00000":
-                    server_time = int(result["data"])
+                    data = result.get("data")
+                    if isinstance(data, dict):
+                        server_time = int(data.get("serverTime") or data.get("ts") or 0)
+                    else:
+                        server_time = int(data)
                     local_time = int(time.time() * 1000)
                     self.time_offset = server_time - local_time
                     log.info(f"Synchronized time with Bitget. Offset: {self.time_offset}ms")
@@ -66,6 +90,10 @@ class BitGetClient:
         return headers
 
     async def request(self, method: str, path: str, params: Dict = None, data: Dict = None, retries: int = 7) -> Dict:
+        # [REPAIR-20260708] Enforce proactive rate limiting
+        if self.rate_limiter:
+            await self.rate_limiter.wait()
+
         session = await self.get_session()
 
         signed_path = path
@@ -145,11 +173,12 @@ class BitGetClient:
 
     async def get_candles(self, symbol: str, granularity: str, limit: int = 100) -> List:
         # BitGet V2 granularity is case-sensitive for some timeframes (e.g. 1H, 4H, 1D)
+        # Official formats: 1m, 3m, 5m, 15m, 30m, 1H, 4H, 6H, 12H, 1D, 1W, 1M
         path = "/api/v2/mix/market/candles"
         params = {
             "symbol": symbol,
             "productType": "USDT-FUTURES",
-            "granularity": granularity, # Do not lowercase
+            "granularity": granularity, # Use direct mapping
             "limit": str(limit)
         }
         res = await self.request("GET", path, params=params)

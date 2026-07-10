@@ -40,7 +40,8 @@ REINVESTMENT_PERCENTAGE = 1.0
 RISK_PER_TRADE = 0.05
 
 # Maximum number of concurrent positions allowed.
-MAX_CONCURRENT_POSITIONS = 100
+# [BT-003] Set to 1 for initial live transition to ensure tight monitoring
+MAX_CONCURRENT_POSITIONS = 1
 
 # Stop bot if balance drops below this fraction of ATH (0.5 = 50% drawdown).
 DRAWDOWN_LIMIT = 0.8
@@ -84,6 +85,13 @@ SL_ORDER_TYPE = "limit"
 
 # Safety buffer for limit stop-losses (0.001 = 0.1%).
 SL_DISASTER_BUFFER = 0.001
+
+# Fallback move percentages for TP/SL (fraction of price, 0.004 = 0.4%)
+SL_MOVE = 0.004
+TP_MOVE = 0.008
+
+# Legacy parameter utilized only by LearningModel
+TARGET_NET_ROE = 0.20
 
 # How long (s) to wait for a limit entry to fill before converting to market.
 LIMIT_CHASE_TIMEOUT = 10.0
@@ -175,6 +183,8 @@ LOG_REJECTIONS = False
 LOG_SIGNALS = True
 SHOW_PERIODIC_SUMMARY = True
 SUMMARY_INTERVAL_SECONDS = 15
+SHOW_HEARTBEAT = True
+HEARTBEAT_INTERVAL_SECONDS = 60
 
 # --- Simulator & Technical Analysis Internal Settings ---
 TICK_SECONDS = 0.2

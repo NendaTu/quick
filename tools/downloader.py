@@ -21,7 +21,7 @@ sys.path.append(os.getcwd())
 
 from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, ASSETS_COUNT, ASSET_OMITTED, AVAILABLE_TIMEFRAMES, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
 from database import Database
-from bitget_client import BitGetClient
+from bitget_client import BitGetClient, RateLimiter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,20 +91,6 @@ async def discover_assets(client: BitGetClient) -> list:
                 break
     return discovered
 
-class RateLimiter:
-    def __init__(self, rps):
-        self.interval = 1.0 / rps
-        self.last_call = 0
-        self.lock = asyncio.Lock()
-
-    async def wait(self):
-        async with self.lock:
-            now = time.time()
-            wait_time = self.last_call + self.interval - now
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-            self.last_call = time.time()
-
 async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: str, semaphore: asyncio.Semaphore, limiter: RateLimiter, progress: Progress, worker_id: int):
     """
     Downloads gaps for a single asset/timeframe.
@@ -167,9 +153,44 @@ async def download_asset_tf(client: BitGetClient, db: Database, asset: str, tf: 
             res = await fetch_chunk(chunk_end_ms, target_start_ms, target_end_ms)
             if res == -1: break # Reached beginning of history
 
+def report_coverage(db: Database, assets: list, start_ts: float, end_ts: float):
+    """
+    [REPAIR-20260708] Reports the data coverage percentage for each asset.
+    """
+    print("\n" + "="*60)
+    print(f"{'Asset':<15} | {'Coverage %':>10}")
+    print("-" * 60)
+
+    # Pre-fetch all stats for efficiency
+    all_stats = db.get_all_candle_stats()
+
+    total_range_sec = end_ts - start_ts
+
+    sorted_assets = sorted(assets)
+    for asset in sorted_assets:
+        asset_coverage = []
+        for tf in AVAILABLE_TIMEFRAMES:
+            step = TF_SECONDS.get(tf, 60)
+            expected_total = int(total_range_sec / step) + 1
+
+            stat = all_stats.get(asset, {}).get(tf)
+            if stat:
+                count = stat['count']
+                pct = (count / expected_total) * 100
+                asset_coverage.append(pct)
+            else:
+                asset_coverage.append(0.0)
+
+        avg_pct = sum(asset_coverage) / len(asset_coverage)
+        print(f"{asset:<15} | {avg_pct:>9.1f}%")
+
+    print("="*60 + "\n")
+
 async def main():
     db = Database()
-    client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+    # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+    limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+    client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, rate_limiter=limiter)
 
     try:
         assets = await discover_assets(client)
@@ -177,6 +198,9 @@ async def main():
         # [REPAIR-20260702] Optimized Startup Check
         start_ts = MAX_START_DATE.timestamp()
         end_ts = MAX_END_DATE.timestamp()
+
+        # [REPAIR-20260708] Pre-download coverage report
+        report_coverage(db, assets, start_ts, end_ts)
 
         # Use single-query stats to avoid N+1 startup freeze
         stats_cache = db.get_all_candle_stats()

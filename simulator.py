@@ -33,7 +33,7 @@ from ta.indicators.book_delta import compute_imbalance_delta
 from ta.patterns.volume_profile import identify_poc
 from ta.indicators.atr import get_volatility_forecast
 from database import Database
-from bitget_client import BitGetClient, BitGetWSClient
+from bitget_client import BitGetClient, BitGetWSClient, RateLimiter
 
 log = logging.getLogger("scalper.simulator")
 
@@ -53,7 +53,14 @@ class Simulator:
         self.engine = None
         self._feature_cache: Dict[str, dict] = {}
         self.db = Database() if use_db else None
-        self.client = client or BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+
+        # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+        if client:
+            self.client = client
+        else:
+            from engine.exchanges.bitget import BitgetExchange
+            limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+            self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, rate_limiter=limiter)
 
         self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
         self.trade_history: Dict[str, List[dict]] = {}
@@ -183,7 +190,8 @@ class Simulator:
                 log.debug(f"Asset {sym} is ready for trading.")
 
         if symbols:
-            await asyncio.gather(*(worker(s) for s in symbols))
+            # [REPAIR-20260708] Resilient gathering: continue even if some assets fail
+            await asyncio.gather(*(worker(s) for s in symbols), return_exceptions=True)
 
         # Calculate Initial Asset Correlations
         await self.recalculate_correlations()
@@ -196,67 +204,69 @@ class Simulator:
         # 1. Fetch OHLCV for all relevant timeframes
         tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
+        # [REPAIR-20260708] Dynamic history requirement from active strategies
+        dynamic_req = {}
+        if self.engine and self.engine.strategies:
+            for strat in self.engine.strategies:
+                if hasattr(strat, "required_history"):
+                    for tf, count in strat.required_history.items():
+                        dynamic_req[tf] = max(dynamic_req.get(tf, 0), count)
+
         for tf in AVAILABLE_TIMEFRAMES:
             # [TA-005] SESSION CONTINUITY: Fetch more data for session extremes
-            required_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
+            # [REPAIR-20260708] Merge static defaults with dynamic strategy requirements
+            default_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
+            required_limit = max(default_limit, dynamic_req.get(tf, 0))
+
             lookback_sec = required_limit * tf_map.get(tf, 60)
             start_ts = time.time() - lookback_sec
             end_ts = time.time()
 
-            new_candles = []
-
-            # [TECH-001] Use range-based gap detection
+            # 1. Fill Gaps in DB
             gaps = []
             if self.db:
                 gaps = self.db.get_data_gaps(sym, tf, start_ts, end_ts)
             else:
                 gaps = [(start_ts, end_ts)]
 
-            if not gaps:
-                # Data is complete in DB
-                log.debug(f"Using cached {tf} candles for {sym}")
+            if gaps:
+                log.debug(f"Filling {len(gaps)} gaps for {sym} {tf} via history API...")
+                for g_start, g_end in gaps:
+                    # Paginated fetch for this specific gap
+                    curr_end_ms = int(g_end * 1000)
+
+                    while curr_end_ms > g_start * 1000:
+                        batch_size = 200
+                        data = await self.client.get_history_candles(sym, tf, end_time=curr_end_ms, limit=batch_size)
+                        if not data: break
+
+                        valid_in_gap = 0
+                        for c in data:
+                            ts = int(c[0]) / 1000
+                            if ts < g_start: continue
+                            if ts > g_end: continue
+                            o, h, l, cl, v = map(float, c[1:6])
+                            if self.db:
+                                self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
+                            valid_in_gap += 1
+
+                        if valid_in_gap == 0: break # No more data in this gap
+                        curr_end_ms = int(data[-1][0]) - 1
+                        await asyncio.sleep(0.1)
+
+            # 2. LOAD complete data from DB into memory (Ensure memory is fully populated)
+            if self.db:
                 db_candles = self.db.get_recent_candles(sym, tf, limit=required_limit)
-                for c in db_candles:
-                    ts, o, h, l, cl, v = c
-                    new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-            else:
-                # [REPAIR-20260708] Paginated historical fetch to bypass 100-candle limit
-                log.debug(f"Fetching {required_limit} {tf} candles for {sym} via history API...")
-                remaining = required_limit
-                end_ms = int(time.time() * 1000)
+                if db_candles:
+                    new_candles = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v}
+                                   for ts, o, h, l, cl, v in db_candles]
 
-                while remaining > 0:
-                    batch_size = min(200, remaining)
-                    data = await self.client.get_history_candles(sym, tf, end_time=end_ms, limit=batch_size)
-                    if not data:
-                        break
-
-                    for c in data: # History API returns newest first
-                        ts_ms = int(c[0])
-                        ts = ts_ms / 1000
-                        o, h, l, cl, v = map(float, c[1:6])
-                        if self.db:
-                            self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
-                        new_candles.append({"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v})
-
-                    remaining -= len(data)
-                    if len(data) < batch_size: break # End of available history
-                    end_ms = int(data[-1][0]) - 1 # Use oldest in batch as next end_time
-                    await asyncio.sleep(0.1) # Rate limit respect
-
-            # Merge with existing (possibly already populated by real-time WS)
-            if new_candles:
-                existing = self.ohlcv.get(sym, {}).get(tf, [])
-                # Combine, unique by timestamp (historical data takes precedence for accuracy)
-                combined = {c['ts']: c for c in (existing + new_candles)}
-                # Sort by timestamp
-                sorted_candles = sorted(combined.values(), key=lambda x: x['ts'])
-                # Enforce limit to prevent memory bloat
-                self.ohlcv[sym][tf] = sorted_candles[-1000:]
-
-                # Sync last known candle timestamp
-                if self.ohlcv[sym][tf]:
+                    existing = self.ohlcv.get(sym, {}).get(tf, [])
+                    combined = {c['ts']: c for c in (existing + new_candles)}
+                    sorted_candles = sorted(combined.values(), key=lambda x: x['ts'])
+                    self.ohlcv[sym][tf] = sorted_candles[-1000:]
                     self.last_candle_ts[sym][tf] = self.ohlcv[sym][tf][-1]['ts']
+                    log.debug(f"Memory Populated: {sym} {tf} | {len(self.ohlcv[sym][tf])} candles")
 
             if tf == ACTIVE_TIMEFRAME and self.ohlcv[sym][tf]:
                 price = self.ohlcv[sym][tf][-1]['c']
@@ -283,6 +293,13 @@ class Simulator:
 
                 # Use freshly fetched confluence data
                 self.confluence_history[sym][tf] = [cl for ts, cl in new_confluence][-100:]
+
+                # [REPAIR-20260708] Backpacking: Save confluence candles to DB
+                if self.db:
+                    for c in reversed(c_data):
+                        ts = float(c[0]) / 1000
+                        o, h, l, cl, v = map(float, c[1:6])
+                        self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
 
                 # If this timeframe is also tracked in OHLCV, ensure they are in sync
                 if tf in AVAILABLE_TIMEFRAMES and self.ohlcv[sym].get(tf):
@@ -627,6 +644,9 @@ class Simulator:
         else:
             asyncio.create_task(self._external_feed_loop(external_feed))
 
+        # [REPAIR-20260708] Wick Parity Patcher (Shared for all live/paper/demo)
+        asyncio.create_task(self._wick_parity_patcher(engine))
+
         last_heartbeat = time.time()
         while True:
             await self._process_orders()
@@ -642,6 +662,84 @@ class Simulator:
                 break
 
             await asyncio.sleep(0.1)
+
+    async def _wick_parity_patcher(self, engine):
+        """
+        [REPAIR-20260708] Ensures Wick Parity between Live and Backtest.
+        Every minute, fetches official REST candles to overwrite WebSocket-formed ones.
+        Also performs 'Backpacking' persistence to populate historical DB.
+        """
+        # Wait for initial warm-up
+        await asyncio.sleep(60)
+
+        while not engine.stop_event.is_set():
+            try:
+                # Align with 1m candle close + 5s buffer for exchange finalization
+                now = time.time()
+                wait_sec = 60 - (now % 60) + 5
+                await asyncio.sleep(wait_sec)
+
+                if engine.stop_event.is_set(): break
+
+                current_min_epoch = int(time.time() // 60)
+
+                # Determine which higher timeframes just closed
+                tfs_to_patch = ["1m"]
+                if current_min_epoch % 5 == 0: tfs_to_patch.append("5m")
+                if current_min_epoch % 15 == 0: tfs_to_patch.append("15m")
+                if current_min_epoch % 30 == 0: tfs_to_patch.append("30m")
+                if current_min_epoch % 60 == 0: tfs_to_patch.append("1H")
+                if current_min_epoch % 240 == 0: tfs_to_patch.append("4H")
+                if current_min_epoch % 1440 == 0: tfs_to_patch.append("1D")
+
+                # Filter to configured timeframes
+                tfs_to_patch = [tf for tf in tfs_to_patch if tf in AVAILABLE_TIMEFRAMES]
+
+                assets = list(set(self.discovered_assets + [BTC_SYMBOL]))
+                active_assets = [s for s in assets if s in self.ohlcv and self.ohlcv[s].get("1m")]
+
+                if not active_assets: continue
+
+                log.debug(f"PARITY | Starting REST patch for {len(active_assets)} assets across {tfs_to_patch}...")
+
+                # Prioritize entry timeframe (usually 1m)
+                for tf in tfs_to_patch:
+                    # Give 1m priority in the next cycle if we fall behind
+                    if tf != "1m" and (time.time() % 60) > 55:
+                        log.warning(f"PARITY | Cycle for {tf} interrupted to prioritize next 1m boundary")
+                        break
+
+                    for sym in active_assets:
+                        if engine.stop_event.is_set(): break
+                        try:
+                            # Fetch last 2 candles
+                            res = await self.client.get_candles(sym, tf, limit=2)
+                            if isinstance(res, list) and len(res) >= 1:
+                                for c in res:
+                                    ts = float(c[0]) / 1000
+                                    o, h, l, cl, v = map(float, c[1:6])
+
+                                    # Update internal simulator state
+                                    if sym in self.ohlcv and tf in self.ohlcv[sym]:
+                                        for entry in reversed(self.ohlcv[sym][tf]):
+                                            if entry["ts"] == ts:
+                                                if entry["h"] != h or entry["l"] != l or entry["c"] != cl:
+                                                    entry.update({"o": o, "h": h, "l": l, "c": cl, "v": v})
+                                                break
+
+                                    # Backpacking: Persist official data to DB
+                                    if self.db:
+                                        self.db.save_candle(sym, tf, ts, o, h, l, cl, v)
+
+                        except Exception as e:
+                            log.error(f"PARITY | Patch error for {sym} {tf}: {e}")
+
+                        # Yield control
+                        await asyncio.sleep(0.01)
+
+            except Exception as e:
+                log.error(f"PARITY | Global patcher error: {e}")
+                await asyncio.sleep(10)
 
     async def _process_orders(self):
         fills = []

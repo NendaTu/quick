@@ -15,7 +15,7 @@ sys.path.append(os.getcwd())
 
 from config import *
 from engine.core import Engine
-from bitget_client import BitGetWSClient, BitGetClient
+from bitget_client import BitGetWSClient, BitGetClient, RateLimiter
 
 # Configure logging for the orchestrator
 logging.basicConfig(
@@ -36,7 +36,10 @@ class DataCoordinator:
     def __init__(self, symbols: List[str], queues: List[multiprocessing.Queue]):
         self.symbols = symbols
         self.queues = queues
-        self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
+        # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+        from engine.exchanges.bitget import BitgetExchange
+        self.limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+        self.client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, rate_limiter=self.limiter)
         self.preloaded_data = {}
 
     async def warm_up(self):
