@@ -31,20 +31,20 @@ BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO") or BITGET_PA
 USE_VIRTUAL_BALANCE = False
 
 # The simulated starting balance used for all PnL and risk calculations.
-INITIAL_EQUITY = 15.0
+INITIAL_EQUITY = 40.0
 
 # [TECH-001] Compound every trade (1.0 = 100% reinvestment).
 REINVESTMENT_PERCENTAGE = 1.0
 
 # Maximum fraction of total balance risked per single trade (0.005 = 0.5%).
-RISK_PER_TRADE = 0.05
+RISK_PER_TRADE = 0.01
 
 # Maximum number of concurrent positions allowed.
 # [BT-003] Set to 1 for initial live transition to ensure tight monitoring
-MAX_CONCURRENT_POSITIONS = 1
+MAX_CONCURRENT_POSITIONS = 1000
 
 # Stop bot if balance drops below this fraction of ATH (0.5 = 50% drawdown).
-DRAWDOWN_LIMIT = 0.8
+DRAWDOWN_LIMIT = 0.9
 
 # Stop bot if total ROI reaches this fraction (1.0 = 100% profit).
 TOTAL_ROI_LIMIT = 1000.0
