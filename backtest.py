@@ -52,11 +52,11 @@ DIRECTION_MODE = "strict" # "strict" or "open"
 USE_PORTFOLIO_MODE = True # If True, simulates concurrent capital-sharing portfolio mode. If False, runs isolated single-asset mode.
 
 # Set to [] to enable automatic discovery by volume
-DEFAULT_ASSETS = ["ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT", "SOLUSDT", "ENAUSDT", "SUIUSDT", "DOGEUSDT"]
+DEFAULT_ASSETS = [] # for quick tests, use all or some of: "ETHUSDT", "HBARUSDT", "UNIUSDT", "GRTUSDT", "SOLUSDT", "ENAUSDT", "SUIUSDT", "DOGEUSDT"
 DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
 
 # Default to Dec 2025 - June 2026 as requested by user
-DEFAULT_START_DATE = datetime(2026, 5, 1, tzinfo=pytz.UTC)
+DEFAULT_START_DATE = datetime(2026, 3, 1, tzinfo=pytz.UTC)
 DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
 
 START_DATE = DEFAULT_START_DATE
@@ -803,9 +803,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                 break
 
             # 4. Duration Limit
-            elapsed_virtual = c['ts'] - START_DATE.timestamp()
-            if elapsed_virtual >= config.MAX_DURATION:
-                log.critical(f"DURATION LIMIT REACHED: {elapsed_virtual:.0f}s | Stopping Backtest.")
+            elapsed_real = time.time() - engine.start_time
+            if elapsed_real >= config.MAX_DURATION:
+                log.critical(f"DURATION LIMIT REACHED: {elapsed_real:.0f}s (Real) | Stopping Backtest.")
                 break
 
             progress.update(1)
@@ -1111,9 +1111,9 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                 break
 
             # 4. Duration Limit
-            elapsed_virtual = current_ts - START_DATE.timestamp()
-            if elapsed_virtual >= config.MAX_DURATION:
-                log.critical(f"DURATION LIMIT REACHED: {elapsed_virtual:.0f}s | Stopping Backtest.")
+            elapsed_real = time.time() - engine.start_time
+            if elapsed_real >= config.MAX_DURATION:
+                log.critical(f"DURATION LIMIT REACHED: {elapsed_real:.0f}s (Real) | Stopping Backtest.")
                 break
 
             progress.update(1)
