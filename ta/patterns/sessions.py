@@ -35,6 +35,42 @@ HUBS = {
     }
 }
 
+# --- ICT Killzones (America/Toronto EST/EDT) ---
+KILLZONES = {
+    'london': ('02:00', '05:00'),
+    'ny_am': ('08:00', '11:00'),
+    'ny_pm': ('14:00', '16:00'),
+}
+
+def is_in_killzone(timestamp_s: float, buffer_minutes: int = 30) -> Optional[str]:
+    """
+    Checks if a timestamp falls within any ICT Killzone, or immediately preceding it.
+    Returns the name of the killzone ('london', 'ny_am', 'ny_pm') if active, or None.
+
+    If buffer_minutes > 0, it also matches the window buffer_minutes prior to the killzone's start.
+    """
+    dt = convert_to_local(timestamp_s)
+    current_min = dt.hour * 60 + dt.minute
+
+    for kz, (start_hm, end_hm) in KILLZONES.items():
+        h1, m1 = map(int, start_hm.split(':'))
+        h2, m2 = map(int, end_hm.split(':'))
+        start_min = h1 * 60 + m1
+        end_min = h2 * 60 + m2
+
+        # Adjust start time to include buffer
+        buffered_start_min = (start_min - buffer_minutes) % 1440
+
+        if buffered_start_min <= end_min:
+            in_range = buffered_start_min <= current_min <= end_min
+        else: # Crosses midnight
+            in_range = current_min >= buffered_start_min or current_min <= end_min
+
+        if in_range:
+            return kz
+
+    return None
+
 _ov_range_cache = {}
 _core_range_cache = {}
 

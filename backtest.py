@@ -333,7 +333,20 @@ class StrategyWrapper:
         if rel_path.endswith(".py"):
              rel_path = rel_path[:-3]
 
-        return load_strategy(rel_path, simulator=self.simulator, overrides=self.overrides)
+        res = load_strategy(rel_path, simulator=self.simulator, overrides=self.overrides)
+        if res is not None:
+            return res
+
+        # Fallback for simple pattern/indicator modules under ta/ or anywhere else
+        try:
+            spec = importlib.util.spec_from_file_location("strategy_mod", path)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+        except Exception as e:
+            log.error(f"Error falling back to module loader for {path}: {e}")
+        return None
 
     def get_signal(self, ohlcv, tf, symbol=None):
         """
@@ -531,10 +544,15 @@ def parse_confluence_command(command: str):
 
     return ConfluenceChain(segments)
 
-async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf: str):
+async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf: str, overrides: Dict = None):
     # BT-002: Reset config to default before each asset/tf run to ensure no leakage from strategies
     import importlib, config
     importlib.reload(config)
+
+    if overrides:
+        for k, v in overrides.items():
+            if hasattr(config, k):
+                setattr(config, k, v)
 
     # Clear strategy state for this asset to ensure clean run
     if db:
@@ -828,9 +846,14 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         "no_data": False
     }
 
-async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, assets: List[str], tf: str) -> List[Dict]:
+async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, assets: List[str], tf: str, overrides: Dict = None) -> List[Dict]:
     import importlib, config
     importlib.reload(config)
+
+    if overrides:
+        for k, v in overrides.items():
+            if hasattr(config, k):
+                setattr(config, k, v)
 
     # Clear strategy state for all assets to ensure clean run
     if db:
@@ -1189,11 +1212,21 @@ def print_results(results):
 
         print(f"{'OVERALL':<22} | {'ALL':<10} | {'MIX':<5} | {ov_win_ls:>12} | {ov_pnl_ls:>15} | {'N/A':>8} | {total_pnl:>10.2f} | {ov_roi:>7.1f}% | {total_trades:>8} | {'N/A':>12}")
 
-    # [TECH-001] Strategy Breakdown Summary Table
+    # [TECH-001] Strategy Breakdown Summary Table (Deduplicated by Strategy ID/Stats Object)
     strat_aggregates = {}
+    seen_stats_objects = set()
     for r in results:
         if not r or r.get("no_data"): continue
-        for sid, stats in r.get("strategy_stats", {}).items():
+        stats_obj = r.get("strategy_stats")
+        if not stats_obj: continue
+
+        # In portfolio mode, multiple asset result dicts reference the identical shared strategy_stats object.
+        # To avoid duplicating PnL and trade counts, we only process each unique strategy_stats object once.
+        if id(stats_obj) in seen_stats_objects:
+            continue
+        seen_stats_objects.add(id(stats_obj))
+
+        for sid, stats in stats_obj.items():
             if sid not in strat_aggregates:
                 strat_aggregates[sid] = {"pnl": 0, "trades": 0, "wins": 0}
             strat_aggregates[sid]["pnl"] += stats["pnl"]
@@ -1321,6 +1354,12 @@ async def main():
         assets_to_run = await discover_assets(client)
 
     try:
+        # Apply global overrides to config module if specified
+        for k, v in overrides.items():
+            if hasattr(config, k):
+                setattr(config, k, v)
+                log.info(f"Overriding config.{k} = {v}")
+
         chain = parse_confluence_command(query_cmd)
         # Apply overrides to wrappers in the chain
         for segment in chain.segments:
@@ -1341,12 +1380,12 @@ async def main():
 
     if USE_PORTFOLIO_MODE:
         log.info("Running in Concurrent Portfolio Mode (Sharing Capital)...")
-        all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m")
+        all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m", overrides=overrides)
     else:
         log.info("Running in Isolated Single-Asset Mode...")
         for asset in assets_to_run:
             # Only run for the entry timeframe (1m) as requested by user
-            res = await run_backtest(chain, db, client, asset, "1m")
+            res = await run_backtest(chain, db, client, asset, "1m", overrides=overrides)
             if res is None:
                  res = {
                      "asset": asset,

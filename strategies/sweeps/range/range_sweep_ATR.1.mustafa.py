@@ -309,6 +309,14 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     fvg_extreme = fvg_data.get('nearest_fvg_top') or (entry_price * 1.005)
                     stop_price = fvg_extreme + tick_size
 
+                # Enforce minimum stop-loss distance guard (at least 0.1% of entry price to avoid zero-width fee traps)
+                min_stop_dist = entry_price * 0.001
+                if abs(entry_price - stop_price) < min_stop_dist:
+                    if sweep_side == 'ssl':
+                        stop_price = entry_price - min_stop_dist
+                    else:
+                        stop_price = entry_price + min_stop_dist
+
                 risk = abs(entry_price - stop_price)
                 tp1 = entry_price + (risk * self.params["tp1_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp1_rrr"])
                 tp2 = entry_price + (risk * self.params["tp2_rrr"] if sweep_side == 'ssl' else -risk * self.params["tp2_rrr"])
