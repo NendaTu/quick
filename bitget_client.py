@@ -75,6 +75,13 @@ class BitGetClient:
             log.error(f"Failed to sync time: {e}")
 
     def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
+        if not self.api_key or not self.secret_key:
+            # Public endpoints (e.g. history-candles, public contracts) do not require authentication
+            return {
+                "Content-Type": "application/json",
+                "locale": "en-US"
+            }
+
         timestamp = str(int(time.time() * 1000) + self.time_offset)
         sign = self._generate_signature(timestamp, method, request_path, body)
         headers = {
@@ -265,6 +272,97 @@ class BitGetClient:
         if isinstance(data, dict):
             # Bitget V2 positions is actually a list, but handle dict wrapper just in case
             return data.get("list") or data.get("positions") or []
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def get_history_positions(self, symbol: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        path = "/api/v2/mix/position/history-position"
+        params = {
+            "productType": "USDT-FUTURES",
+            "limit": str(limit)
+        }
+        if symbol:
+            params["symbol"] = symbol
+        if startTime:
+            params["startTime"] = str(startTime)
+        if endTime:
+            params["endTime"] = str(endTime)
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("list") or []
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def get_fills(self, symbol: Optional[str] = None, orderId: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        path = "/api/v2/mix/order/fills"
+        params = {
+            "productType": "USDT-FUTURES",
+            "limit": str(limit)
+        }
+        if symbol:
+            params["symbol"] = symbol
+        if orderId:
+            params["orderId"] = orderId
+        if startTime:
+            params["startTime"] = str(startTime)
+        if endTime:
+            params["endTime"] = str(endTime)
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("list") or []
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def set_leverage(self, symbol: str, leverage: int, margin_coin: str = "USDT") -> Dict:
+        path = "/api/v2/mix/account/set-leverage"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginCoin": margin_coin,
+            "leverage": str(leverage)
+        }
+        return await self.request("POST", path, data=data)
+
+    async def set_margin_mode(self, symbol: str, margin_mode: str = "isolated", margin_coin: str = "USDT") -> Dict:
+        path = "/api/v2/mix/account/set-margin-mode"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginCoin": margin_coin,
+            "marginMode": margin_mode.lower()
+        }
+        return await self.request("POST", path, data=data)
+
+    async def place_tpsl_order(self, symbol: str, plan_type: str, trigger_price: float, qty: float, hold_side: str, execute_price: Optional[float] = None) -> Dict:
+        path = "/api/v2/mix/order/place-tpsl-order"
+        data = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginCoin": "USDT",
+            "planType": plan_type.lower(), # "profit" or "loss"
+            "triggerPrice": str(trigger_price),
+            "triggerType": "market",
+            "holdSide": hold_side.lower(), # "long" or "short"
+            "size": str(qty)
+        }
+        if execute_price:
+            data["executePrice"] = str(execute_price)
+        return await self.request("POST", path, data=data)
+
+    async def get_open_tpsl_orders(self, symbol: Optional[str] = None) -> List[Dict]:
+        path = "/api/v2/mix/order/orders-plan-pending"
+        params = {"productType": "USDT-FUTURES"}
+        if symbol:
+            params["symbol"] = symbol
+        res = await self.request("GET", path, params=params)
+        data = res.get("data")
+        if isinstance(data, dict):
+            return data.get("entrustedList") or []
         if isinstance(data, list):
             return data
         return []

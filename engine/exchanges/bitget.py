@@ -68,6 +68,14 @@ class BitgetExchange(Simulator, BaseExchange):
                 self.db.save_candle(symbol, timeframe, ts, o, h, l, cl, v)
         return res
 
+    async def set_leverage(self, symbol: str, leverage: int) -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.set_leverage(exch_symbol, leverage)
+
+    async def set_margin_mode(self, symbol: str, margin_mode: str = "isolated") -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.set_margin_mode(exch_symbol, margin_mode)
+
     async def place_order(self, symbol: str, side: str, order_type: str, qty: float, price: Optional[float] = None, **kwargs) -> Dict:
         """
         Implementation for Bitget V2 order placement.
@@ -78,6 +86,30 @@ class BitgetExchange(Simulator, BaseExchange):
 
         tp_price = kwargs.get("exit_price") or kwargs.get("tp_price") or kwargs.get("presetTakeProfitPrice")
         sl_price = kwargs.get("stop_price") or kwargs.get("sl_price") or kwargs.get("presetStopLossPrice")
+
+        # Ensure Isolated Margin and Max Leverage are set on exchange before order placement
+        try:
+            max_leverage = 20
+            if self.engine and symbol in self.engine.leverage_limits:
+                max_leverage = int(self.engine.leverage_limits[symbol])
+
+            # Enforce dynamic safe leverage to prevent liquidation before SL is hit
+            applied_leverage = max_leverage
+            if price and sl_price:
+                price_distance_pct = abs(price - sl_price) / price
+                if price_distance_pct > 0:
+                    # 1 / leverage is the liquidation distance.
+                    # We need 1 / leverage > price_distance_pct => leverage < 1 / price_distance_pct
+                    # Let's apply a 10% safety margin (0.9 multiplier) to ensure SL is hit safely before liquidation
+                    max_safe_leverage = int(0.9 / price_distance_pct)
+                    applied_leverage = min(max_leverage, max_safe_leverage)
+                    applied_leverage = max(1, applied_leverage)
+
+            await self.set_margin_mode(symbol, margin_mode="isolated")
+            await self.set_leverage(symbol, leverage=applied_leverage)
+            log.info(f"Bitget: Configured isolated margin and {applied_leverage}x leverage (capped from {max_leverage}x) for {symbol}")
+        except Exception as config_err:
+            log.warning(f"Bitget: Failed to configure isolated margin/leverage for {symbol}: {config_err}")
 
         # Filter out keys already handled or not needed by API
         filtered_kwargs = kwargs.copy()
@@ -97,6 +129,32 @@ class BitgetExchange(Simulator, BaseExchange):
             **filtered_kwargs
         )
         log.info(f"Bitget Order Result: {res}")
+
+        if order_type.lower() == "limit" and res.get("code") == "00000":
+            data = res.get("data") or {}
+            order_id = data.get("orderId")
+            if order_id:
+                # Calculate reserved margin
+                leverage = self.engine.leverage_limits.get(symbol, 20) if self.engine else 20
+                reserved_margin = (qty * (price or 0.0)) / leverage
+
+                order_data = {
+                    "symbol": symbol,
+                    "pos_side": side,
+                    "type": "entry_limit",
+                    "price": price,
+                    "qty": qty,
+                    "ts": time.time(),
+                    "orderId": order_id,
+                    "stop_price": sl_price,
+                    "tp_price": tp_price,
+                    "reserved_margin": reserved_margin,
+                    "features": kwargs.get("features")
+                }
+                self.pending_orders.append(order_data)
+                self.used_margin += reserved_margin
+                log.info(f"REGISTERED PENDING ENTRY for {symbol} {side.upper()}: orderId={order_id}, price={price}, qty={qty}, reserved_margin={reserved_margin:.2f}")
+
         return res
 
     async def get_balance(self) -> Optional[float]:
@@ -144,6 +202,46 @@ class BitgetExchange(Simulator, BaseExchange):
                 p['symbol'] = self._normalize_symbol(p.get('symbol', ''))
                 valid_positions.append(p)
         return valid_positions
+
+    async def get_history_positions(self, symbol: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        exch_symbol = self._denormalize_symbol(symbol) if symbol else None
+        raw_history = await self.client_exec.get_history_positions(symbol=exch_symbol, startTime=startTime, endTime=endTime, limit=limit)
+        if not isinstance(raw_history, list):
+            return []
+        valid_history = []
+        for p in raw_history:
+            if isinstance(p, dict):
+                p['symbol'] = self._normalize_symbol(p.get('symbol', ''))
+                valid_history.append(p)
+        return valid_history
+
+    async def get_fills(self, symbol: Optional[str] = None, order_id: Optional[str] = None, startTime: Optional[int] = None, endTime: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        exch_symbol = self._denormalize_symbol(symbol) if symbol else None
+        raw_fills = await self.client_exec.get_fills(symbol=exch_symbol, orderId=order_id, startTime=startTime, endTime=endTime, limit=limit)
+        if not isinstance(raw_fills, list):
+            return []
+        valid_fills = []
+        for f in raw_fills:
+            if isinstance(f, dict):
+                f['symbol'] = self._normalize_symbol(f.get('symbol', ''))
+                valid_fills.append(f)
+        return valid_fills
+
+    async def place_tpsl_order(self, symbol: str, plan_type: str, trigger_price: float, qty: float, hold_side: str, execute_price: Optional[float] = None) -> Dict:
+        exch_symbol = self._denormalize_symbol(symbol)
+        return await self.client_exec.place_tpsl_order(exch_symbol, plan_type, trigger_price, qty, hold_side, execute_price)
+
+    async def get_open_tpsl_orders(self, symbol: Optional[str] = None) -> List[Dict]:
+        exch_symbol = self._denormalize_symbol(symbol) if symbol else None
+        raw_orders = await self.client_exec.get_open_tpsl_orders(exch_symbol)
+        if not isinstance(raw_orders, list):
+            return []
+        valid_orders = []
+        for o in raw_orders:
+            if isinstance(o, dict):
+                o['symbol'] = self._normalize_symbol(o.get('symbol', ''))
+                valid_orders.append(o)
+        return valid_orders
 
     async def get_open_orders(self) -> List[Dict]:
         raw_orders = await self.client_exec.get_open_orders()

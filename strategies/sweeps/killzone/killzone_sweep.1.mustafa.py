@@ -292,6 +292,14 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     fvg_extreme = fvg_data.get('nearest_fvg_top') or (entry_price * 1.005)
                     stop_price = fvg_extreme + tick_size
 
+                # Enforce minimum stop-loss distance guard (at least 0.1% of entry price to avoid zero-width fee traps)
+                min_stop_dist = entry_price * 0.001
+                if abs(entry_price - stop_price) < min_stop_dist:
+                    if sweep_side == 'ssl':
+                        stop_price = entry_price - min_stop_dist
+                    else:
+                        stop_price = entry_price + min_stop_dist
+
                 # TP1/TP2 from 15m liquidity
                 risk = abs(entry_price - stop_price)
                 min_tp1_dist = risk * self.params["tp1_rrr"]

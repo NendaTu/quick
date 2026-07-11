@@ -31,7 +31,7 @@ BITGET_PASSPHRASE_DEMO = get_env_stripped("BITGET_PASSPHRASE_DEMO") or BITGET_PA
 USE_VIRTUAL_BALANCE = False
 
 # The simulated starting balance used for all PnL and risk calculations.
-INITIAL_EQUITY = 15.0
+INITIAL_EQUITY = 40.0
 
 # [TECH-001] Compound every trade (1.0 = 100% reinvestment).
 REINVESTMENT_PERCENTAGE = 1.0
@@ -41,10 +41,10 @@ RISK_PER_TRADE = 0.05
 
 # Maximum number of concurrent positions allowed.
 # [BT-003] Set to 1 for initial live transition to ensure tight monitoring
-MAX_CONCURRENT_POSITIONS = 1
+MAX_CONCURRENT_POSITIONS = 1000
 
 # Stop bot if balance drops below this fraction of ATH (0.5 = 50% drawdown).
-DRAWDOWN_LIMIT = 0.8
+DRAWDOWN_LIMIT = 0.25
 
 # Stop bot if total ROI reaches this fraction (1.0 = 100% profit).
 TOTAL_ROI_LIMIT = 1000.0
@@ -104,7 +104,7 @@ USE_ONLINE_LEARNING = False
 REENTRY_COOLDOWN = 60.0
 
 # TP Relaxation: Accepts lower ROE targets during flat trends.
-USE_TP_RELAXATION = True
+USE_TP_RELAXATION = False
 RELAXED_ROE_TARGET = 0.03
 TP_RELAXATION_THRESHOLD = 0.05
 
@@ -172,9 +172,9 @@ RESTRICT_SCORE = False
 MIN_CONFIDENCE = 0.66
 
 # --- Global Restriction Toggles ---
-RESTRICT_IMBALANCE = True
-RESTRICT_HTF_BIAS = True
-RESTRICT_VOLUME_INFLUX = True
+RESTRICT_IMBALANCE = False
+RESTRICT_HTF_BIAS = False
+RESTRICT_VOLUME_INFLUX = False
 RESTRICT_MIN_VAL = True
 RESTRICT_STRUCTURE = False # [OP-007] Set to True to require BOS/MSS for entry
 
@@ -182,9 +182,9 @@ RESTRICT_STRUCTURE = False # [OP-007] Set to True to require BOS/MSS for entry
 LOG_REJECTIONS = False
 LOG_SIGNALS = True
 SHOW_PERIODIC_SUMMARY = True
-SUMMARY_INTERVAL_SECONDS = 15
+SUMMARY_INTERVAL_SECONDS = 30
 SHOW_HEARTBEAT = True
-HEARTBEAT_INTERVAL_SECONDS = 60
+HEARTBEAT_INTERVAL_SECONDS = 30
 
 # --- Simulator & Technical Analysis Internal Settings ---
 TICK_SECONDS = 0.2
@@ -195,5 +195,5 @@ EXPECTED_SLIPPAGE = 0.001
 MAX_ENTRY_SLIPPAGE = 0.001
 MAX_SPREAD_PCT = 0.002
 FEE_AWARE_SIZING = True
-BTC_REALTIME_CONFLUENCE = True
+BTC_REALTIME_CONFLUENCE = False
 SESSION_MULTIPLIER = 1.5

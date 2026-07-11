@@ -286,6 +286,17 @@ class Engine:
              strat = getattr(self, "strategy", None)
              strategy_id = getattr(strat, "strategy_id", strat.name) if strat else "model"
 
+        # Extract target TP/SL prices if available for exact fallback P&L calculations
+        stop_price = None
+        tp_price = None
+        tp1_price = None
+        tp1_qty = None
+        if features:
+            stop_price = features.get("stop_price") or features.get("stop")
+            tp_price = features.get("exit_price") or features.get("tp_price") or features.get("tp")
+            tp1_price = features.get("tp1_price")
+            tp1_qty = features.get("tp1_qty")
+
         if pos_key in self.open_positions:
             # Scaling up an existing position
             p = self.open_positions[pos_key]
@@ -294,6 +305,11 @@ class Engine:
             p["entry"] = (p["entry"] * p["qty"] + entry * qty) / total_qty
             p["qty"] = total_qty
             p["margin"] += margin
+            # Update target TP/SL
+            if stop_price: p["stop_price"] = stop_price
+            if tp_price: p["tp_price"] = tp_price
+            if tp1_price: p["tp1_price"] = tp1_price
+            if tp1_qty: p["tp1_qty"] = tp1_qty
             # Keep the ORIGINAL strategy_id as the primary owner for attribution
         else:
             self.open_positions[pos_key] = {
@@ -301,7 +317,11 @@ class Engine:
                 "orig_side": orig_side, "is_contr": is_contr,
                 "margin": margin,
                 "ts": entry_ts,
-                "strategy_id": strategy_id
+                "strategy_id": strategy_id,
+                "stop_price": stop_price,
+                "tp_price": tp_price,
+                "tp1_price": tp1_price,
+                "tp1_qty": tp1_qty
             }
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
@@ -321,6 +341,10 @@ class Engine:
         # [C-004] Adaptive Learning: Feedback loop based on trade PnL
         if not is_partial and features:
             self.model.train_on_trade(symbol, features, round_trip_pnl)
+
+        # Update virtual balance or local tracker
+        if config.USE_VIRTUAL_BALANCE or self.mode == "paper":
+            self.equity += round_trip_pnl
 
         # Track session-wide metrics (always updated)
         self.cumulative_pnl += round_trip_pnl
@@ -977,18 +1001,130 @@ class Engine:
                     if p.get("strategy_id") != "legacy_sync":
                         # Position is gone from exchange!
                         log.info(f"Position {pos_key} gone from exchange. Reporting exit...")
-                        # For real trades, we'd ideally fetch the PnL from history.
-                        # As a fallback, we'll use the last known price to estimate if not provided.
-                        exit_price = self.exchange.last_price.get(pos_key.split("_")[0], p["entry"])
-                        # Simple PnL calculation
-                        pnl = (exit_price - p["entry"]) * p["qty"] if p["side"] == "buy" else (p["entry"] - exit_price) * p["qty"]
-                        # [TODO] Better PnL attribution from exchange history
-                        self._report_exit(pos_key.split("_")[0], p["side"], pnl, exit_type="exchange_sync")
+
+                        symbol = pos_key.split("_")[0]
+                        side = p["side"]
+                        qty = p["qty"]
+                        entry_price = p["entry"]
+
+                        exit_price = None
+                        pnl = None
+                        fee = 0.0
+                        exit_type = "exchange_sync"
+
+                        # 1. Try to fetch actual closed position from History API
+                        try:
+                            history = await self.exchange.get_history_positions(symbol=symbol, limit=10)
+                            target_hold_side = 'long' if side == 'buy' else 'short'
+
+                            matching_pos = None
+                            for hp in history:
+                                if hp.get("holdSide") == target_hold_side:
+                                    matching_pos = hp
+                                    break
+
+                            if matching_pos:
+                                log.info(f"SYNC STATE | Found matching historical closed position on {symbol} {side}: {matching_pos}")
+                                exit_price = float(matching_pos.get("closePrice") or 0.0)
+                                pnl = float(matching_pos.get("realizedPL") or 0.0)
+                                fee = float(matching_pos.get("fee") or 0.0)
+                                exit_type = "exchange_sync"
+                        except Exception as e:
+                            log.warning(f"SYNC STATE | Failed to fetch position history for {pos_key}: {e}")
+
+                        # 2. If not found in history, try to fetch Fills API to find the closing trade details
+                        if exit_price is None:
+                            try:
+                                fills = await self.exchange.get_fills(symbol=symbol, limit=20)
+                                closing_side = "sell" if side == "buy" else "buy"
+
+                                matching_fill = None
+                                for f in fills:
+                                    if f.get("side", "").lower() == closing_side:
+                                        matching_fill = f
+                                        break
+
+                                if matching_fill:
+                                    log.info(f"SYNC STATE | Found matching exit order fill on {symbol} {side}: {matching_fill}")
+                                    exit_price = float(matching_fill.get("price") or 0.0)
+                                    fee = float(matching_fill.get("fee") or 0.0)
+                            except Exception as e:
+                                log.warning(f"SYNC STATE | Failed to fetch fills for {pos_key}: {e}")
+
+                        # 3. Precise Fallback: Calculate P&L strictly incorporating Maker/Taker fees
+                        if exit_price is None or exit_price == 0.0:
+                            ticker_price = self.exchange.last_price.get(symbol, entry_price)
+                            tp_target = p.get("tp_price")
+                            sl_target = p.get("stop_price")
+
+                            if tp_target and sl_target:
+                                dist_to_tp = abs(ticker_price - tp_target)
+                                dist_to_sl = abs(ticker_price - sl_target)
+                                if dist_to_tp < dist_to_sl:
+                                    exit_price = tp_target
+                                    exit_type = "tp"
+                                else:
+                                    exit_price = sl_target
+                                    exit_type = "sl"
+                            else:
+                                exit_price = ticker_price
+
+                        if pnl is None:
+                            # Compute theoretical net PnL with Maker/Taker fee rates
+                            is_tp = False
+                            if p.get("tp_price") and abs(exit_price - p["tp_price"]) < 1e-5:
+                                is_tp = True
+
+                            entry_maker = True
+                            exit_maker = is_tp
+
+                            from tools.trading_utils import calculate_net_pnl
+                            pnl = calculate_net_pnl(qty, entry_price, exit_price, side, entry_maker=entry_maker, exit_maker=exit_maker)
+                            log.info(f"SYNC STATE | Calculated local fallback net P&L for {pos_key}: gross_pnl={(exit_price-entry_price)*qty if side=='buy' else (entry_price-exit_price)*qty:.4f}, exit_price={exit_price:.8f}, net_pnl={pnl:.4f}")
+
+                        self._report_exit(symbol, side, pnl, exit_type=exit_type)
                     else:
                         # Just clear legacy sync position without reporting
                         log.info(f"Legacy synced position {pos_key} cleared.")
                         if pos_key in self.open_positions:
                             del self.open_positions[pos_key]
+
+            # Reconcile custom multi-target TP/SL trigger orders (TP1) for open positions
+            for pos_key, pos_details in list(self.open_positions.items()):
+                sym = pos_key.split("_")[0]
+                side = pos_details["side"]
+                qty = pos_details["qty"]
+                tp1_price = pos_details.get("tp1_price")
+                tp1_qty = pos_details.get("tp1_qty")
+
+                # If the position has a custom TP1 target, ensure it has a corresponding trigger order
+                if tp1_price and tp1_qty:
+                    try:
+                        # Get all currently open trigger/plan orders for this symbol
+                        open_plans = await self.exchange.get_open_tpsl_orders(sym)
+
+                        # Check if a plan order for TP1 is already open
+                        tp1_placed = False
+                        for plan in open_plans:
+                            if plan.get("planType") == "profit":
+                                plan_trigger = float(plan.get("triggerPrice") or 0.0)
+                                if abs(plan_trigger - tp1_price) < 1e-5:
+                                    tp1_placed = True
+                                    break
+
+                        if not tp1_placed:
+                            log.info(f"SYNC STATE | Placing missing TP1 trigger order for {pos_key}: trigger_price={tp1_price}, qty={tp1_qty}")
+                            # Place TP1 trigger order
+                            hold_side = "long" if side == "buy" else "short"
+                            await self.exchange.place_tpsl_order(
+                                symbol=sym,
+                                plan_type="profit",
+                                trigger_price=tp1_price,
+                                qty=tp1_qty,
+                                hold_side=hold_side
+                            )
+                    except Exception as tpsl_err:
+                        log.error(f"SYNC STATE | Failed to reconcile TP1 trigger order for {pos_key}: {tpsl_err}")
 
             # 2. Sync Pending Orders
             orders = await self.exchange.get_open_orders()

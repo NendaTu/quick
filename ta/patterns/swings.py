@@ -25,8 +25,8 @@ def detect_swings(ohlcv: List[dict], strength: int = 2) -> Dict[str, List[dict]]
         return {'highs': [], 'lows': []}
 
     # 1. Check Cache
-    # We use (first_ts, last_ts, len, strength) as a fingerprint
-    cache_key = (ohlcv[0]['ts'], ohlcv[-1]['ts'], len(ohlcv), strength)
+    # We use (first_ts, last_ts, first_close, last_close, len, strength) as a fingerprint to prevent cross-symbol contamination
+    cache_key = (ohlcv[0]['ts'], ohlcv[-1]['ts'], ohlcv[0]['c'], ohlcv[-1]['c'], len(ohlcv), strength)
     if cache_key in _swing_cache:
         return _swing_cache[cache_key]
 
