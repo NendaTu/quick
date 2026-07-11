@@ -22,6 +22,27 @@ from engine.simulation import SimulationEngine
 from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
 from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
+class Tee:
+    def __init__(self, original_stream, filepath):
+        self.original_stream = original_stream
+        self.filepath = filepath
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        self.file = open(filepath, "w", encoding="utf-8", buffering=1)
+
+    def write(self, data):
+        self.original_stream.write(data)
+        self.file.write(data)
+
+    def flush(self):
+        self.original_stream.flush()
+        self.file.flush()
+
+    def close(self):
+        try:
+            self.file.close()
+        except:
+            pass
+
 # --- Backtest Settings ---
 PROXIMITY_LIMIT = 5
 RESET_PROXIMITY_ON_REPEAT = True
@@ -627,114 +648,131 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
-    # Simulation Loop using unified engine
-    for i in range(start_idx, len(full_history)):
-        c = full_history[i]
-        o, h, l, cl = c['o'], c['h'], c['l'], c['c']
+    try:
+        # Simulation Loop using unified engine
+        for i in range(start_idx, len(full_history)):
+            c = full_history[i]
 
-        # [PERF-004] Skip sub-candle simulation if idle to boost speed
-        intra_candle_prices = [o, h, l, cl]
-        if not sim.positions and not sim.pending_orders:
-            intra_candle_prices = [cl] # Only simulate close if idle
+            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
+            if (i - start_idx) % 1440 == 0:
+                dt_str = datetime.fromtimestamp(c['ts'], tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+                wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
+                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | Open: {len(engine.open_positions)}")
 
-        # [PERF-001] Update simulator's OHLCV with sliding window
-        sim.ohlcv[asset][tf].append(c)
-        if len(sim.ohlcv[asset][tf]) > 1000: sim.ohlcv[asset][tf].pop(0)
+            o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
-        if tf in sim.confluence_history[asset]:
-            sim.confluence_history[asset][tf].append(cl)
-            if len(sim.confluence_history[asset][tf]) > 1000: sim.confluence_history[asset][tf].pop(0)
+            # [PERF-004] Skip sub-candle simulation if idle to boost speed
+            intra_candle_prices = [o, h, l, cl]
+            if not sim.positions and not sim.pending_orders:
+                intra_candle_prices = [cl] # Only simulate close if idle
 
-        # [BT-001] Simulate Price Action
-        for price in intra_candle_prices:
-            sim.last_price[asset] = price
-            if asset in sim.books:
-                sim.books[asset].mid_price = price
-                sim.books[asset]._regenerate()
+            # [PERF-001] Update simulator's OHLCV with sliding window
+            sim.ohlcv[asset][tf].append(c)
+            if len(sim.ohlcv[asset][tf]) > 1000: sim.ohlcv[asset][tf].pop(0)
 
-                # Sync Engine's shadow books for tradability checks
-                if asset in engine.books:
-                    engine.books[asset].bids = list(sim.books[asset].bids)
-                    engine.books[asset].asks = list(sim.books[asset].asks)
+            if tf in sim.confluence_history[asset]:
+                sim.confluence_history[asset][tf].append(cl)
+                if len(sim.confluence_history[asset][tf]) > 1000: sim.confluence_history[asset][tf].pop(0)
 
-            # [PERF-002] Order processing is only needed if we have positions or pending orders
-            if sim.positions or sim.pending_orders:
-                await sim._process_orders()
+            # [BT-001] Simulate Price Action
+            for price in intra_candle_prices:
+                sim.last_price[asset] = price
+                if asset in sim.books:
+                    sim.books[asset].mid_price = price
+                    sim.books[asset]._regenerate()
 
-        # 2. Check for entry signal
-        if len(sim.ohlcv[asset][tf]) >= 2:
-            # Synchronize BTC and other timeframes to the current timestamp
-            current_ts = c['ts']
-            for sym in [asset, BTC_SYMBOL]:
-                for t in relevant_tfs:
-                    if sym == asset and t == tf: continue
+                    # Sync Engine's shadow books for tradability checks
+                    if asset in engine.books:
+                        engine.books[asset].bids = list(sim.books[asset].bids)
+                        engine.books[asset].asks = list(sim.books[asset].asks)
 
-                    # [PERF-003] Only sync history when needed (fully closed/completed bars only)
-                    while pointers[sym][t] < len(asset_history[sym][t]):
-                        new_c = asset_history[sym][t][pointers[sym][t]]
-                        # Ensure the bar of timeframe t has fully closed before the current timestamp (current_ts)
-                        if new_c['ts'] + TF_SECONDS[t] <= current_ts:
-                            sim.ohlcv[sym][t].append(new_c)
-                            if len(sim.ohlcv[sym][t]) > 1000: sim.ohlcv[sym][t].pop(0)
+                # [PERF-002] Order processing is only needed if we have positions or pending orders
+                if sim.positions or sim.pending_orders:
+                    await sim._process_orders()
 
-                            if t in sim.confluence_history[sym]:
-                                sim.confluence_history[sym][t].append(new_c['c'])
-                                if len(sim.confluence_history[sym][t]) > 1000: sim.confluence_history[sym][t].pop(0)
+            # 2. Check for entry signal
+            if len(sim.ohlcv[asset][tf]) >= 2:
+                # Synchronize BTC and other timeframes to the current timestamp
+                current_ts = c['ts']
+                for sym in [asset, BTC_SYMBOL]:
+                    for t in relevant_tfs:
+                        if sym == asset and t == tf: continue
 
-                            pointers[sym][t] += 1
-                        else:
-                            break
+                        # [PERF-003] Only sync history when needed (fully closed/completed bars only)
+                        while pointers[sym][t] < len(asset_history[sym][t]):
+                            new_c = asset_history[sym][t][pointers[sym][t]]
+                            # Ensure the bar of timeframe t has fully closed before the current timestamp (current_ts)
+                            if new_c['ts'] + TF_SECONDS[t] <= current_ts:
+                                sim.ohlcv[sym][t].append(new_c)
+                                if len(sim.ohlcv[sym][t]) > 1000: sim.ohlcv[sym][t].pop(0)
 
-            # [TECH-001] Support Strategy Families in Backtests
-            active_signals = []
-            if engine.strategies:
-                # Mock market_data for class-based strategies
-                market_data = {
-                    "symbol": asset,
-                    "book": sim.books[asset],
-                    "equity": sim.equity,
-                    "features": None # Simulator will be used if None
-                }
-                for strat in engine.strategies:
-                    # [TECH-001] AUTHENTICITY GUARD: Check if this specific strategy is ready
-                    if hasattr(strat, "is_ready") and not strat.is_ready(asset):
+                                if t in sim.confluence_history[sym]:
+                                    sim.confluence_history[sym][t].append(new_c['c'])
+                                    if len(sim.confluence_history[sym][t]) > 1000: sim.confluence_history[sym][t].pop(0)
+
+                                pointers[sym][t] += 1
+                            else:
+                                break
+
+                # [TECH-001] Support Strategy Families in Backtests
+                active_signals = []
+                if engine.strategies:
+                    # Mock market_data for class-based strategies
+                    market_data = {
+                        "symbol": asset,
+                        "book": sim.books[asset],
+                        "equity": sim.equity,
+                        "features": None # Simulator will be used if None
+                    }
+                    for strat in engine.strategies:
+                        # [TECH-001] AUTHENTICITY GUARD: Check if this specific strategy is ready
+                        if hasattr(strat, "is_ready") and not strat.is_ready(asset):
+                            continue
+
+                        if hasattr(strat, "get_entry_signal"):
+                            # Ensure strategy has access to current simulation state
+                            if hasattr(strat, "model") and hasattr(strat.model, "simulator"):
+                                strat.model.simulator = sim
+
+                            sig = strat.get_entry_signal(market_data)
+                            if sig:
+                                sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
+                                active_signals.append(sig)
+                else:
+                    # Legacy Confluence Chain
+                    signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
+                    if signal:
+                        signal["strategy_id"] = "chain"
+                        active_signals.append(signal)
+
+                for signal in active_signals:
+                    # [TECH-001] Collision check for backtest loop
+                    if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
                         continue
 
-                    if hasattr(strat, "get_entry_signal"):
-                        # Ensure strategy has access to current simulation state
-                        if hasattr(strat, "model") and hasattr(strat.model, "simulator"):
-                            strat.model.simulator = sim
+                    # Place trade via unified engine
+                    kwargs = signal.copy()
+                    for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
+                        kwargs.pop(key, None)
 
-                        sig = strat.get_entry_signal(market_data)
-                        if sig:
-                            sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
-                            active_signals.append(sig)
-            else:
-                # Legacy Confluence Chain
-                signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
-                if signal:
-                    signal["strategy_id"] = "chain"
-                    active_signals.append(signal)
+                    res = sim.place_trade_oco(
+                        asset, signal["side"], signal.get("qty", 0),
+                        signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
+                        features=signal,
+                        strategy_id=signal.get("strategy_id"),
+                        **kwargs
+                    )
 
-            for signal in active_signals:
-                # [TECH-001] Collision check for backtest loop
-                if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
-                    continue
-
-                # Place trade via unified engine
-                kwargs = signal.copy()
-                for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
-                    kwargs.pop(key, None)
-
-                res = sim.place_trade_oco(
-                    asset, signal["side"], signal.get("qty", 0),
-                    signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
-                    features=signal,
-                    strategy_id=signal.get("strategy_id"),
-                    **kwargs
-                )
-
-        progress.update(1)
+            progress.update(1)
+    except KeyboardInterrupt:
+        log.warning(f"\n[CTRL+C] Backtest for {asset} interrupted by user. Finalizing partial results...")
+        if engine.open_positions:
+            print("\n" + "="*60)
+            print("CURRENT OPEN POSITIONS AT INTERRUPTION:")
+            print("-" * 60)
+            for pos_key, p in engine.open_positions.items():
+                print(f"  - {pos_key:15} | Side: {p['side'].upper():4} | Qty: {p['qty']:8.3f} | Entry: {p['entry']:10.8f} | Margin: {p['margin']:.2f}")
+            print("="*60 + "\n")
 
     roi = (sim.equity / config.INITIAL_EQUITY - 1) * 100
 
@@ -885,116 +923,132 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
-    # Master timeline loop
-    for current_ts in timeline:
-        # Step A: Update prices and simulate price action for all active assets
-        for asset in assets:
-            if asset not in candle_by_ts or current_ts not in candle_by_ts[asset]:
-                continue
-            c = candle_by_ts[asset][current_ts]
+    try:
+        # Master timeline loop
+        for step_idx, current_ts in enumerate(timeline):
+            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
+            if step_idx % 1440 == 0:
+                dt_str = datetime.fromtimestamp(current_ts, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+                wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
+                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | Open: {len(engine.open_positions)}")
 
-            o, h, l, cl = c['o'], c['h'], c['l'], c['c']
+            # Step A: Update prices and simulate price action for all active assets
+            for asset in assets:
+                if asset not in candle_by_ts or current_ts not in candle_by_ts[asset]:
+                    continue
+                c = candle_by_ts[asset][current_ts]
 
-            # Skip sub-candle simulation if idle to boost speed
-            intra_candle_prices = [o, h, l, cl]
-            if not sim.positions and not sim.pending_orders:
-                intra_candle_prices = [cl] # Only simulate close if idle
+                o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
-            # Update simulator's OHLCV
-            sim.ohlcv[asset][tf].append(c)
-            if len(sim.ohlcv[asset][tf]) > 1000: sim.ohlcv[asset][tf].pop(0)
+                # Skip sub-candle simulation if idle to boost speed
+                intra_candle_prices = [o, h, l, cl]
+                if not sim.positions and not sim.pending_orders:
+                    intra_candle_prices = [cl] # Only simulate close if idle
 
-            if tf in sim.confluence_history[asset]:
-                sim.confluence_history[asset][tf].append(cl)
-                if len(sim.confluence_history[asset][tf]) > 1000: sim.confluence_history[asset][tf].pop(0)
+                # Update simulator's OHLCV
+                sim.ohlcv[asset][tf].append(c)
+                if len(sim.ohlcv[asset][tf]) > 1000: sim.ohlcv[asset][tf].pop(0)
 
-            # Simulate Price Action for this asset
-            for price in intra_candle_prices:
-                sim.last_price[asset] = price
-                if asset in sim.books:
-                    sim.books[asset].mid_price = price
-                    sim.books[asset]._regenerate()
+                if tf in sim.confluence_history[asset]:
+                    sim.confluence_history[asset][tf].append(cl)
+                    if len(sim.confluence_history[asset][tf]) > 1000: sim.confluence_history[asset][tf].pop(0)
 
-                    # Sync Engine's shadow books for tradability checks
-                    if asset in engine.books:
-                        engine.books[asset].bids = list(sim.books[asset].bids)
-                        engine.books[asset].asks = list(sim.books[asset].asks)
+                # Simulate Price Action for this asset
+                for price in intra_candle_prices:
+                    sim.last_price[asset] = price
+                    if asset in sim.books:
+                        sim.books[asset].mid_price = price
+                        sim.books[asset]._regenerate()
 
-        # Step B: Process orders ONCE for the shared simulator at this timestamp
-        if sim.positions or sim.pending_orders:
-            await sim._process_orders()
+                        # Sync Engine's shadow books for tradability checks
+                        if asset in engine.books:
+                            engine.books[asset].bids = list(sim.books[asset].bids)
+                            engine.books[asset].asks = list(sim.books[asset].asks)
 
-        # Step C: Synchronize BTC and other timeframes to the current timestamp
-        for sym in assets + [BTC_SYMBOL]:
-            for t in relevant_tfs:
-                if sym in assets and t == tf: continue
+            # Step B: Process orders ONCE for the shared simulator at this timestamp
+            if sim.positions or sim.pending_orders:
+                await sim._process_orders()
 
-                # Only sync history when needed (fully closed/completed bars only)
-                while pointers[sym][t] < len(asset_history[sym][t]):
-                    new_c = asset_history[sym][t][pointers[sym][t]]
-                    # Ensure the bar of timeframe t has fully closed before current_ts
-                    if new_c['ts'] + TF_SECONDS[t] <= current_ts:
-                        sim.ohlcv[sym][t].append(new_c)
-                        if len(sim.ohlcv[sym][t]) > 1000: sim.ohlcv[sym][t].pop(0)
+            # Step C: Synchronize BTC and other timeframes to the current timestamp
+            for sym in assets + [BTC_SYMBOL]:
+                for t in relevant_tfs:
+                    if sym in assets and t == tf: continue
 
-                        if t in sim.confluence_history[sym]:
-                            sim.confluence_history[sym][t].append(new_c['c'])
-                            if len(sim.confluence_history[sym][t]) > 1000: sim.confluence_history[sym][t].pop(0)
+                    # Only sync history when needed (fully closed/completed bars only)
+                    while pointers[sym][t] < len(asset_history[sym][t]):
+                        new_c = asset_history[sym][t][pointers[sym][t]]
+                        # Ensure the bar of timeframe t has fully closed before current_ts
+                        if new_c['ts'] + TF_SECONDS[t] <= current_ts:
+                            sim.ohlcv[sym][t].append(new_c)
+                            if len(sim.ohlcv[sym][t]) > 1000: sim.ohlcv[sym][t].pop(0)
 
-                        pointers[sym][t] += 1
-                    else:
+                            if t in sim.confluence_history[sym]:
+                                sim.confluence_history[sym][t].append(new_c['c'])
+                                if len(sim.confluence_history[sym][t]) > 1000: sim.confluence_history[sym][t].pop(0)
+
+                            pointers[sym][t] += 1
+                        else:
+                            break
+
+            # Step D: Check signals and place trades for all assets concurrently under the shared Engine
+            # Respect MAX_CONCURRENT_POSITIONS globally!
+            if (len(engine.open_positions) + len(engine.pending_entries)) < config.MAX_CONCURRENT_POSITIONS:
+                for asset in assets:
+                    # Sourced only if we have a candle at this timestamp
+                    if asset not in candle_by_ts or current_ts not in candle_by_ts[asset]: continue
+                    if (len(engine.open_positions) + len(engine.pending_entries)) >= config.MAX_CONCURRENT_POSITIONS:
                         break
 
-        # Step D: Check signals and place trades for all assets concurrently under the shared Engine
-        # Respect MAX_CONCURRENT_POSITIONS globally!
-        if (len(engine.open_positions) + len(engine.pending_entries)) < config.MAX_CONCURRENT_POSITIONS:
-            for asset in assets:
-                # Sourced only if we have a candle at this timestamp
-                if asset not in candle_by_ts or current_ts not in candle_by_ts[asset]: continue
-                if (len(engine.open_positions) + len(engine.pending_entries)) >= config.MAX_CONCURRENT_POSITIONS:
-                    break
+                    book = sim.books[asset]
+                    if book.best_bid <= 0: continue
 
-                book = sim.books[asset]
-                if book.best_bid <= 0: continue
+                    # Predict signals for this asset
+                    active_signals = []
+                    if engine.strategies:
+                        market_data = {
+                            "symbol": asset,
+                            "book": book,
+                            "equity": engine.equity, # dynamically use actual shared equity
+                            "features": None
+                        }
+                        for strat in engine.strategies:
+                            if hasattr(strat, "is_ready") and not strat.is_ready(asset):
+                                continue
+                            if hasattr(strat, "get_entry_signal"):
+                                if hasattr(strat, "model") and hasattr(strat.model, "simulator"):
+                                    strat.model.simulator = sim
+                                sig = strat.get_entry_signal(market_data)
+                                if sig:
+                                    sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
+                                    active_signals.append(sig)
 
-                # Predict signals for this asset
-                active_signals = []
-                if engine.strategies:
-                    market_data = {
-                        "symbol": asset,
-                        "book": book,
-                        "equity": engine.equity, # dynamically use actual shared equity
-                        "features": None
-                    }
-                    for strat in engine.strategies:
-                        if hasattr(strat, "is_ready") and not strat.is_ready(asset):
+                    for signal in active_signals:
+                        if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
                             continue
-                        if hasattr(strat, "get_entry_signal"):
-                            if hasattr(strat, "model") and hasattr(strat.model, "simulator"):
-                                strat.model.simulator = sim
-                            sig = strat.get_entry_signal(market_data)
-                            if sig:
-                                sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
-                                active_signals.append(sig)
 
-                for signal in active_signals:
-                    if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
-                        continue
+                        # Place trade via unified engine
+                        kwargs = signal.copy()
+                        for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
+                            kwargs.pop(key, None)
 
-                    # Place trade via unified engine
-                    kwargs = signal.copy()
-                    for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
-                        kwargs.pop(key, None)
+                        sim.place_trade_oco(
+                            asset, signal["side"], signal.get("qty", 0),
+                            signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
+                            features=signal,
+                            strategy_id=signal.get("strategy_id"),
+                            **kwargs
+                        )
 
-                    sim.place_trade_oco(
-                        asset, signal["side"], signal.get("qty", 0),
-                        signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
-                        features=signal,
-                        strategy_id=signal.get("strategy_id"),
-                        **kwargs
-                    )
-
-        progress.update(1)
+            progress.update(1)
+    except KeyboardInterrupt:
+        log.warning("\n[CTRL+C] Portfolio backtest interrupted by user. Finalizing partial results...")
+        if engine.open_positions:
+            print("\n" + "="*60)
+            print("CURRENT OPEN POSITIONS AT INTERRUPTION:")
+            print("-" * 60)
+            for pos_key, p in engine.open_positions.items():
+                print(f"  - {pos_key:15} | Side: {p['side'].upper():4} | Qty: {p['qty']:8.3f} | Entry: {p['entry']:10.8f} | Margin: {p['margin']:.2f}")
+            print("="*60 + "\n")
 
     # Format the individual asset performance output structures
     results = []
@@ -1142,6 +1196,13 @@ def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
 async def main():
     global START_DATE, END_DATE
 
+    # Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
+    console_log_path = "docs/temp/console-log.txt"
+    stdout_tee = Tee(sys.stdout, console_log_path)
+    stderr_tee = Tee(sys.stderr, console_log_path)
+    sys.stdout = stdout_tee
+    sys.stderr = stderr_tee
+
     # Ensure they are set to defaults at start of main
     START_DATE = DEFAULT_START_DATE
     END_DATE = DEFAULT_END_DATE
@@ -1286,6 +1347,12 @@ async def main():
 
     await client.close()
     db.stop()
+
+    # Restore original streams and close file
+    sys.stdout = stdout_tee.original_stream
+    sys.stderr = stderr_tee.original_stream
+    stdout_tee.close()
+    stderr_tee.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
