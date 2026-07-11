@@ -551,6 +551,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     from engine.core import Engine
     engine = Engine(use_db=False, mode="paper")
     engine.start_time = time.time()
+    peak_equity = config.INITIAL_EQUITY
 
     sim = engine.exchange
     sim.db = db
@@ -763,6 +764,32 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                         **kwargs
                     )
 
+            # Enforce protective safety limit checks (Drawdown, ROI, Max Trades, Duration)
+            if sim.equity > peak_equity:
+                peak_equity = sim.equity
+
+            # 1. Drawdown Limit
+            if peak_equity > 0 and sim.equity <= config.DRAWDOWN_LIMIT * peak_equity:
+                log.critical(f"DRAWDOWN LIMIT HIT: equity={sim.equity:.2f}, peak={peak_equity:.2f} | Stopping Backtest.")
+                break
+
+            # 2. ROI Limit
+            roi = (sim.equity / config.INITIAL_EQUITY - 1)
+            if roi >= config.TOTAL_ROI_LIMIT:
+                log.critical(f"ROI TARGET REACHED: equity={sim.equity:.2f}, ROI={roi*100:.1f}% | Stopping Backtest.")
+                break
+
+            # 3. Trade Count Limit
+            if engine.total_trades >= config.MAX_TRADES_LIMIT:
+                log.critical(f"TRADE LIMIT REACHED: {engine.total_trades} trades | Stopping Backtest.")
+                break
+
+            # 4. Duration Limit
+            elapsed_virtual = c['ts'] - START_DATE.timestamp()
+            if elapsed_virtual >= config.MAX_DURATION:
+                log.critical(f"DURATION LIMIT REACHED: {elapsed_virtual:.0f}s | Stopping Backtest.")
+                break
+
             progress.update(1)
     except KeyboardInterrupt:
         log.warning(f"\n[CTRL+C] Backtest for {asset} interrupted by user. Finalizing partial results...")
@@ -842,6 +869,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     from engine.core import Engine
     engine = Engine(use_db=False, mode="paper")
     engine.start_time = time.time()
+    peak_equity = config.INITIAL_EQUITY
 
     sim = engine.exchange
     sim.db = db
@@ -1038,6 +1066,32 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                             strategy_id=signal.get("strategy_id"),
                             **kwargs
                         )
+
+            # Enforce protective safety limit checks (Drawdown, ROI, Max Trades, Duration)
+            if sim.equity > peak_equity:
+                peak_equity = sim.equity
+
+            # 1. Drawdown Limit
+            if peak_equity > 0 and sim.equity <= config.DRAWDOWN_LIMIT * peak_equity:
+                log.critical(f"DRAWDOWN LIMIT HIT: equity={sim.equity:.2f}, peak={peak_equity:.2f} | Stopping Backtest.")
+                break
+
+            # 2. ROI Limit
+            roi = (sim.equity / config.INITIAL_EQUITY - 1)
+            if roi >= config.TOTAL_ROI_LIMIT:
+                log.critical(f"ROI TARGET REACHED: equity={sim.equity:.2f}, ROI={roi*100:.1f}% | Stopping Backtest.")
+                break
+
+            # 3. Trade Count Limit
+            if engine.total_trades >= config.MAX_TRADES_LIMIT:
+                log.critical(f"TRADE LIMIT REACHED: {engine.total_trades} trades | Stopping Backtest.")
+                break
+
+            # 4. Duration Limit
+            elapsed_virtual = current_ts - START_DATE.timestamp()
+            if elapsed_virtual >= config.MAX_DURATION:
+                log.critical(f"DURATION LIMIT REACHED: {elapsed_virtual:.0f}s | Stopping Backtest.")
+                break
 
             progress.update(1)
     except KeyboardInterrupt:
