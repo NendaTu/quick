@@ -37,7 +37,7 @@ INITIAL_EQUITY = 40.0
 REINVESTMENT_PERCENTAGE = 1.0
 
 # Maximum fraction of total balance risked per single trade (0.005 = 0.5%).
-RISK_PER_TRADE = 0.05
+RISK_PER_TRADE = 0.01
 
 # Maximum number of concurrent positions allowed.
 # [BT-003] Set to 1 for initial live transition to ensure tight monitoring
