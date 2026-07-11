@@ -1189,11 +1189,21 @@ def print_results(results):
 
         print(f"{'OVERALL':<22} | {'ALL':<10} | {'MIX':<5} | {ov_win_ls:>12} | {ov_pnl_ls:>15} | {'N/A':>8} | {total_pnl:>10.2f} | {ov_roi:>7.1f}% | {total_trades:>8} | {'N/A':>12}")
 
-    # [TECH-001] Strategy Breakdown Summary Table
+    # [TECH-001] Strategy Breakdown Summary Table (Deduplicated by Strategy ID/Stats Object)
     strat_aggregates = {}
+    seen_stats_objects = set()
     for r in results:
         if not r or r.get("no_data"): continue
-        for sid, stats in r.get("strategy_stats", {}).items():
+        stats_obj = r.get("strategy_stats")
+        if not stats_obj: continue
+
+        # In portfolio mode, multiple asset result dicts reference the identical shared strategy_stats object.
+        # To avoid duplicating PnL and trade counts, we only process each unique strategy_stats object once.
+        if id(stats_obj) in seen_stats_objects:
+            continue
+        seen_stats_objects.add(id(stats_obj))
+
+        for sid, stats in stats_obj.items():
             if sid not in strat_aggregates:
                 strat_aggregates[sid] = {"pnl": 0, "trades": 0, "wins": 0}
             strat_aggregates[sid]["pnl"] += stats["pnl"]
