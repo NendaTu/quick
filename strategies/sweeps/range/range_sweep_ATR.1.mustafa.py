@@ -168,17 +168,39 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         if expansion['is_expansion']:
             cand = expansion['candle']
-            new_anchor = {'high': cand['h'], 'low': cand['l'], 'ts': cand['ts']}
+            new_anchor = {
+                'high': cand['h'],
+                'low': cand['l'],
+                'ts': cand['ts'],
+                'open': cand.get('o', cand.get('open', cand['h'])),
+                'close': cand.get('c', cand.get('close', cand['l']))
+            }
 
-            # If sequence hasn't started (Phase 3), we always take the most recent expansion
-            if state in ["IDLE", "WAITING_FOR_SWEEP"] or anchor is None:
-                if anchor is None or cand['ts'] != anchor['ts']:
-                    self.logger.info(f"[{symbol}] Expansion Candle detected ({expansion['ratio']:.1f}x ATR)!")
-                    self.save_state(f"{symbol}_atr_anchor", new_anchor, self.simulator)
-                    self.save_state(state_key, "WAITING_FOR_SWEEP", self.simulator)
-                    state = "WAITING_FOR_SWEEP"
-                    anchor = new_anchor
-                    self.record_milestone("Phase 1: ATR Expansion Anchor", cand['ts'], range_tf)
+            # Enforce Maximum ATR Expansion Cap to filter out extreme exhaustion moves [REPAIR]
+            max_cap = getattr(self.simulator.config if self.simulator else config, "MAX_ATR_EXPANSION_MULTIPLIER", 20.0)
+            if expansion['ratio'] > max_cap:
+                log_rejections = getattr(self.simulator.config if self.simulator else config, "LOG_REJECTIONS", False)
+                msg = f"[{symbol}] Discarding expansion anchor: ratio {expansion['ratio']:.1f}x exceeds maximum ATR expansion cap of {max_cap:.1f}x."
+                if log_rejections:
+                    self.logger.info(msg)
+                else:
+                    self.logger.debug(msg)
+                if state == "WAITING_FOR_SWEEP":
+                    # Expired/invalidated
+                    self.save_state(state_key, "IDLE", self.simulator)
+                    self.save_state(f"{symbol}_atr_anchor", None, self.simulator)
+                    state = "IDLE"
+                    anchor = None
+            else:
+                # If sequence hasn't started (Phase 3), we always take the most recent expansion
+                if state in ["IDLE", "WAITING_FOR_SWEEP"] or anchor is None:
+                    if anchor is None or cand['ts'] != anchor['ts']:
+                        self.logger.info(f"[{symbol}] Expansion Candle detected ({expansion['ratio']:.1f}x ATR)!")
+                        self.save_state(f"{symbol}_atr_anchor", new_anchor, self.simulator)
+                        self.save_state(state_key, "WAITING_FOR_SWEEP", self.simulator)
+                        state = "WAITING_FOR_SWEEP"
+                        anchor = new_anchor
+                        self.record_milestone("Phase 1: ATR Expansion Anchor", cand['ts'], range_tf)
 
         # Check for range expiration
         # If too many 4H candles pass since the anchor without a sweep, reset.
@@ -377,6 +399,12 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 self.save_state(f"{symbol}_atr_last_trigger_ts", m1[-1]['ts'], self.simulator)
 
                 tp1_qty = round(qty * self.params["tp1_qty_ratio"], qty_place)
+
+                # Determine whether the range candle was bullish or bearish [REPAIR]
+                range_candle_type = "unknown"
+                if anchor and "close" in anchor and "open" in anchor:
+                    range_candle_type = "bullish" if anchor["close"] >= anchor["open"] else "bearish"
+
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",
                     "entry_price": entry_price,
@@ -386,6 +414,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     "tp1_qty": tp1_qty,
                     "tp2_qty": qty - tp1_qty,
                     "qty": qty,
+                    "range_candle_type": range_candle_type,
                     "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 

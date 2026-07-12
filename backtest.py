@@ -31,7 +31,9 @@ class Tee:
 
     def write(self, data):
         self.original_stream.write(data)
-        self.file.write(data)
+        # Skip carriage returns and progress bar updates in the file log to prevent bloating
+        if "\r" not in data:
+            self.file.write(data)
 
     def flush(self):
         self.original_stream.flush()
@@ -574,8 +576,31 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     sim = engine.exchange
     sim.db = db
 
-    # Warm up with specs
-    specs = await client.get_symbols()
+    # Load contract specs with local JSON cache to prevent network freezes [REPAIR]
+    import json
+    specs_cache_path = "docs/temp/contract_specs_cache.json"
+    specs = []
+    if os.path.exists(specs_cache_path):
+        try:
+            with open(specs_cache_path, "r") as f:
+                specs = json.load(f)
+            log.info("Loaded contract specifications from local cache.")
+        except Exception as cache_err:
+            log.warning(f"Failed to read local contract specs cache: {cache_err}")
+
+    if not specs:
+        try:
+            log.info("Fetching contract specifications from Bitget API...")
+            specs = await client.get_symbols()
+            if specs:
+                os.makedirs(os.path.dirname(specs_cache_path), exist_ok=True)
+                with open(specs_cache_path, "w") as f:
+                    json.dump(specs, f)
+        except Exception as api_err:
+            log.error(f"Failed to fetch contract specs from API: {api_err}")
+            # Robust fallback specs if both cache and API fail
+            specs = [{"symbol": asset, "pricePlace": "2", "volumePlace": "3", "minTradeUSDT": "5"} for asset in assets]
+
     spec_map = {s['symbol']: s for s in specs}
     sim.contract_specs = spec_map
     sim.leverage_limits = {s: float(spec_map[s].get('maxLever', 20)) for s in spec_map if s in [asset, BTC_SYMBOL]}
@@ -897,8 +922,31 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     sim = engine.exchange
     sim.db = db
 
-    # Warm up with specs
-    specs = await client.get_symbols()
+    # Load contract specs with local JSON cache to prevent network freezes [REPAIR]
+    import json
+    specs_cache_path = "docs/temp/contract_specs_cache.json"
+    specs = []
+    if os.path.exists(specs_cache_path):
+        try:
+            with open(specs_cache_path, "r") as f:
+                specs = json.load(f)
+            log.info("Loaded contract specifications from local cache.")
+        except Exception as cache_err:
+            log.warning(f"Failed to read local contract specs cache: {cache_err}")
+
+    if not specs:
+        try:
+            log.info("Fetching contract specifications from Bitget API...")
+            specs = await client.get_symbols()
+            if specs:
+                os.makedirs(os.path.dirname(specs_cache_path), exist_ok=True)
+                with open(specs_cache_path, "w") as f:
+                    json.dump(specs, f)
+        except Exception as api_err:
+            log.error(f"Failed to fetch contract specs from API: {api_err}")
+            # Robust fallback specs if both cache and API fail
+            specs = [{"symbol": asset, "pricePlace": "2", "volumePlace": "3", "minTradeUSDT": "5"} for asset in assets]
+
     spec_map = {s['symbol']: s for s in specs}
     sim.contract_specs = spec_map
     sim.leverage_limits = {s: float(spec_map[s].get('maxLever', 20)) for s in spec_map if s in assets + [BTC_SYMBOL]}
