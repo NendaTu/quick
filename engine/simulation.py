@@ -15,8 +15,8 @@ class SimulationEngine(BaseExchange, Simulator):
     Inherits from Simulator to reuse its battle-tested simulation logic,
     but implements the BaseExchange interface for the new router.
     """
-    def __init__(self, use_db=True):
-        Simulator.__init__(self, use_db=use_db)
+    def __init__(self, use_db=True, config_context=None):
+        Simulator.__init__(self, use_db=use_db, config_context=config_context)
         self.mode = "paper"
 
     async def get_tickers(self) -> List[Dict]:

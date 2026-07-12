@@ -10,15 +10,16 @@ from engine.entry import SignalRouter
 log = logging.getLogger("scalper.engine")
 
 class Engine:
-    def __init__(self, use_db=True, mode=None):
-        self.mode = (mode or config.MODE).lower().strip(' "').strip("'")
+    def __init__(self, use_db=True, mode=None, config_context=None):
+        self.config = config_context if config_context is not None else config.ConfigContext()
+        self.mode = (mode or self.config.MODE).lower().strip(' "').strip("'")
 
         self.books: Dict[str, OrderBook] = {}
         self.leverage_limits = {}
         self.pending_entries: Set[str] = set() # key is 'SYMBOL_buy' or 'SYMBOL_sell'
-        self.equity = INITIAL_EQUITY
-        self.starting_equity = INITIAL_EQUITY
-        self.peak_equity = INITIAL_EQUITY
+        self.equity = self.config.INITIAL_EQUITY
+        self.starting_equity = self.config.INITIAL_EQUITY
+        self.peak_equity = self.config.INITIAL_EQUITY
 
         # open_positions key is 'SYMBOL_buy' or 'SYMBOL_sell'
         self.open_positions: Dict[str, dict] = {}
@@ -51,18 +52,18 @@ class Engine:
 
         if self.mode == "paper":
             from engine.simulation import SimulationEngine
-            self.exchange = SimulationEngine(use_db=use_db)
+            self.exchange = SimulationEngine(use_db=use_db, config_context=self.config)
             self.exchange.engine = self
             self.model = LearningModel(self.exchange)
         elif self.mode == "demo":
             from engine.exchanges.bitget import BitgetExchange
-            self.exchange = BitgetExchange(BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO, is_demo=True)
+            self.exchange = BitgetExchange(self.config.BITGET_API_KEY_DEMO, self.config.BITGET_SECRET_KEY_DEMO, self.config.BITGET_PASSPHRASE_DEMO, is_demo=True, config_context=self.config)
             self.exchange.engine = self
             self.model = DummyModel()
             log.info("Initialized Bitget in DEMO mode.")
         elif self.mode == "live":
             from engine.exchanges.bitget import BitgetExchange
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, is_demo=False)
+            self.exchange = BitgetExchange(self.config.BITGET_API_KEY, self.config.BITGET_SECRET_KEY, self.config.BITGET_PASSPHRASE, is_demo=False, config_context=self.config)
             self.exchange.engine = self
             self.model = DummyModel()
             log.info("Initialized Bitget in LIVE mode.")
