@@ -173,7 +173,12 @@ class RangeSweepATRStrategy(JBaseStrategy):
             # Enforce Maximum ATR Expansion Cap to filter out extreme exhaustion moves [REPAIR]
             max_cap = getattr(self.simulator.config if self.simulator else config, "MAX_ATR_EXPANSION_MULTIPLIER", 20.0)
             if expansion['ratio'] > max_cap:
-                self.logger.info(f"[{symbol}] Discarding expansion anchor: ratio {expansion['ratio']:.1f}x exceeds maximum ATR expansion cap of {max_cap:.1f}x.")
+                log_rejections = getattr(self.simulator.config if self.simulator else config, "LOG_REJECTIONS", False)
+                msg = f"[{symbol}] Discarding expansion anchor: ratio {expansion['ratio']:.1f}x exceeds maximum ATR expansion cap of {max_cap:.1f}x."
+                if log_rejections:
+                    self.logger.info(msg)
+                else:
+                    self.logger.debug(msg)
                 if state == "WAITING_FOR_SWEEP":
                     # Expired/invalidated
                     self.save_state(state_key, "IDLE", self.simulator)
