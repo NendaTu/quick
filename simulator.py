@@ -931,3 +931,36 @@ class Simulator(DataAcquisitionManager):
             self.pending_orders = [o for o in self.pending_orders if not (o["symbol"] == sym and o["pos_side"] == side)]
 
         if self.engine: self.engine._report_exit(sym, side, round_trip_pnl, exit_type=exit_type, is_be=is_be, is_partial=is_partial, features=pos.get("features"), margin=margin_release)
+
+    def _ws_callback(self, msg):
+        channel = msg.get("arg", {}).get("channel")
+        instId = msg.get("arg", {}).get("instId")
+        data = msg.get("data", [])
+        if not data: return
+
+        if channel == "books15":
+            d = data[0]
+            self.books[instId].bids = [(float(p), float(q)) for p, q in d.get("bids", [])]
+            self.books[instId].asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
+            self.books[instId].mid_price = (self.books[instId].best_bid + self.books[instId].best_ask) / 2
+
+            if self.engine and instId in self.engine.books:
+                self.engine.books[instId].update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
+
+        elif channel == "trade":
+            for t in data:
+                price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
+                size = float(t[2]) if isinstance(t, list) else float(t.get("size", 0))
+                ts_ms = float(t[0]) if isinstance(t, list) else float(t.get("ts", 0))
+                ts = ts_ms / 1000
+                side = t[3] if isinstance(t, list) else t.get("side", "buy")
+
+                self.last_price[instId] = price
+
+                if instId not in self.trade_history: self.trade_history[instId] = []
+                self.trade_history[instId].append({"price": price, "size": size, "side": side, "ts": ts})
+                if len(self.trade_history[instId]) > 200: self.trade_history[instId].pop(0)
+
+                if self.db:
+                    self.db.save_tick(instId, ts, price, side, size)
+                self._update_candles(instId, price, size, ts)
