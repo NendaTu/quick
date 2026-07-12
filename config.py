@@ -109,6 +109,10 @@ MIN_SCALING_DISTANCE_PCT = 0.005
 # Maximum ATR expansion multiplier cap for range_sweep_ATR strategy (20.0 = 20x ATR)
 MAX_ATR_EXPANSION_MULTIPLIER = 20.0
 
+# Minimum expected net profit at Take Profit as a fraction of reserved margin (0.001 = 0.1%)
+# Prevents entering "fee trap" trades where transaction fees eat all gross profit.
+MIN_NET_TP_PROFIT_PCT = 0.001
+
 # TP Relaxation: Accepts lower ROE targets during flat trends.
 USE_TP_RELAXATION = False
 TP_RELAXATION_THRESHOLD = 0.05

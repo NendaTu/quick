@@ -749,6 +749,25 @@ class Simulator(DataAcquisitionManager):
         max_lev = self.leverage_limits.get(symbol, 20)
         required_margin = (qty * entry_price) / max_lev
 
+        # Enforce "Net Profit vs. Fee" Filter to prevent narrow fee traps [REPAIR]
+        if tp_price and tp_price > 0:
+            entry_fee_rate = self.config.MAKER_FEE if self.config.ENTRY_ORDER_TYPE == "limit" else self.config.TAKER_FEE
+            exit_fee_rate = self.config.MAKER_FEE if self.config.TP_ORDER_TYPE == "limit" else self.config.TAKER_FEE
+
+            entry_fee = qty * entry_price * entry_fee_rate
+            exit_fee = qty * tp_price * exit_fee_rate
+            total_expected_fees = entry_fee + exit_fee
+
+            gross_pnl_at_tp = qty * abs(tp_price - entry_price)
+            projected_net_pnl = gross_pnl_at_tp - total_expected_fees
+
+            min_profit_pct = getattr(self.config, "MIN_NET_TP_PROFIT_PCT", 0.001)
+            min_required_profit = min_profit_pct * required_margin
+
+            if projected_net_pnl < min_required_profit:
+                log.info(f"REJECTED NARROW FEE TRAP: {symbol} {side.upper()} projected net profit {projected_net_pnl:.4f} is less than required threshold {min_required_profit:.4f} ({min_profit_pct*100:.2f}% of margin) | Gross TP Profit: {gross_pnl_at_tp:.4f}, Total Fees: {total_expected_fees:.4f}")
+                return {"code": "4", "msg": "net tp profit below minimum required threshold"}
+
         estimated_fee = qty * entry_price * (self.config.MAKER_FEE if self.config.ENTRY_ORDER_TYPE == "limit" else self.config.TAKER_FEE)
 
         available_balance = self.equity - self.used_margin
