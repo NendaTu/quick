@@ -3,7 +3,10 @@ import os
 from bitget_client import BitGetClient
 from config import BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
 
-async def test():
+import pytest
+
+@pytest.mark.asyncio
+async def test_symbols_fetch():
     client = BitGetClient(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE)
     symbols = await client.get_symbols()
     for s in symbols:
@@ -12,4 +15,4 @@ async def test():
     await client.close()
 
 if __name__ == "__main__":
-    asyncio.run(test())
+    asyncio.run(test_symbols_fetch())
