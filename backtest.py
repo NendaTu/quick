@@ -31,7 +31,9 @@ class Tee:
 
     def write(self, data):
         self.original_stream.write(data)
-        self.file.write(data)
+        # Skip carriage returns and progress bar updates in the file log to prevent bloating
+        if "\r" not in data:
+            self.file.write(data)
 
     def flush(self):
         self.original_stream.flush()
