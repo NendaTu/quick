@@ -5,24 +5,27 @@ from bitget_client import BitGetClient, BitGetWSClient, RateLimiter
 
 log = logging.getLogger("engine.exchanges.bitget")
 
-from simulator import Simulator
+from simulator import DataAcquisitionManager
 import config
 
-class BitgetExchange(Simulator, BaseExchange):
+class BitgetExchange(DataAcquisitionManager, BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
     # Targeting a zero-429 baseline for long historical runs.
     # Note: Bitget historical candles has a tighter limit than standard public API.
     DEFAULT_RPS = 10
     DEFAULT_CONCURRENCY = 5
 
-    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
+    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False, config_context=None):
         # [REPAIR-20260708] Unified Rate Limiter (Cumulative across all internal clients)
         # Using 20 RPS as base, applying 98% safety cap via RateLimiter class.
         self.rate_limiter = RateLimiter(rps=self.DEFAULT_RPS, safety_factor=0.98)
 
+        # Retrieve config context to ensure we use injected parameters
+        cfg = config_context if config_context is not None else config.ConfigContext()
+
         # Dual-Client Architecture:
         # 1. data_client: Always uses Live keys for market data to ensure availability and fix 40099.
-        self.data_client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, is_demo=False, rate_limiter=self.rate_limiter)
+        self.data_client = BitGetClient(cfg.BITGET_API_KEY, cfg.BITGET_SECRET_KEY, cfg.BITGET_PASSPHRASE, is_demo=False, rate_limiter=self.rate_limiter)
 
         # 2. execution_client: Handles private actions (orders, balance) in Live or Demo environment.
         self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo, rate_limiter=self.rate_limiter)
@@ -31,14 +34,20 @@ class BitgetExchange(Simulator, BaseExchange):
         asyncio.create_task(self.data_client.sync_time())
         asyncio.create_task(self.client_exec.sync_time())
 
-        # Initialize Simulator first with the data client to get OHLCV/TA capabilities
-        # This ensures Simulator.warm_up uses the correct keys and environment.
-        Simulator.__init__(self, use_db=True, client=self.data_client)
+        # Initialize DataAcquisitionManager first with the data client to get OHLCV/TA capabilities
+        # This ensures DataAcquisitionManager.warm_up uses the correct keys and environment.
+        DataAcquisitionManager.__init__(self, use_db=True, client=self.data_client, config_context=config_context)
 
         self.ws_client: Optional[BitGetWSClient] = None
         self.ws_private: Optional[BitGetWSClient] = None
         self.is_demo = is_demo
         self.engine = None
+
+        # Clean isolation: Initialize simple order lists needed for live tracking
+        # without inheriting the paper matching engine simulation methods.
+        self.pending_orders: List[dict] = []
+        self.used_margin = 0.0
+        self.equity = config.INITIAL_EQUITY
 
         # Symbol mapping for Demo Mode (Canonical <-> Exchange)
         self.symbol_map = {} # canonical -> exchange
