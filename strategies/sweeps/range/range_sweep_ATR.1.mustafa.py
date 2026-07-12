@@ -168,7 +168,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
         if expansion['is_expansion']:
             cand = expansion['candle']
-            new_anchor = {'high': cand['h'], 'low': cand['l'], 'ts': cand['ts']}
+            new_anchor = {
+                'high': cand['h'],
+                'low': cand['l'],
+                'ts': cand['ts'],
+                'open': cand.get('o', cand.get('open', cand['h'])),
+                'close': cand.get('c', cand.get('close', cand['l']))
+            }
 
             # Enforce Maximum ATR Expansion Cap to filter out extreme exhaustion moves [REPAIR]
             max_cap = getattr(self.simulator.config if self.simulator else config, "MAX_ATR_EXPANSION_MULTIPLIER", 20.0)
@@ -393,6 +399,12 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 self.save_state(f"{symbol}_atr_last_trigger_ts", m1[-1]['ts'], self.simulator)
 
                 tp1_qty = round(qty * self.params["tp1_qty_ratio"], qty_place)
+
+                # Determine whether the range candle was bullish or bearish [REPAIR]
+                range_candle_type = "unknown"
+                if anchor and "close" in anchor and "open" in anchor:
+                    range_candle_type = "bullish" if anchor["close"] >= anchor["open"] else "bearish"
+
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",
                     "entry_price": entry_price,
@@ -402,6 +414,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     "tp1_qty": tp1_qty,
                     "tp2_qty": qty - tp1_qty,
                     "qty": qty,
+                    "range_candle_type": range_candle_type,
                     "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 

@@ -137,6 +137,8 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
     ov_high = -1.0
     ov_low = 1e12
     found = False
+    first_c = None
+    last_c = None
 
     # Target period: candles where hub was in 'overnight' status AND before now_ts
     for c in reversed(ohlcv[-120:]):
@@ -151,6 +153,9 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
         if hub_ov:
             ov_high = max(ov_high, c['h'])
             ov_low = min(ov_low, c['l'])
+            if not last_c:
+                last_c = c
+            first_c = c
             found = True
         elif found:
             break
@@ -160,7 +165,9 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
     res = {
         'overnight_high': ov_high,
         'overnight_low': ov_low,
-        'hub': target_hub
+        'hub': target_hub,
+        'open': first_c['o'] if first_c else None,
+        'close': last_c['c'] if last_c else None
     }
 
     if len(_ov_range_cache) > 500: _ov_range_cache.clear()
@@ -196,6 +203,8 @@ def identify_core_range(ohlcv: List[dict], now_ts: float) -> Dict:
     core_high = -1.0
     core_low = 1e12
     found = False
+    first_c = None
+    last_c = None
 
     for c in reversed(ohlcv[-120:]):
         if c['ts'] >= now_ts: continue
@@ -210,6 +219,9 @@ def identify_core_range(ohlcv: List[dict], now_ts: float) -> Dict:
         if hub_core:
             core_high = max(core_high, c['h'])
             core_low = min(core_low, c['l'])
+            if not last_c:
+                last_c = c
+            first_c = c
             found = True
         elif found:
             # We found the start of the core session block, stop scanning
@@ -220,7 +232,9 @@ def identify_core_range(ohlcv: List[dict], now_ts: float) -> Dict:
     res = {
         'core_high': core_high,
         'core_low': core_low,
-        'hub': target_hub
+        'hub': target_hub,
+        'open': first_c['o'] if first_c else None,
+        'close': last_c['c'] if last_c else None
     }
 
     if len(_core_range_cache) > 500: _core_range_cache.clear()
