@@ -1,5 +1,5 @@
 import asyncio, time, logging, math, random
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set, Tuple, Optional, Any
 import config
 from config import *
 from orderbook import SimulatedOrderBook, OrderBook
@@ -43,7 +43,7 @@ class DataAcquisitionManager:
     live candle building, and technical feature calculations across live/demo/paper modes.
     """
     def __init__(self, use_db=True, client=None, config_context=None):
-        # Apply Config Context for Dependency Injection
+        # Apply Config Context for Dependency Injection [ARCH-003]
         self.config = config_context if config_context is not None else config.ConfigContext()
 
         self.ohlcv: Dict[str, Dict[str, List[dict]]] = {}
@@ -83,9 +83,8 @@ class DataAcquisitionManager:
             self.last_candle_ts = preloaded_data["last_candle_ts"]
             self.last_price = preloaded_data["last_price"]
 
-            for sym in self.discovered_assets + [BTC_SYMBOL]:
+            for sym in self.discovered_assets + [self.config.BTC_SYMBOL]:
                 price = self.last_price.get(sym, 1.0)
-                # SimulatedOrderBook handles virtual matching books. Using plain OrderBook as fallback if not Simulator
                 from orderbook import SimulatedOrderBook, OrderBook
                 if hasattr(self, 'positions'):
                     self.books[sym] = SimulatedOrderBook(sym, price)
@@ -114,7 +113,7 @@ class DataAcquisitionManager:
                 last_ts, cached_assets = 0, []
             age_hours = (time.time() - last_ts) / 3600
 
-            if cached_assets and age_hours < ASSET_REDISCOVERY_HOURS:
+            if cached_assets and age_hours < self.config.ASSET_REDISCOVERY_HOURS:
                 log.info(f"Using cached assets from DB (age: {age_hours:.1f}h)")
                 self.discovered_assets = cached_assets
                 tickers = await self.client.get_tickers()
@@ -126,11 +125,11 @@ class DataAcquisitionManager:
                 discovered = []
                 for t in sorted_tickers:
                     sym = t["symbol"]
-                    if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                    if sym.endswith("USDT") and sym not in self.config.ASSET_OMITTED:
                         if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
                             continue
                         discovered.append(sym)
-                        if len(discovered) >= ASSETS_COUNT:
+                        if len(discovered) >= self.config.ASSETS_COUNT:
                             break
 
                 self.discovered_assets = discovered
@@ -141,7 +140,7 @@ class DataAcquisitionManager:
         specs = await self.client.get_symbols()
         spec_map = {s['symbol']: s for s in specs}
 
-        symbols = list(set(self.discovered_assets + [BTC_SYMBOL]))
+        symbols = list(set(self.discovered_assets + [self.config.BTC_SYMBOL]))
         tickers_list = locals().get('tickers', [])
 
         for sym in symbols:
@@ -157,21 +156,21 @@ class DataAcquisitionManager:
                 else:
                     self.books[sym] = OrderBook(sym)
 
-                self.ohlcv[sym] = {tf: [] for tf in AVAILABLE_TIMEFRAMES}
+                self.ohlcv[sym] = {tf: [] for tf in self.config.AVAILABLE_TIMEFRAMES}
                 self.confluence_history[sym] = {tf: [] for tf in ["15m", "1H", "4H", "1D", "1W"]}
-                self.last_candle_ts[sym] = {tf: 0 for tf in AVAILABLE_TIMEFRAMES}
+                self.last_candle_ts[sym] = {tf: 0 for tf in self.config.AVAILABLE_TIMEFRAMES}
                 self.last_price[sym] = price
         log.info(f"Metadata initialized for {len(symbols)} assets.")
 
     async def fetch_all_data(self):
         """Fetches historical candles for all assets and marks them ready as completed."""
-        symbols = list(set(self.discovered_assets + [BTC_SYMBOL]))
+        symbols = list(set(self.discovered_assets + [self.config.BTC_SYMBOL]))
 
-        if BTC_SYMBOL in symbols:
-            log.info(f"Fetching priority data for {BTC_SYMBOL}...")
-            await self.fetch_symbol_data(BTC_SYMBOL)
-            self.ready_assets.add(BTC_SYMBOL)
-            symbols.remove(BTC_SYMBOL)
+        if self.config.BTC_SYMBOL in symbols:
+            log.info(f"Fetching priority data for {self.config.BTC_SYMBOL}...")
+            await self.fetch_symbol_data(self.config.BTC_SYMBOL)
+            self.ready_assets.add(self.config.BTC_SYMBOL)
+            symbols.remove(self.config.BTC_SYMBOL)
 
         total = len(symbols)
         done = 0
@@ -205,8 +204,8 @@ class DataAcquisitionManager:
                     for tf, count in strat.required_history.items():
                         dynamic_req[tf] = max(dynamic_req.get(tf, 0), count)
 
-        for tf in AVAILABLE_TIMEFRAMES:
-            default_limit = 1000 if tf == "1m" else (500 if tf == ACTIVE_TIMEFRAME else 200)
+        for tf in self.config.AVAILABLE_TIMEFRAMES:
+            default_limit = 1000 if tf == "1m" else (500 if tf == self.config.ACTIVE_TIMEFRAME else 200)
             required_limit = max(default_limit, dynamic_req.get(tf, 0))
 
             lookback_sec = required_limit * tf_map.get(tf, 60)
@@ -256,7 +255,7 @@ class DataAcquisitionManager:
                     self.last_candle_ts[sym][tf] = self.ohlcv[sym][tf][-1]['ts']
                     log.debug(f"Memory Populated: {sym} {tf} | {len(self.ohlcv[sym][tf])} candles")
 
-            if tf == ACTIVE_TIMEFRAME and self.ohlcv[sym][tf]:
+            if tf == self.config.ACTIVE_TIMEFRAME and self.ohlcv[sym][tf]:
                 price = self.ohlcv[sym][tf][-1]['c']
                 self.books[sym].mid_price = price
                 self.last_price[sym] = price
@@ -313,7 +312,7 @@ class DataAcquisitionManager:
         if symbol not in self._mid_history: self._mid_history[symbol] = []
 
         trades = self.trade_history.get(symbol, [])
-        h_active = self.ohlcv.get(symbol, {}).get(ACTIVE_TIMEFRAME, [])
+        h_active = self.ohlcv.get(symbol, {}).get(self.config.ACTIVE_TIMEFRAME, [])
         mid = (book.best_bid + book.best_ask) / 2
 
         if h_active:
@@ -326,7 +325,7 @@ class DataAcquisitionManager:
         if now - self._last_confluence_update > 0.1:
             self._btc_confluence_cache = {}
             for tf in ["15m", "1H", "4H", "1D"]:
-                h = self.confluence_history.get(BTC_SYMBOL, {}).get(tf, [])
+                h = self.confluence_history.get(self.config.BTC_SYMBOL, {}).get(tf, [])
                 if len(h) >= 3:
                     self._btc_confluence_cache[f"btc_{tf}"] = (h[-2] / h[-3] - 1)
                 else:
@@ -358,7 +357,7 @@ class DataAcquisitionManager:
             "1H": 3600, "4H": 14400, "1D": 86400
         }
         for tf_name, seconds in tf_map.items():
-            if tf_name not in AVAILABLE_TIMEFRAMES: continue
+            if tf_name not in self.config.AVAILABLE_TIMEFRAMES: continue
 
             candle_start = (ts // seconds) * seconds
             last_ts = self.last_candle_ts[symbol].get(tf_name, 0)
@@ -388,6 +387,51 @@ class DataAcquisitionManager:
                     if tf_name in self.confluence_history[symbol] and self.confluence_history[symbol][tf_name]:
                         self.confluence_history[symbol][tf_name][-1] = price
 
+    def _ws_callback(self, msg):
+        """Unified WebSocket Callback for both live and simulator data flow."""
+        channel = msg.get("arg", {}).get("channel")
+        instId = msg.get("arg", {}).get("instId")
+        data = msg.get("data", [])
+        if not data: return
+
+        norm_sym = instId
+        if hasattr(self, "_normalize_symbol"):
+            norm_sym = self._normalize_symbol(instId)
+
+        if channel == "books15":
+            d = data[0]
+            if norm_sym not in self.books:
+                from orderbook import SimulatedOrderBook, OrderBook
+                if hasattr(self, 'positions'):
+                    self.books[norm_sym] = SimulatedOrderBook(norm_sym, (float(d.get("bids", [[0]])[0][0]) + float(d.get("asks", [[0]])[0][0])) / 2)
+                else:
+                    self.books[norm_sym] = OrderBook(norm_sym)
+
+            self.books[norm_sym].bids = [(float(p), float(q)) for p, q in d.get("bids", [])]
+            self.books[norm_sym].asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
+            self.books[norm_sym].mid_price = (self.books[norm_sym].best_bid + self.books[norm_sym].best_ask) / 2
+
+            if self.engine and norm_sym in self.engine.books:
+                self.engine.books[norm_sym].update(d.get("bids", []), d.get("asks", []), ts=int(d.get("ts", 0))/1000)
+
+        elif channel == "trade":
+            for t in data:
+                price = float(t[1]) if isinstance(t, list) else float(t.get("price", 0))
+                size = float(t[2]) if isinstance(t, list) else float(t.get("size", 0))
+                ts_ms = float(t[0]) if isinstance(t, list) else float(t.get("ts", 0))
+                ts = ts_ms / 1000
+                side = t[3] if isinstance(t, list) else t.get("side", "buy")
+
+                self.last_price[norm_sym] = price
+
+                if norm_sym not in self.trade_history: self.trade_history[norm_sym] = []
+                self.trade_history[norm_sym].append({"price": price, "size": size, "side": side, "ts": ts})
+                if len(self.trade_history[norm_sym]) > 200: self.trade_history[norm_sym].pop(0)
+
+                if self.db:
+                    self.db.save_tick(norm_sym, ts, price, side, size)
+                self._update_candles(norm_sym, price, size, ts)
+
     async def _wick_parity_patcher(self, engine):
         """Ensures Wick Parity between Live and Backtest."""
         await asyncio.sleep(60)
@@ -410,9 +454,9 @@ class DataAcquisitionManager:
                 if current_min_epoch % 240 == 0: tfs_to_patch.append("4H")
                 if current_min_epoch % 1440 == 0: tfs_to_patch.append("1D")
 
-                tfs_to_patch = [tf for tf in tfs_to_patch if tf in AVAILABLE_TIMEFRAMES]
+                tfs_to_patch = [tf for tf in tfs_to_patch if tf in self.config.AVAILABLE_TIMEFRAMES]
 
-                assets = list(set(self.discovered_assets + [BTC_SYMBOL]))
+                assets = list(set(self.discovered_assets + [self.config.BTC_SYMBOL]))
                 active_assets = [s for s in assets if s in self.ohlcv and self.ohlcv[s].get("1m")]
 
                 if not active_assets: continue
@@ -483,7 +527,7 @@ class Simulator(DataAcquisitionManager):
                 log.error(f"External feed error: {e}")
 
     async def data_feed_task(self, engine, external_feed=None):
-        symbols = list(set(self.discovered_assets + [BTC_SYMBOL]))
+        symbols = list(set(self.discovered_assets + [self.config.BTC_SYMBOL]))
         self.engine = engine
 
         if external_feed is None:
@@ -518,7 +562,7 @@ class Simulator(DataAcquisitionManager):
             price = self.last_price.get(sym)
             if not price: continue
 
-            if USE_BREAKEVEN_TRIGGER and o["type"] == "stop":
+            if self.config.USE_BREAKEVEN_TRIGGER and o["type"] == "stop":
                 pos = self.positions.get((sym, side))
                 if pos and not o.get("is_breakeven"):
                     entry = pos["entry_price"]
@@ -529,11 +573,11 @@ class Simulator(DataAcquisitionManager):
                     else:
                         roe = (entry / price - 1) * max_lev
 
-                    if roe >= BREAKEVEN_ROI_THRESHOLD:
+                    if roe >= self.config.BREAKEVEN_ROI_THRESHOLD:
                         entry_fee_rate = pos.get("entry_fee", 0) / (pos["qty"] * pos["entry_price"])
-                        exit_fee_rate = MAKER_FEE
+                        exit_fee_rate = self.config.MAKER_FEE
 
-                        total_buffer_roe = (entry_fee_rate + exit_fee_rate) * max_lev + BREAKEVEN_PROFIT_BUFFER
+                        total_buffer_roe = (entry_fee_rate + exit_fee_rate) * max_lev + self.config.BREAKEVEN_PROFIT_BUFFER
                         total_buffer_pct = total_buffer_roe / max_lev
 
                         if side == "buy":
@@ -548,7 +592,7 @@ class Simulator(DataAcquisitionManager):
                 if side == "buy" and price <= o["price"]: fills.append((o, "entry"))
                 elif side == "sell" and price >= o["price"]: fills.append((o, "entry"))
 
-                elif now - o.get("ts", now) > LIMIT_CHASE_TIMEOUT:
+                elif now - o.get("ts", now) > self.config.LIMIT_CHASE_TIMEOUT:
                     log.info(f"TIMEOUT: Cancelling stale limit entry for {o['symbol']} {o['pos_side'].upper()}")
                     if o in self.pending_orders:
                         self.used_margin -= o.get("reserved_margin", 0)
@@ -566,7 +610,7 @@ class Simulator(DataAcquisitionManager):
                     continue
 
             elif o["type"] == "stop":
-                if SL_ORDER_TYPE == "limit":
+                if self.config.SL_ORDER_TYPE == "limit":
                     if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
                     elif side == "sell" and price >= o["triggerPrice"]: fills.append((o, "stop"))
                     else:
@@ -575,7 +619,7 @@ class Simulator(DataAcquisitionManager):
                         else:
                             distance = (price / o["triggerPrice"] - 1)
 
-                        if distance > SL_DISASTER_BUFFER:
+                        if distance > self.config.SL_DISASTER_BUFFER:
                             fills.append((o, "stop_disaster"))
                 else:
                     if side == "buy" and price <= o["triggerPrice"]: fills.append((o, "stop"))
@@ -597,12 +641,12 @@ class Simulator(DataAcquisitionManager):
                 order_type = "limit" if et == "entry" else "market"
                 fill_price = o["price"] if et == "entry" else self.last_price.get(o["symbol"])
 
-                if et == "entry_timeout" and RESTRICT_SLIPPAGE:
+                if et == "entry_timeout" and self.config.RESTRICT_SLIPPAGE:
                     entry_price = o["price"]
                     side = o["pos_side"]
                     slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
-                    if slippage > MAX_ENTRY_SLIPPAGE:
-                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%")
+                    if slippage > self.config.MAX_ENTRY_SLIPPAGE:
+                        log.warning(f"CANCELLED TIMEOUT ENTRY {o['symbol']} {side.upper()}: High slippage {slippage*100:.3f}% > {self.config.MAX_ENTRY_SLIPPAGE*100}%")
                         if o in self.pending_orders: self.pending_orders.remove(o)
                         if self.engine:
                             pos_key = f"{o['symbol']}_{side}"
@@ -614,7 +658,7 @@ class Simulator(DataAcquisitionManager):
 
                 sid = self.order_id_counter; self.order_id_counter += 1
                 tp_orders = []
-                use_tp_split = (EXIT_STRATEGY == "BE+TP1+TP2" or o.get("tp1_price") is not None)
+                use_tp_split = (self.config.EXIT_STRATEGY == "BE+TP1+TP2" or o.get("tp1_price") is not None)
 
                 if use_tp_split and o.get("tp1_price"):
                     tid1 = self.order_id_counter; self.order_id_counter += 1
@@ -641,7 +685,7 @@ class Simulator(DataAcquisitionManager):
                     order_type = "limit"
                     exit_type = "ttl"
                 else:
-                    order_type = TP_ORDER_TYPE if et == "tp" else SL_ORDER_TYPE
+                    order_type = self.config.TP_ORDER_TYPE if et == "tp" else self.config.SL_ORDER_TYPE
                     exit_type = et
 
                 exit_action = "sell" if o["pos_side"] == "buy" else "buy"
@@ -698,31 +742,31 @@ class Simulator(DataAcquisitionManager):
         spec = self.contract_specs.get(symbol, {})
         min_usdt = float(spec.get('minTradeUSDT', 1.0))
 
-        if RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
+        if self.config.RESTRICT_MIN_VAL and qty * entry_price < min_usdt:
             log.debug(f"REJECTED {symbol} {side.upper()}: Notional {qty * entry_price:.2f} < Min {min_usdt:.2f}")
             return {"code": "3", "msg": f"order value below min {min_usdt}"}
 
         max_lev = self.leverage_limits.get(symbol, 20)
         required_margin = (qty * entry_price) / max_lev
 
-        estimated_fee = qty * entry_price * (MAKER_FEE if ENTRY_ORDER_TYPE == "limit" else TAKER_FEE)
+        estimated_fee = qty * entry_price * (self.config.MAKER_FEE if self.config.ENTRY_ORDER_TYPE == "limit" else self.config.TAKER_FEE)
 
         available_balance = self.equity - self.used_margin
         if available_balance < (required_margin + estimated_fee):
             rej_msg = f"REJECTED {symbol} {side.upper()}: Insufficient margin (Required: {required_margin:.2f}, Avail: {available_balance:.2f}, Equity: {self.equity:.2f}, Used: {self.used_margin:.2f})"
-            if LOG_REJECTIONS:
+            if self.config.LOG_REJECTIONS:
                 log.warning(rej_msg)
             else:
                 log.debug(rej_msg)
             return {"code": "1", "msg": "insufficient balance"}
 
-        if ENTRY_ORDER_TYPE == "market":
+        if self.config.ENTRY_ORDER_TYPE == "market":
             fill_price = self._calculate_fill_price(symbol, side, qty)
 
             slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
-            if RESTRICT_SLIPPAGE and slippage > MAX_ENTRY_SLIPPAGE:
-                rej_msg = f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {MAX_ENTRY_SLIPPAGE*100}%"
-                if LOG_REJECTIONS:
+            if self.config.RESTRICT_SLIPPAGE and slippage > self.config.MAX_ENTRY_SLIPPAGE:
+                rej_msg = f"REJECTED {symbol} {side.upper()}: High slippage {slippage*100:.3f}% > {self.config.MAX_ENTRY_SLIPPAGE*100}%"
+                if self.config.LOG_REJECTIONS:
                     log.warning(rej_msg)
                 else:
                     log.debug(rej_msg)
@@ -732,7 +776,7 @@ class Simulator(DataAcquisitionManager):
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
-            use_tp_split = (EXIT_STRATEGY == "BE+TP1+TP2" or kwargs.get("tp1_price") is not None)
+            use_tp_split = (self.config.EXIT_STRATEGY == "BE+TP1+TP2" or kwargs.get("tp1_price") is not None)
 
             if use_tp_split and kwargs.get("tp1_price"):
                 tid1 = self.order_id_counter; self.order_id_counter += 1

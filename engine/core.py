@@ -113,14 +113,11 @@ class Engine:
             if self.mode == "demo":
                 self.enabled_assets = []
                 for s in demo_whitelist:
-                    # Check for exact match or S-prefix (common in Bitget Demo)
                     for t in sorted_tickers:
                         sym = t['symbol']
                         if sym == s or sym == f"S{s}":
-                            # Store CANONICAL symbol as the primary reference
                             self.enabled_assets.append(s)
 
-                            # Update exchange-specific mapping for internal routing
                             if hasattr(self.exchange, "symbol_map"):
                                 self.exchange.symbol_map[s] = sym
                                 self.exchange.rev_symbol_map[sym] = s
@@ -129,43 +126,37 @@ class Engine:
                 self.enabled_assets = []
                 for t in sorted_tickers:
                     sym = t["symbol"]
-                    if sym.endswith("USDT") and sym not in ASSET_OMITTED:
+                    if sym.endswith("USDT") and sym not in self.config.ASSET_OMITTED:
                         if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
                         self.enabled_assets.append(sym)
-                        if len(self.enabled_assets) >= ASSETS_COUNT: break
+                        if len(self.enabled_assets) >= self.config.ASSETS_COUNT: break
 
             log.info(f"Exchange Initialization: {len(self.enabled_assets)} assets discovered.")
 
             # 3. Warm up indicators for discovered assets (Filtered list)
             await self.exchange.warm_up(assets=self.enabled_assets)
 
-        # [NEW] Regime classification is now handled on-demand in the trading loop
-        # as assets become ready in the background.
-
         if self.mode == "paper":
             self.leverage_limits = self.exchange.get_leverage_limits()
         else:
-            # For Live/Demo, fetch leverage limits from exchange
             try:
                 specs = await self.exchange.get_symbols()
                 self.leverage_limits = {s['symbol']: float(s.get('maxLever', 20)) for s in specs}
 
-                # Also initialize equity from exchange
                 trading_equity = await self.exchange.get_trading_equity()
                 self.equity = trading_equity
                 self.starting_equity = trading_equity
                 self.peak_equity = trading_equity
-                log.info(f"Initialized equity ({'VIRTUAL' if config.USE_VIRTUAL_BALANCE else 'REAL'}): {self.equity:.2f} USDT")
+                log.info(f"Initialized equity ({'VIRTUAL' if self.config.USE_VIRTUAL_BALANCE else 'REAL'}): {self.equity:.2f} USDT")
             except Exception as e:
                 log.error(f"Failed to fetch initial exchange data: {e}")
-                self.leverage_limits = {sym: 20 for sym in self.enabled_assets + [BTC_SYMBOL]}
+                self.leverage_limits = {sym: 20 for sym in self.enabled_assets + [self.config.BTC_SYMBOL]}
 
         # Initialize books for discovered assets
-        for sym in self.enabled_assets + [BTC_SYMBOL]:
+        for sym in self.enabled_assets + [self.config.BTC_SYMBOL]:
             self.books[sym] = OrderBook(sym)
         log.info(f"Dynamic Initialization: {len(self.enabled_assets)} assets discovered and loaded.")
 
-        # [REPAIR-20260708] Sync existing state from exchange before starting
         if self.mode != "paper":
             await self._sync_exchange_state()
 
@@ -173,15 +164,14 @@ class Engine:
         asyncio.create_task(self._equity_monitor())
         asyncio.create_task(self._maintenance_loop())
         trading_task = asyncio.create_task(self._trading_loop())
-        if SHOW_PERIODIC_SUMMARY:
+        if self.config.SHOW_PERIODIC_SUMMARY:
             asyncio.create_task(self._summary_task())
-        if config.SHOW_HEARTBEAT:
+        if self.config.SHOW_HEARTBEAT:
             asyncio.create_task(self._heartbeat_task())
 
         await self.stop_event.wait()
         log.info("Shutdown signal received. Waiting for open positions to finalize...")
 
-        # Wait for the trading loop to return (it handles its own graceful exit)
         await trading_task
 
         log.info("All positions finalized. Bot stopped.")
@@ -189,43 +179,40 @@ class Engine:
 
     async def _equity_monitor(self):
         while not self.stop_event.is_set():
-            # Sync equity
             try:
                 self.equity = await self.exchange.get_trading_equity()
             except Exception as e:
                 log.error(f"Failed to sync equity: {e}")
 
             # 1. Drawdown Limit
-            if self.peak_equity > 0 and self.equity <= DRAWDOWN_LIMIT * self.peak_equity:
+            if self.peak_equity > 0 and self.equity <= self.config.DRAWDOWN_LIMIT * self.peak_equity:
                 log.critical(f"DRAWDOWN LIMIT HIT: equity={self.equity:.2f}, peak={self.peak_equity:.2f}")
                 self.stop_event.set()
 
             # 2. ROI Limit (+100 PnL)
             roi = (self.equity / self.starting_equity) - 1
-            if roi >= TOTAL_ROI_LIMIT:
+            if roi >= self.config.TOTAL_ROI_LIMIT:
                 log.critical(f"ROI TARGET REACHED: equity={self.equity:.2f}, ROI={roi*100:.1f}%")
                 self.stop_event.set()
 
             # 3. Trade Count Limit
-            if self.total_trades >= MAX_TRADES_LIMIT:
+            if self.total_trades >= self.config.MAX_TRADES_LIMIT:
                 log.critical(f"TRADE LIMIT REACHED: {self.total_trades} trades")
                 self.stop_event.set()
 
             # 4. Duration Limit
             if self.start_time:
                 elapsed = time.time() - self.start_time
-                if elapsed >= MAX_DURATION:
+                if elapsed >= self.config.MAX_DURATION:
                     log.critical(f"DURATION LIMIT REACHED: {elapsed:.0f}s")
                     self.stop_event.set()
 
             if self.equity > self.peak_equity:
                 self.peak_equity = self.equity
 
-            # Slow down monitor for real exchanges to avoid rate limits
             await asyncio.sleep(0.5 if self.mode == "paper" else 5.0)
 
     async def _maintenance_loop(self):
-        # [REPAIR-20260707] Delay initial purge to allow bot to finish initialization
         await asyncio.sleep(600)
 
         while not self.stop_event.is_set():
@@ -233,32 +220,26 @@ class Engine:
                 if getattr(self.exchange, "db", None):
                     self.exchange.db.purge_old_data()
 
-                # [OP-008] Periodic Correlation Refresh
                 if hasattr(self.exchange, "recalculate_correlations"):
                     await self.exchange.recalculate_correlations()
 
-                await asyncio.sleep(3600) # Every hour
+                await asyncio.sleep(3600)
             except Exception as e:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
     def _write_metrics_log(self, symbol: str, side: str, strategy_id: str, features: dict):
-        """
-        [TECH-001] Writes full technical module metrics to a shadow log.
-        """
         import os, json
         from datetime import datetime
 
         log_dir = "docs/temp"
         os.makedirs(log_dir, exist_ok=True)
 
-        # Determine filename based on start time
         start_dt = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M%S")
         filepath = os.path.join(log_dir, f"{start_dt}.metrics-log.txt")
 
         now = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
-        # Flatten and sanitize features for logging
         sanitized = {}
         for k, v in features.items():
             if isinstance(v, (int, float, str, bool)) or v is None:
@@ -273,21 +254,17 @@ class Engine:
 
     def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False, ts: float = None, strategy_id: str = None, features: dict = None):
         pos_key = f"{symbol}_{side}"
-        # If orig_side not passed (e.g. from simulator), default to current
         if orig_side is None: orig_side = side
 
-        # Calculate Margin used for this entry
         leverage = self.leverage_limits.get(symbol, 20)
         margin = (qty * entry) / leverage
 
         entry_ts = ts if ts is not None else time.time()
 
-        # [TECH-001] Determine Strategy ID for attribution
         if strategy_id is None:
              strat = getattr(self, "strategy", None)
              strategy_id = getattr(strat, "strategy_id", strat.name) if strat else "model"
 
-        # Extract target TP/SL prices if available for exact fallback P&L calculations
         stop_price = None
         tp_price = None
         tp1_price = None
@@ -299,19 +276,15 @@ class Engine:
             tp1_qty = features.get("tp1_qty")
 
         if pos_key in self.open_positions:
-            # Scaling up an existing position
             p = self.open_positions[pos_key]
             total_qty = p["qty"] + qty
-            # Update weighted average entry price for tracking
             p["entry"] = (p["entry"] * p["qty"] + entry * qty) / total_qty
             p["qty"] = total_qty
             p["margin"] += margin
-            # Update target TP/SL
             if stop_price: p["stop_price"] = stop_price
             if tp_price: p["tp_price"] = tp_price
             if tp1_price: p["tp1_price"] = tp1_price
             if tp1_qty: p["tp1_qty"] = tp1_qty
-            # Keep the ORIGINAL strategy_id as the primary owner for attribution
         else:
             self.open_positions[pos_key] = {
                 "side": side, "qty": qty, "entry": entry,
@@ -327,30 +300,23 @@ class Engine:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-        # [TECH-001] Full Module Metrics Shadow Log
         if features:
             self._write_metrics_log(symbol, side, strategy_id, features)
 
-        # Persistence
         if hasattr(self.exchange, "db"):
             self.exchange.db.save_trade(strategy_id, symbol, side, entry_ts, entry, qty)
 
     def _report_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown", is_be: bool = False, is_partial: bool = False, features: dict = None, margin: float = 0):
-        # Local registration cleanup
         pos_key = f"{symbol}_{side}"
 
-        # [C-004] Adaptive Learning: Feedback loop based on trade PnL
         if not is_partial and features:
             self.model.train_on_trade(symbol, features, round_trip_pnl)
 
-        # Update virtual balance or local tracker
-        if config.USE_VIRTUAL_BALANCE or self.mode == "paper":
+        if self.config.USE_VIRTUAL_BALANCE or self.mode == "paper":
             self.equity += round_trip_pnl
 
-        # Track session-wide metrics (always updated)
         self.cumulative_pnl += round_trip_pnl
 
-        # [TECH-001] Record equity history for chronological compounding curve
         self.equity_history.append({
             "ts": time.time(),
             "equity": self.equity,
@@ -358,7 +324,6 @@ class Engine:
             "symbol": symbol
         })
 
-        # Persistence
         if hasattr(self.exchange, "db"):
             entry_ts = 0
             entry_price = 0
@@ -384,15 +349,11 @@ class Engine:
                 "total_margin": 0.0
             }
 
-        # Accumulate margin from the position (proportional to exit)
         self.asset_stats[symbol]["total_margin"] += margin
-
         self.asset_stats[symbol]["pnl"] += round_trip_pnl
         if side == "buy": self.asset_stats[symbol]["buy_pnl"] += round_trip_pnl
         else: self.asset_stats[symbol]["sell_pnl"] += round_trip_pnl
 
-        # [TECH-001] Strategy-Level Stats: Attribute PnL and trade counts to the
-        # specific strategy within a Family that generated the signal.
         strategy_id = "model"
         if pos_key in self.open_positions:
             strategy_id = self.open_positions[pos_key].get("strategy_id", "model")
@@ -404,14 +365,11 @@ class Engine:
             }
 
         self.strategy_stats[strategy_id]["pnl"] += round_trip_pnl
-
-        # Track cumulative PnL for this specific trade to determine if it's a win/loss overall
         self.pos_pnl[pos_key] = self.pos_pnl.get(pos_key, 0.0) + round_trip_pnl
 
         if is_partial:
             return
 
-        # Final exit processing
         total_trade_pnl = self.pos_pnl.pop(pos_key, 0.0)
         self.total_trades += 1
         self.strategy_stats[strategy_id]["total_trades"] += 1
@@ -419,7 +377,6 @@ class Engine:
         if pos_key in self.open_positions:
             del self.open_positions[pos_key]
 
-        # Also ensure it's cleared from pending if it was an entry failure
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
@@ -454,9 +411,6 @@ class Engine:
                 self.strategy_stats[strategy_id]["sell_losses"] += 1
 
     def _print_final_stats(self):
-        """
-        [TECH-001] Enhanced final reporting with strategy breakdowns and compounding curve.
-        """
         elapsed = time.time() - self.start_time if self.start_time else 0
         hours, rem = divmod(elapsed, 3600)
         minutes, seconds = divmod(rem, 60)
@@ -482,7 +436,6 @@ class Engine:
 
         if self.equity_history:
             log.info(f"--- Chronological Compounding Curve ---")
-            # Show every 10th trade or up to 20 points
             step = max(1, len(self.equity_history) // 20)
             for i in range(0, len(self.equity_history), step):
                 entry = self.equity_history[i]
@@ -491,7 +444,6 @@ class Engine:
 
         if self.asset_stats:
             log.info(f"--- Asset Performance ---")
-            # Sort by PnL
             sorted_assets = sorted(self.asset_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
             for sym, stats in sorted_assets:
                 b_total = stats['buy_wins'] + stats['buy_losses']
@@ -505,10 +457,8 @@ class Engine:
                          f"TP/BE: {stats.get('tp_wins',0)}/{stats.get('be_wins',0)}")
 
     def _classify_asset_regimes(self, symbol=None):
-        """[OP Roadmap] Group assets into volatility buckets."""
         targets = [symbol] if symbol else self.enabled_assets
         for sym in targets:
-            # Classification based on 1H ATR / Price
             h = self.exchange.ohlcv.get(sym, {}).get("1H", [])
             if not h:
                 self.asset_regimes[sym] = 'major'
@@ -524,7 +474,7 @@ class Engine:
 
             if sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
                 self.asset_regimes[sym] = 'major'
-            elif atr_pct > 0.005: # > 0.5% hourly move
+            elif atr_pct > 0.005:
                 self.asset_regimes[sym] = 'high_beta'
             else:
                 self.asset_regimes[sym] = 'stable'
@@ -534,32 +484,16 @@ class Engine:
             log.info(f"REGIMES | Classification Complete: {counts}")
 
     def _asset_is_tradable(self, symbol: str, side: str, features: dict = None, signal: dict = None) -> bool:
-        """
-        [TECH-001] Updated tradability logic to support Strategy Families.
-        Families allow hedging (Long + Short) but not redundant same-side positions
-        unless explicitly managed by scaling logic.
-
-        [TECH-001] BYPASS LOGIC:
-        - If 'bypass_external_filters' is True in strategy params, this Engine-level
-          check (Layer 1) is skipped entirely (Correlations, Cooldowns, Regimes).
-        - However, the STRATEGY itself may still require technical indicators for its
-          INTERNAL logic (e.g. Sweeps need FVG/Structure), which is why the 14-day
-          warm-up buffer in backtest.py may still trigger.
-        """
-        # [TECH-001] BYPASS OPTION (Global or per-signal)
-        if getattr(config, 'BYPASS_GLOBAL_FILTERS', False):
+        if getattr(self.config, 'BYPASS_GLOBAL_FILTERS', False):
             return True
         if signal and signal.get("bypass_global_filters"):
             return True
 
-        # 1. Statistical Arbitrage Filter (Correlation & Mean Reversion)
         if hasattr(self.exchange, "asset_correlations"):
             corrs = self.exchange.asset_correlations.get(symbol, {})
             for other_sym, score in corrs.items():
-                if score > 0.9: # High correlation
+                if score > 0.9:
                     if f"{other_sym}_buy" in self.open_positions or f"{other_sym}_sell" in self.open_positions:
-                         # [OP Roadmap] Stat-Arb Check: If we have an edge on the divergence, allow trade
-                         # regardless of correlation block (Mean Reversion of the pair)
                          from ta.patterns.spread import detect_divergence
                          h1 = self.exchange.ohlcv.get(symbol, {}).get("1m", [])
                          h2 = self.exchange.ohlcv.get(other_sym, {}).get("1m", [])
@@ -567,43 +501,31 @@ class Engine:
 
                          if div.get('divergence_active') and div['recommended_side'] == side:
                              log.debug(f"STAT-ARB | Overriding correlation block for {symbol} {side}: Z={div['z_score']:.2f}")
-                             continue # Allow the trade
+                             continue
 
-                         # Standard block to reduce systemic risk
                          return False
 
         # Check volume
-        book = self.books[symbol]
-        bid_vol, ask_vol = book.top_bid_ask_qty()
-        if RESTRICT_LIQUIDITY and (bid_vol < 1 or ask_vol < 1):
-            return False
+        book = self.books.get(symbol)
+        if book:
+            bid_vol, ask_vol = book.top_bid_ask_qty()
+            if self.config.RESTRICT_LIQUIDITY and (bid_vol < 1 or ask_vol < 1):
+                return False
 
-        # Check if this specific side is already open or pending
         pos_key = f"{symbol}_{side}"
         if pos_key in self.open_positions or (pos_key in self.pending_entries and signal is None):
-            # [TECH-001] Block redundant same-side entry signals.
-            # Scaling is handled via manage_position.
             return False
 
-        # [TECH-001] STRATEGY FAMILIES: HEDGING ALLOWED
-        # If we have multiple strategies, we allow them to take opposing sides.
-        # If we only have ONE strategy (Baseline), we maintain the strict asset-level lock.
         if len(self.strategies) <= 1:
-            # [C-002] Asset-level Lock: Prevent simultaneous Long and Short in the same asset
-            # unless explicitly allowed by strategy. For HFT safety, we lock the whole asset.
             other_side = "sell" if side == "buy" else "buy"
             other_key = f"{symbol}_{other_side}"
             if other_key in self.open_positions or other_key in self.pending_entries:
                 return False
 
-        # [C-005] Dynamic Cooldown check: Scale with volatility (ATR)
         last_exit = self.last_exit_time.get(symbol, 0)
-        cooldown = REENTRY_COOLDOWN
+        cooldown = self.config.REENTRY_COOLDOWN
         if features and features.get("atr") and features.get("mid"):
-            # Scale cooldown down during high volatility to capture moves,
-            # and up during low volatility to prevent wash trading.
             atr_pct = features["atr"] / features["mid"]
-            # Baseline: 0.1% ATR -> 1.0x cooldown. 0.5% ATR -> 0.2x cooldown.
             scale_factor = max(0.2, min(3.0, 0.001 / (atr_pct + 1e-9)))
             cooldown *= scale_factor
 
@@ -616,9 +538,7 @@ class Engine:
         await asyncio.sleep(5)
         log.info("Trading loop started.")
 
-        # Determine if we should bypass engine-level indicator calculation
-        # Global bypass OR if all active strategies opt-out
-        engine_indicators_bypassed = getattr(config, 'BYPASS_GLOBAL_FILTERS', False)
+        engine_indicators_bypassed = getattr(self.config, 'BYPASS_GLOBAL_FILTERS', False)
         if not engine_indicators_bypassed and self.strategies:
             all_bypassed = True
             for strat in self.strategies:
@@ -629,29 +549,23 @@ class Engine:
                 engine_indicators_bypassed = True
                 log.info("Engine indicators bypassed by all active strategies.")
 
-        # Continue loop even after stop_event until positions clear
         while not self.stop_event.is_set() or self.open_positions or self.pending_entries:
             try:
-                # 1. Update Features and Train (Selective)
                 all_features = {}
                 now = time.time()
-                # Ensure each unique symbol is processed only once
-                for sym in set(self.enabled_assets + [BTC_SYMBOL]):
+                for sym in set(self.enabled_assets + [self.config.BTC_SYMBOL]):
                     try:
-                        # [NEW] Skip if asset is not yet ready (Simulator-based)
                         if hasattr(self.exchange, "ready_assets") and sym not in self.exchange.ready_assets:
                             continue
 
-                        # [NEW] On-demand regime classification as assets become ready
-                        if sym not in self.asset_regimes and sym != BTC_SYMBOL:
+                        if sym not in self.asset_regimes and sym != self.config.BTC_SYMBOL:
                             self._classify_asset_regimes(sym)
 
-                        book = self.books[sym]
-                        if book.best_bid <= 0 or book.best_ask <= 0:
+                        book = self.books.get(sym)
+                        if not book or book.best_bid <= 0 or book.best_ask <= 0:
                             continue
 
                         current_mid = (book.best_bid + book.best_ask) / 2
-                        # [C-001] Track activity based on book timestamp
                         if book.timestamp > 0:
                             self._last_activity[sym] = book.timestamp
 
@@ -665,28 +579,20 @@ class Engine:
 
                         self._last_mid[sym] = current_mid
 
-                        # [C-001] Event-Driven Optimization: only process if there is activity
-                        # or if it's BTC (global confluence), or if we have an open position
                         has_pos = f"{sym}_buy" in self.open_positions or f"{sym}_sell" in self.open_positions
                         last_act = self._last_activity.get(sym, 0)
 
-                        # Process if: BTC, Has Position, or Recent Activity (< 10s ago)
-                        if sym == BTC_SYMBOL or has_pos or (now - last_act < 10.0):
-                            # [REPAIR-20260708] Skip if asset is being omited (double check)
-                            if sym in ASSET_OMITTED:
+                        if sym == self.config.BTC_SYMBOL or has_pos or (now - last_act < 10.0):
+                            if sym in self.config.ASSET_OMITTED:
                                 continue
 
-                            # Optimization: only get expensive features if we might trade
-                            if sym == BTC_SYMBOL or len(self.open_positions) < MAX_CONCURRENT_POSITIONS:
-                                 # Skip if BOTH sides are already open or pending
+                            if sym == self.config.BTC_SYMBOL or len(self.open_positions) < self.config.MAX_CONCURRENT_POSITIONS:
                                  is_full = (f"{sym}_buy" in self.open_positions or f"{sym}_buy" in self.pending_entries) and \
                                            (f"{sym}_sell" in self.open_positions or f"{sym}_sell" in self.pending_entries)
                                  if is_full:
                                      continue
 
-                                 # [TECH-001] Only calculate engine-level features if not bypassed
-                                 # Strategies will still use Simulator.get_features as needed.
-                                 if engine_indicators_bypassed and sym != BTC_SYMBOL:
+                                 if engine_indicators_bypassed and sym != self.config.BTC_SYMBOL:
                                      feat = {}
                                  else:
                                      feat = self.exchange.get_features(sym)
@@ -706,28 +612,41 @@ class Engine:
                         management_sig = self.strategy.manage_position(pos, market_data)
                         if management_sig:
                             if management_sig.get("action") == "double_size":
+                                # Ensure minimum price distance for scaling to avoid over-exposure [REPAIR]
+                                book = self.books.get(sym)
+                                current_price = None
+                                if book and book.best_bid > 0 and book.best_ask > 0:
+                                    current_price = (book.best_bid + book.best_ask) / 2
+                                else:
+                                    current_price = self.exchange.last_price.get(sym)
+
+                                if current_price and pos.get("entry"):
+                                    price_dist = abs(current_price - pos["entry"]) / pos["entry"]
+                                    min_dist = getattr(self.config, "MIN_SCALING_DISTANCE_PCT", 0.005)
+                                    if price_dist < min_dist:
+                                        log.info(f"SCALE REJECTED: {sym} {pos['side'].upper()} price distance {price_dist*100:.3f}% < min_scaling_distance {min_dist*100:.2f}% | Current: {current_price:.8f}, Avg Entry: {pos['entry']:.8f}")
+                                        continue
+
                                 # Scale position
                                 await self.exchange.scale_position(sym, pos["side"], pos["qty"])
 
                 # 3. TTL (Time-to-Live) Exit Check
-                if getattr(config, "USE_TTL", False):
-                    # Convert ACTIVE_TIMEFRAME string (e.g., '5m') to seconds
-                    unit = ACTIVE_TIMEFRAME[-1]
-                    val = int(ACTIVE_TIMEFRAME[:-1])
+                if getattr(self.config, "USE_TTL", False):
+                    unit = self.config.ACTIVE_TIMEFRAME[-1]
+                    val = int(self.config.ACTIVE_TIMEFRAME[:-1])
                     multiplier_map = {'m': 60, 'H': 3600, 'D': 86400}
                     tf_seconds = val * multiplier_map.get(unit, 60)
-                    ttl_limit = tf_seconds * getattr(config, "TTL_CANDLE_MULTIPLIER", 15)
+                    ttl_limit = tf_seconds * getattr(self.config, "TTL_CANDLE_MULTIPLIER", 15)
 
-                    if not hasattr(self, "_ttl_logged") or self._ttl_logged != ACTIVE_TIMEFRAME:
-                        log.info(f"Dynamic TTL initialized: {ttl_limit}s ({getattr(config, 'TTL_CANDLE_MULTIPLIER', 15)} candles of {ACTIVE_TIMEFRAME})")
-                        self._ttl_logged = ACTIVE_TIMEFRAME
+                    if not hasattr(self, "_ttl_logged") or self._ttl_logged != self.config.ACTIVE_TIMEFRAME:
+                        log.info(f"Dynamic TTL initialized: {ttl_limit}s ({getattr(self.config, 'TTL_CANDLE_MULTIPLIER', 15)} candles of {self.config.ACTIVE_TIMEFRAME})")
+                        self._ttl_logged = self.config.ACTIVE_TIMEFRAME
 
                     for pos_key in list(self.open_positions.keys()):
                         pos = self.open_positions[pos_key]
                         if time.time() - pos.get("ts", 0) > ttl_limit:
                             sym = pos_key.split("_")[0]
                             side = pos["side"]
-                            # Request TTL Exit from simulator (Mid-price limit exit)
                             if hasattr(self.exchange, "books") and not pos.get("ttl_triggered"):
                                 book = self.exchange.books.get(sym)
                                 if book:
@@ -737,48 +656,39 @@ class Engine:
                                         "symbol": sym, "pos_side": side, "type": "ttl",
                                         "price": mid, "qty": pos["qty"], "is_ttl": True
                                     })
-                                    # Mark as triggered but keep in list until simulator reports exit
                                     pos["ttl_triggered"] = True
 
                 # 4. Check Signal and Trade (Skip if shutting down)
-                if not self.stop_event.is_set() and (len(self.open_positions) + len(self.pending_entries)) < MAX_CONCURRENT_POSITIONS:
+                if not self.stop_event.is_set() and (len(self.open_positions) + len(self.pending_entries)) < self.config.MAX_CONCURRENT_POSITIONS:
                     for sym in self.enabled_assets:
-                        # [NEW] Skip if asset is not yet ready (Simulator-based)
                         if hasattr(self.exchange, "ready_assets") and sym not in self.exchange.ready_assets:
                             continue
 
-                        # Re-check limit inside loop to avoid burst over-trading
-                        if (len(self.open_positions) + len(self.pending_entries)) >= MAX_CONCURRENT_POSITIONS:
+                        if (len(self.open_positions) + len(self.pending_entries)) >= self.config.MAX_CONCURRENT_POSITIONS:
                             break
 
-                        book = self.books[sym]
-                        if book.best_bid <= 0: continue
+                        book = self.books.get(sym)
+                        if not book or book.best_bid <= 0: continue
 
-                        # Only predict if we don't have BOTH sides open
                         if f"{sym}_buy" in self.open_positions and f"{sym}_sell" in self.open_positions:
                             continue
 
                         feat = all_features.get(sym)
-
-                        # USE PLUGGABLE STRATEGY IF AVAILABLE
                         market_data = {"symbol": sym, "book": book, "equity": self.equity, "features": feat}
 
-                        # [TECH-001] Support for multiple strategies in a Family
                         active_signals = []
                         if self.strategies:
                             for strat in self.strategies:
-                                # [TECH-001] AUTHENTICITY GUARD: Check if strategy is ready
                                 if hasattr(strat, "is_ready") and not strat.is_ready(sym):
                                     if not hasattr(self, "_warmup_logged"): self._warmup_logged = {}
                                     now = time.time()
-                                    if now - self._warmup_logged.get(f"{sym}_{strat.name}", 0) > 60: # Log every minute
+                                    if now - self._warmup_logged.get(f"{sym}_{strat.name}", 0) > 60:
                                         log.info(f"{sym}: {strat.get_readiness_eta(sym)}")
                                         self._warmup_logged[f"{sym}_{strat.name}"] = now
                                     continue
 
                                 sig = strat.get_entry_signal(market_data)
                                 if sig:
-                                    # Ensure signal knows who sent it
                                     sig["strategy_id"] = getattr(strat, "strategy_id", strat.name)
                                     active_signals.append(sig)
                         elif hasattr(self, "strategy") and self.strategy:
@@ -794,11 +704,9 @@ class Engine:
 
                         for signal in active_signals:
                             side = signal["side"]
-                            # Skip if a position in this direction is already open
                             if f"{sym}_{side}" in self.open_positions:
                                 continue
 
-                            # [REPAIR-20260708] Log once when an asset completes warm-up
                             if not hasattr(self, "_ready_logged"): self._ready_logged = set()
                             if sym not in self._ready_logged:
                                 log.info(f"ASSET READY: {sym} has completed all historical requirements.")
@@ -820,7 +728,6 @@ class Engine:
                             orig_side = signal.get("original_side", side)
                             is_contr = signal.get("is_contrarian", False)
 
-                            # Immediate local registration to prevent race condition
                             pos_key = f"{sym}_{side}"
                             self.pending_entries.add(pos_key)
 
@@ -828,7 +735,6 @@ class Engine:
                             if is_contr:
                                 side_str = f"{orig_side.upper()} [Flipped to {side.upper()}]"
 
-                            # Extract all feature keys (excluding common ones handled manually in log)
                             exclude = ['side', 'entry_price', 'exit_price', 'stop_price', 'qty', 'confidence', 'btc_confluence', 'original_side', 'is_contrarian', 'rsi', 'drt', 'drt_f', 'drt_s', 'vol_pct', 'strategy_id', 'symbol', 'features']
                             extra_features = {k: v for k, v in signal.items() if k not in exclude and v is not None}
                             feat_msg = " ".join([f"{k}={v}" for k, v in extra_features.items()])
@@ -838,54 +744,40 @@ class Engine:
                                           f"[{btc_conf}] drt_f={signal.get('drt_f')} drt_s={signal.get('drt_s')} rsi={signal.get('rsi',50):.1f} "
                                           f"macd={signal.get('macd',0):.4f} vol={signal.get('vol_pct',0):.2f} {feat_msg} equity={self.equity:.2f}")
 
-                            # Save to database
                             if getattr(self.exchange, "db", None):
                                 self.exchange.db.save_signal(sym, side, entry, signal)
 
-                            # Always log for DB, but conditionally for console
-                            if LOG_SIGNALS:
+                            if self.config.LOG_SIGNALS:
                                 log.info(signal_msg)
                             else:
-                                # [TECH-001] Keep signal details in Shadow Log/DB only
                                 log.debug(signal_msg)
 
-                            # Final collision check immediately before router call
-                            # Pass signal to allow it to pass even if already in pending_entries
                             if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
                                 if pos_key in self.open_positions: del self.open_positions[pos_key]
                                 if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
                                 continue
 
-                            # Add regime to features for predict logic
-                            # [REPAIR-20260708] Add diagnostic logging for signal attempt
                             log.debug(f"ROUTING SIGNAL: {sym} {side.upper()} via {signal.get('strategy_id')}")
 
                             if feat is not None:
                                 feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
-
-                                # [TECH-001] Merge all calculated features into the signal
-                                # to satisfy requirement (g) for full metrics reporting.
                                 for k, v in feat.items():
                                     if k not in signal:
                                         signal[k] = v
 
-                            # Inject extra info for router/exchange
                             signal.update({
                                 "symbol": sym,
                                 "features": feat
                             })
 
-                            # [REPAIR-20260708] Log every signal evaluation to metrics-log
                             self._write_metrics_log(sym, side, signal.get("strategy_id", "unknown"), signal)
 
                             self.session_signals += 1
                             resp = await self.router.route_signal(signal)
-                            if resp.get("code") == "00000" and not LOG_SIGNALS:
-                                # Show signal with fill/place if LOG_SIGNALS is False
+                            if resp.get("code") == "00000" and not self.config.LOG_SIGNALS:
                                 log.info(f"Entry Triggered | {signal_msg}")
 
                             if resp.get("code") != "00000":
-                                # Reject local registration if exchange fails
                                 if pos_key in self.open_positions: del self.open_positions[pos_key]
                                 if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
 
@@ -900,7 +792,7 @@ class Engine:
                 self._log_periodic_summary()
             except Exception as e:
                 log.error(f"Summary task error: {e}")
-            await asyncio.sleep(SUMMARY_INTERVAL_SECONDS)
+            await asyncio.sleep(self.config.SUMMARY_INTERVAL_SECONDS)
 
     async def _heartbeat_task(self):
         while not self.stop_event.is_set():
@@ -908,28 +800,21 @@ class Engine:
                 self._log_heartbeat()
             except Exception as e:
                 log.error(f"Heartbeat task error: {e}")
-            await asyncio.sleep(config.HEARTBEAT_INTERVAL_SECONDS)
+            await asyncio.sleep(self.config.HEARTBEAT_INTERVAL_SECONDS)
 
     def _log_heartbeat(self):
-        """
-        [REPAIR-20260708] Session Heartbeat Analysis.
-        Tracks pursued, abandoned, and signaled setups across all active strategies.
-        """
         pursued = 0
         abandoned = 0
         signaled = self.session_signals
 
-        # Pursued/Abandoned require strategy state inspection
         if self.strategies:
             for sym in self.enabled_assets:
                 for strat in self.strategies:
-                    # Generic state check
                     state_keys = [f"{sym}_setup_state", f"{sym}_ov_setup_state", f"{sym}_atr_setup_state"]
                     for sk in state_keys:
                         state = self.exchange.db.get_strategy_state(strat.strategy_id, sk)
                         if state:
                             if "WAITING" in state:
-                                # For ATR, pursued starts AFTER the sweep (Phase 3)
                                 if sk == f"{sym}_atr_setup_state" and state == "WAITING_FOR_SWEEP":
                                     continue
                                 pursued += 1
@@ -941,35 +826,25 @@ class Engine:
         minutes, seconds = divmod(rem, 60)
         elapsed_str = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
 
-        # Asset Readiness (Authentic Strategy-based Check)
         ready_count = 0
         total_count = len(self.enabled_assets)
         if self.strategies:
             for sym in self.enabled_assets:
-                # All active strategies must be ready for the asset to be "Loaded"
                 all_ready = True
                 for strat in self.strategies:
                     if hasattr(strat, "is_ready") and not strat.is_ready(sym):
                         all_ready = False; break
                 if all_ready: ready_count += 1
         else:
-            # Fallback if no strategies (e.g. metadata only)
-            # Filter to only count enabled assets to avoid > 100% reports
             ready_count = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
 
-        # Coarse progress from simulator
         sim_ready = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
 
         log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} (Progress: {sim_ready}/{total_count}) | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
 
     async def _sync_exchange_state(self):
-        """
-        [REPAIR-20260708] Reconciles Engine state with actual Exchange state (Positions & Orders).
-        Now handles removals (exits/cancellations) and realized PnL reporting.
-        """
         log.info(f"Synchronizing state with {self.mode.upper()} exchange...")
         try:
-            # 1. Sync Positions
             positions = await self.exchange.get_positions()
             current_pos_keys = set()
             for p in positions:
@@ -982,7 +857,6 @@ class Engine:
                     pos_key = f"{sym}_{side}"
                     current_pos_keys.add(pos_key)
                     if pos_key not in self.open_positions:
-                        # New position discovered (possibly opened externally or during restart)
                         self.open_positions[pos_key] = {
                             "side": side, "qty": qty, "entry": entry,
                             "orig_side": side, "is_contr": False,
@@ -992,15 +866,12 @@ class Engine:
                         }
                         log.info(f"Synced Position: {pos_key} | Qty: {qty} @ {entry}")
                     else:
-                        # Update existing position details
                         self.open_positions[pos_key].update({"qty": qty, "entry": entry})
 
-            # Detect Exited Positions
             for pos_key in list(self.open_positions.keys()):
                 if pos_key not in current_pos_keys:
                     p = self.open_positions[pos_key]
                     if p.get("strategy_id") != "legacy_sync":
-                        # Position is gone from exchange!
                         log.info(f"Position {pos_key} gone from exchange. Reporting exit...")
 
                         symbol = pos_key.split("_")[0]
@@ -1013,7 +884,6 @@ class Engine:
                         fee = 0.0
                         exit_type = "exchange_sync"
 
-                        # 1. Try to fetch actual closed position from History API
                         try:
                             history = await self.exchange.get_history_positions(symbol=symbol, limit=10)
                             target_hold_side = 'long' if side == 'buy' else 'short'
@@ -1033,7 +903,6 @@ class Engine:
                         except Exception as e:
                             log.warning(f"SYNC STATE | Failed to fetch position history for {pos_key}: {e}")
 
-                        # 2. If not found in history, try to fetch Fills API to find the closing trade details
                         if exit_price is None:
                             try:
                                 fills = await self.exchange.get_fills(symbol=symbol, limit=20)
@@ -1052,7 +921,6 @@ class Engine:
                             except Exception as e:
                                 log.warning(f"SYNC STATE | Failed to fetch fills for {pos_key}: {e}")
 
-                        # 3. Precise Fallback: Calculate P&L strictly incorporating Maker/Taker fees
                         if exit_price is None or exit_price == 0.0:
                             ticker_price = self.exchange.last_price.get(symbol, entry_price)
                             tp_target = p.get("tp_price")
@@ -1071,7 +939,6 @@ class Engine:
                                 exit_price = ticker_price
 
                         if pnl is None:
-                            # Compute theoretical net PnL with Maker/Taker fee rates
                             is_tp = False
                             if p.get("tp_price") and abs(exit_price - p["tp_price"]) < 1e-5:
                                 is_tp = True
@@ -1085,12 +952,10 @@ class Engine:
 
                         self._report_exit(symbol, side, pnl, exit_type=exit_type)
                     else:
-                        # Just clear legacy sync position without reporting
                         log.info(f"Legacy synced position {pos_key} cleared.")
                         if pos_key in self.open_positions:
                             del self.open_positions[pos_key]
 
-            # Reconcile custom multi-target TP/SL trigger orders (TP1) for open positions
             for pos_key, pos_details in list(self.open_positions.items()):
                 sym = pos_key.split("_")[0]
                 side = pos_details["side"]
@@ -1098,13 +963,10 @@ class Engine:
                 tp1_price = pos_details.get("tp1_price")
                 tp1_qty = pos_details.get("tp1_qty")
 
-                # If the position has a custom TP1 target, ensure it has a corresponding trigger order
                 if tp1_price and tp1_qty:
                     try:
-                        # Get all currently open trigger/plan orders for this symbol
                         open_plans = await self.exchange.get_open_tpsl_orders(sym)
 
-                        # Check if a plan order for TP1 is already open
                         tp1_placed = False
                         for plan in open_plans:
                             if plan.get("planType") == "profit":
@@ -1115,7 +977,6 @@ class Engine:
 
                         if not tp1_placed:
                             log.info(f"SYNC STATE | Placing missing TP1 trigger order for {pos_key}: trigger_price={tp1_price}, qty={tp1_qty}")
-                            # Place TP1 trigger order
                             hold_side = "long" if side == "buy" else "short"
                             await self.exchange.place_tpsl_order(
                                 symbol=sym,
@@ -1127,7 +988,6 @@ class Engine:
                     except Exception as tpsl_err:
                         log.error(f"SYNC STATE | Failed to reconcile TP1 trigger order for {pos_key}: {tpsl_err}")
 
-            # 2. Sync Pending Orders
             orders = await self.exchange.get_open_orders()
             current_order_keys = set()
             for o in orders:
@@ -1139,8 +999,6 @@ class Engine:
                     self.pending_entries.add(pos_key)
                     log.info(f"Synced Pending Order: {pos_key} | OrderId: {o.get('orderId')}")
 
-            # Reconcile pending removals
-            # Only remove if it's not in self.open_positions (as it might have just filled)
             for pk in list(self.pending_entries):
                 if pk not in current_order_keys and pk not in current_pos_keys:
                     self.pending_entries.remove(pk)
