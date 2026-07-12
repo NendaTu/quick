@@ -335,6 +335,13 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                 self.save_state(f"{symbol}_ov_last_trigger_ts", m1[-1]['ts'], self.simulator)
 
                 tp1_qty = round(qty * self.params["tp1_qty_ratio"], qty_place)
+
+                # Determine whether the range candle was bullish or bearish [REPAIR]
+                range_candle_type = "unknown"
+                if day_range and "close" in day_range and "open" in day_range:
+                    if day_range["close"] is not None and day_range["open"] is not None:
+                        range_candle_type = "bullish" if day_range["close"] >= day_range["open"] else "bearish"
+
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",
                     "entry_price": entry_price,
@@ -344,6 +351,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                     "tp1_qty": tp1_qty,
                     "tp2_qty": qty - tp1_qty,
                     "qty": qty,
+                    "range_candle_type": range_candle_type,
                     "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 

@@ -370,6 +370,12 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
                 tp2_qty = qty - tp1_qty
 
+                # Determine whether the range candle was bullish or bearish [REPAIR]
+                range_candle_type = "unknown"
+                if ov_range and "close" in ov_range and "open" in ov_range:
+                    if ov_range["close"] is not None and ov_range["open"] is not None:
+                        range_candle_type = "bullish" if ov_range["close"] >= ov_range["open"] else "bearish"
+
                 return {
                     "side": "buy" if sweep_side == 'ssl' else "sell",
                     "entry_price": entry_price,
@@ -380,6 +386,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     "tp1_qty": tp1_qty,
                     "tp2_qty": tp2_qty,
                     "qty": qty,
+                    "range_candle_type": range_candle_type,
                     "bypass_global_filters": self.params["bypass_external_filters"] # [TECH-001] Pass toggle
                 }
 
