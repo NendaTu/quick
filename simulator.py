@@ -137,7 +137,30 @@ class DataAcquisitionManager:
                     self.db.save_discovered_assets(discovered)
                 log.info(f"Top {len(discovered)} assets discovered by volume.")
 
-        specs = await self.client.get_symbols()
+        # Load contract specs with local JSON cache to prevent network freezes [REPAIR]
+        import os, json
+        specs_cache_path = "docs/temp/contract_specs_cache.json"
+        specs = []
+        if os.path.exists(specs_cache_path):
+            try:
+                with open(specs_cache_path, "r") as f:
+                    specs = json.load(f)
+                log.info("Loaded contract specifications from local cache.")
+            except Exception as cache_err:
+                log.warning(f"Failed to read local contract specs cache: {cache_err}")
+
+        if not specs:
+            try:
+                log.info("Fetching contract specifications from Bitget API...")
+                specs = await self.client.get_symbols()
+                if specs:
+                    os.makedirs(os.path.dirname(specs_cache_path), exist_ok=True)
+                    with open(specs_cache_path, "w") as f:
+                        json.dump(specs, f)
+            except Exception as api_err:
+                log.error(f"Failed to fetch contract specs from API: {api_err}")
+                specs = [{"symbol": asset, "pricePlace": "2", "volumePlace": "3", "minTradeUSDT": "5"} for asset in self.discovered_assets]
+
         spec_map = {s['symbol']: s for s in specs}
 
         symbols = list(set(self.discovered_assets + [self.config.BTC_SYMBOL]))
