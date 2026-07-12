@@ -170,15 +170,31 @@ class RangeSweepATRStrategy(JBaseStrategy):
             cand = expansion['candle']
             new_anchor = {'high': cand['h'], 'low': cand['l'], 'ts': cand['ts']}
 
-            # If sequence hasn't started (Phase 3), we always take the most recent expansion
-            if state in ["IDLE", "WAITING_FOR_SWEEP"] or anchor is None:
-                if anchor is None or cand['ts'] != anchor['ts']:
-                    self.logger.info(f"[{symbol}] Expansion Candle detected ({expansion['ratio']:.1f}x ATR)!")
-                    self.save_state(f"{symbol}_atr_anchor", new_anchor, self.simulator)
-                    self.save_state(state_key, "WAITING_FOR_SWEEP", self.simulator)
-                    state = "WAITING_FOR_SWEEP"
-                    anchor = new_anchor
-                    self.record_milestone("Phase 1: ATR Expansion Anchor", cand['ts'], range_tf)
+            # Enforce Maximum ATR Expansion Cap to filter out extreme exhaustion moves [REPAIR]
+            max_cap = getattr(self.simulator.config if self.simulator else config, "MAX_ATR_EXPANSION_MULTIPLIER", 20.0)
+            if expansion['ratio'] > max_cap:
+                log_rejections = getattr(self.simulator.config if self.simulator else config, "LOG_REJECTIONS", False)
+                msg = f"[{symbol}] Discarding expansion anchor: ratio {expansion['ratio']:.1f}x exceeds maximum ATR expansion cap of {max_cap:.1f}x."
+                if log_rejections:
+                    self.logger.info(msg)
+                else:
+                    self.logger.debug(msg)
+                if state == "WAITING_FOR_SWEEP":
+                    # Expired/invalidated
+                    self.save_state(state_key, "IDLE", self.simulator)
+                    self.save_state(f"{symbol}_atr_anchor", None, self.simulator)
+                    state = "IDLE"
+                    anchor = None
+            else:
+                # If sequence hasn't started (Phase 3), we always take the most recent expansion
+                if state in ["IDLE", "WAITING_FOR_SWEEP"] or anchor is None:
+                    if anchor is None or cand['ts'] != anchor['ts']:
+                        self.logger.info(f"[{symbol}] Expansion Candle detected ({expansion['ratio']:.1f}x ATR)!")
+                        self.save_state(f"{symbol}_atr_anchor", new_anchor, self.simulator)
+                        self.save_state(state_key, "WAITING_FOR_SWEEP", self.simulator)
+                        state = "WAITING_FOR_SWEEP"
+                        anchor = new_anchor
+                        self.record_milestone("Phase 1: ATR Expansion Anchor", cand['ts'], range_tf)
 
         # Check for range expiration
         # If too many 4H candles pass since the anchor without a sweep, reset.

@@ -5,24 +5,27 @@ from bitget_client import BitGetClient, BitGetWSClient, RateLimiter
 
 log = logging.getLogger("engine.exchanges.bitget")
 
-from simulator import Simulator
+from simulator import DataAcquisitionManager
 import config
 
-class BitgetExchange(Simulator, BaseExchange):
+class BitgetExchange(DataAcquisitionManager, BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
     # Targeting a zero-429 baseline for long historical runs.
     # Note: Bitget historical candles has a tighter limit than standard public API.
     DEFAULT_RPS = 10
     DEFAULT_CONCURRENCY = 5
 
-    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False):
+    def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False, config_context=None):
         # [REPAIR-20260708] Unified Rate Limiter (Cumulative across all internal clients)
         # Using 20 RPS as base, applying 98% safety cap via RateLimiter class.
         self.rate_limiter = RateLimiter(rps=self.DEFAULT_RPS, safety_factor=0.98)
 
+        # Retrieve config context to ensure we use injected parameters
+        cfg = config_context if config_context is not None else config.ConfigContext()
+
         # Dual-Client Architecture:
         # 1. data_client: Always uses Live keys for market data to ensure availability and fix 40099.
-        self.data_client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, is_demo=False, rate_limiter=self.rate_limiter)
+        self.data_client = BitGetClient(cfg.BITGET_API_KEY, cfg.BITGET_SECRET_KEY, cfg.BITGET_PASSPHRASE, is_demo=False, rate_limiter=self.rate_limiter)
 
         # 2. execution_client: Handles private actions (orders, balance) in Live or Demo environment.
         self.client_exec = BitGetClient(api_key, secret_key, passphrase, is_demo=is_demo, rate_limiter=self.rate_limiter)
@@ -31,14 +34,20 @@ class BitgetExchange(Simulator, BaseExchange):
         asyncio.create_task(self.data_client.sync_time())
         asyncio.create_task(self.client_exec.sync_time())
 
-        # Initialize Simulator first with the data client to get OHLCV/TA capabilities
-        # This ensures Simulator.warm_up uses the correct keys and environment.
-        Simulator.__init__(self, use_db=True, client=self.data_client)
+        # Initialize DataAcquisitionManager first with the data client to get OHLCV/TA capabilities
+        # This ensures DataAcquisitionManager.warm_up uses the correct keys and environment.
+        DataAcquisitionManager.__init__(self, use_db=True, client=self.data_client, config_context=config_context)
 
         self.ws_client: Optional[BitGetWSClient] = None
         self.ws_private: Optional[BitGetWSClient] = None
         self.is_demo = is_demo
         self.engine = None
+
+        # Clean isolation: Initialize simple order lists needed for live tracking
+        # without inheriting the paper matching engine simulation methods.
+        self.pending_orders: List[dict] = []
+        self.used_margin = 0.0
+        self.equity = config.INITIAL_EQUITY
 
         # Symbol mapping for Demo Mode (Canonical <-> Exchange)
         self.symbol_map = {} # canonical -> exchange
@@ -87,24 +96,43 @@ class BitgetExchange(Simulator, BaseExchange):
         tp_price = kwargs.get("exit_price") or kwargs.get("tp_price") or kwargs.get("presetTakeProfitPrice")
         sl_price = kwargs.get("stop_price") or kwargs.get("sl_price") or kwargs.get("presetStopLossPrice")
 
+        max_leverage = 20
+        if self.engine and symbol in self.engine.leverage_limits:
+            max_leverage = int(self.engine.leverage_limits[symbol])
+
+        # Enforce dynamic safe leverage to prevent liquidation before SL is hit
+        applied_leverage = max_leverage
+        if price and sl_price:
+            price_distance_pct = abs(price - sl_price) / price
+            if price_distance_pct > 0:
+                max_safe_leverage = int(0.9 / price_distance_pct)
+                applied_leverage = min(max_leverage, max_safe_leverage)
+                applied_leverage = max(1, applied_leverage)
+
+        # Enforce "Net Profit vs. Fee" Filter to prevent narrow fee traps [REPAIR]
+        if tp_price and tp_price > 0:
+            entry_price_est = price if price else self.last_price.get(symbol, 0)
+            if entry_price_est and entry_price_est > 0:
+                entry_fee_rate = self.config.MAKER_FEE if order_type.lower() == "limit" else self.config.TAKER_FEE
+                exit_fee_rate = self.config.MAKER_FEE if self.config.TP_ORDER_TYPE == "limit" else self.config.TAKER_FEE
+
+                entry_fee = qty * entry_price_est * entry_fee_rate
+                exit_fee = qty * tp_price * exit_fee_rate
+                total_expected_fees = entry_fee + exit_fee
+
+                gross_pnl_at_tp = qty * abs(tp_price - entry_price_est)
+                projected_net_pnl = gross_pnl_at_tp - total_expected_fees
+
+                reserved_margin = (qty * entry_price_est) / applied_leverage
+                min_profit_pct = getattr(self.config, "MIN_NET_TP_PROFIT_PCT", 0.001)
+                min_required_profit = min_profit_pct * reserved_margin
+
+                if projected_net_pnl < min_required_profit:
+                    log.info(f"Bitget REJECTED NARROW FEE TRAP: {symbol} {side.upper()} projected net profit {projected_net_pnl:.4f} is less than required threshold {min_required_profit:.4f} ({min_profit_pct*100:.2f}% of margin) | Gross TP Profit: {gross_pnl_at_tp:.4f}, Total Fees: {total_expected_fees:.4f}")
+                    return {"code": "40001", "msg": "net tp profit below minimum required threshold"}
+
         # Ensure Isolated Margin and Max Leverage are set on exchange before order placement
         try:
-            max_leverage = 20
-            if self.engine and symbol in self.engine.leverage_limits:
-                max_leverage = int(self.engine.leverage_limits[symbol])
-
-            # Enforce dynamic safe leverage to prevent liquidation before SL is hit
-            applied_leverage = max_leverage
-            if price and sl_price:
-                price_distance_pct = abs(price - sl_price) / price
-                if price_distance_pct > 0:
-                    # 1 / leverage is the liquidation distance.
-                    # We need 1 / leverage > price_distance_pct => leverage < 1 / price_distance_pct
-                    # Let's apply a 10% safety margin (0.9 multiplier) to ensure SL is hit safely before liquidation
-                    max_safe_leverage = int(0.9 / price_distance_pct)
-                    applied_leverage = min(max_leverage, max_safe_leverage)
-                    applied_leverage = max(1, applied_leverage)
-
             await self.set_margin_mode(symbol, margin_mode="isolated")
             await self.set_leverage(symbol, leverage=applied_leverage)
             log.info(f"Bitget: Configured isolated margin and {applied_leverage}x leverage (capped from {max_leverage}x) for {symbol}")

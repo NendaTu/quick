@@ -103,9 +103,18 @@ USE_ONLINE_LEARNING = False
 # Minimum wait time (seconds) after exiting an asset before re-entry.
 REENTRY_COOLDOWN = 60.0
 
+# Minimum price distance (%) required to trigger a scale-in entry (0.005 = 0.5%)
+MIN_SCALING_DISTANCE_PCT = 0.005
+
+# Maximum ATR expansion multiplier cap for range_sweep_ATR strategy (20.0 = 20x ATR)
+MAX_ATR_EXPANSION_MULTIPLIER = 20.0
+
+# Minimum expected net profit at Take Profit as a fraction of reserved margin (0.001 = 0.1%)
+# Prevents entering "fee trap" trades where transaction fees eat all gross profit.
+MIN_NET_TP_PROFIT_PCT = 0.001
+
 # TP Relaxation: Accepts lower ROE targets during flat trends.
 USE_TP_RELAXATION = False
-RELAXED_ROE_TARGET = 0.03
 TP_RELAXATION_THRESHOLD = 0.05
 
 # Time-to-Live (TTL): Force-exit stagnant trades after N candles.
@@ -197,3 +206,24 @@ MAX_SPREAD_PCT = 0.002
 FEE_AWARE_SIZING = True
 BTC_REALTIME_CONFLUENCE = False
 SESSION_MULTIPLIER = 1.5
+
+# --- Config Context Class for Dependency Injection [ARCH-003] ---
+class ConfigContext:
+    """
+    Immutable Configuration Context designed to isolate running execution parameters
+    across threads or concurrent backtest variants, preventing global variable pollution.
+    """
+    def __init__(self, **kwargs):
+        # Automatically capture all module-level parameters as instance defaults
+        g = globals()
+        for k, v in g.items():
+            if not k.startswith("__") and k != "os" and k != "datetime" and k != "pytz" and k != "load_dotenv" and k != "get_env_stripped":
+                # Ensure we do not copy classes or types
+                if not isinstance(v, type):
+                    setattr(self, k, v)
+        # Apply overrides
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
