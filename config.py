@@ -106,6 +106,9 @@ REENTRY_COOLDOWN = 60.0
 # Minimum price distance (%) required to trigger a scale-in entry (0.005 = 0.5%)
 MIN_SCALING_DISTANCE_PCT = 0.005
 
+# Maximum ATR expansion multiplier cap for range_sweep_ATR strategy (20.0 = 20x ATR)
+MAX_ATR_EXPANSION_MULTIPLIER = 20.0
+
 # TP Relaxation: Accepts lower ROE targets during flat trends.
 USE_TP_RELAXATION = False
 TP_RELAXATION_THRESHOLD = 0.05
