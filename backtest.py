@@ -2,6 +2,11 @@ import sys
 import os
 import asyncio
 import math
+import signal
+try:
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+except Exception:
+    pass
 import random
 import logging
 import time
@@ -1421,7 +1426,11 @@ async def main():
 
     # 1. Acquisition of data (Using unified discovery)
     required_tfs = get_required_timeframes(chain)
-    await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
+    try:
+        await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
+    except KeyboardInterrupt:
+        log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
+        return
 
     # 2. Run backtests based on toggle
     all_results = []
