@@ -277,7 +277,7 @@ ENTRY_SCORE_THRESHOLD = 30.0
 
 # BY_DEFAULT_REPORT_ONLY: If True, all indicators write scores to logs but do not block trades.
 # Expect the system to trade freely while logging full scoring metrics for offline optimization.
-BY_DEFAULT_REPORT_ONLY = True
+BY_DEFAULT_REPORT_ONLY = False
 
 # --- Weight Multipliers for Scoring Conditions (0.0 = Disabled) ---
 # WEIGHT_RSI: This parameter sets the importance multiplier for the Relative Strength Index momentum condition during score aggregation.

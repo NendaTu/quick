@@ -737,6 +737,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                     if asset in engine.books:
                         engine.books[asset].bids = list(sim.books[asset].bids)
                         engine.books[asset].asks = list(sim.books[asset].asks)
+                        engine.books[asset].timestamp = c['ts']
 
                 # [PERF-002] Order processing is only needed if we have positions or pending orders
                 if sim.positions or sim.pending_orders:
@@ -1073,6 +1074,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                         if asset in engine.books:
                             engine.books[asset].bids = list(sim.books[asset].bids)
                             engine.books[asset].asks = list(sim.books[asset].asks)
+                            engine.books[asset].timestamp = current_ts
 
             # Step B: Process orders ONCE for the shared simulator at this timestamp
             if sim.positions or sim.pending_orders:

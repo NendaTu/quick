@@ -240,6 +240,17 @@ class Engine:
             return self.gross_profit / self.gross_loss
         return float('inf') if self.gross_profit > 0 else 1.0
 
+    def get_current_time(self, symbol: str = None) -> float:
+        """
+        Returns current virtual time in paper simulation/backtest mode,
+        otherwise real system time.
+        """
+        if self.mode == "paper" and symbol:
+            book = self.books.get(symbol)
+            if book and book.timestamp > 0:
+                return book.timestamp
+        return time.time()
+
     def _write_metrics_log(self, symbol: str, side: str, strategy_id: str, scoring_result: dict):
         import os
         from datetime import datetime
@@ -327,9 +338,6 @@ class Engine:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-        if features:
-            self._write_metrics_log(symbol, side, strategy_id, features)
-
         if hasattr(self.exchange, "db"):
             self.exchange.db.save_trade(strategy_id, symbol, side, entry_ts, entry, qty)
 
@@ -412,7 +420,7 @@ class Engine:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
-        self.last_exit_time[symbol] = time.time()
+        self.last_exit_time[symbol] = self.get_current_time(symbol)
 
         if total_trade_pnl > 0:
             self.winning_trades += 1
@@ -559,7 +567,8 @@ class Engine:
             scale_factor = max(0.2, min(3.0, 0.001 / (atr_pct + 1e-9)))
             cooldown *= scale_factor
 
-        if time.time() - last_exit < cooldown:
+        current_time = self.get_current_time(symbol)
+        if current_time - last_exit < cooldown:
             return False
 
         return True
@@ -742,7 +751,27 @@ class Engine:
                                 log.info(f"ASSET READY: {sym} has completed all historical requirements.")
                                 self._ready_logged.add(sym)
 
-                            if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
+                            # 1. Scoring Confluence Gating Check
+                            feat_to_score = feat if feat is not None else self.exchange.get_features(sym)
+                            if not feat_to_score:
+                                continue
+
+                            from ta.scoring import ScoringEngine
+                            se = ScoringEngine()
+                            strategy_id = signal.get("strategy_id", "unknown")
+
+                            if strategy_id == "model":
+                                scoring_result = se.evaluate(feat_to_score, side=side, config_context=self.config, dynamic_weights=self.model.weights)
+                            else:
+                                scoring_result = se.evaluate(feat_to_score, side=side, config_context=self.config)
+                                # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
+                                self._write_metrics_log(sym, side, strategy_id, scoring_result)
+
+                            if scoring_result["decision"] == "REJECTED":
+                                log.debug(f"Strategy {strategy_id} signal rejected by ScoringEngine: {scoring_result['reason']}")
+                                continue
+
+                            if not self._asset_is_tradable(sym, side, features=feat_to_score, signal=signal):
                                 continue
 
                             qty = signal.get("qty", 0)
@@ -750,8 +779,8 @@ class Engine:
                             stop = signal.get("stop_price", 0)
                             tp = signal.get("exit_price", signal.get("tp_price", 0))
                             btc_conf = signal.get("btc_confluence")
-                            if not btc_conf and feat:
-                                btc_conf = f"1D:{feat.get('btc_1D', 0):.4f} 4H:{feat.get('btc_4H', 0):.4f} 1H:{feat.get('btc_1H', 0):.4f} 15m:{feat.get('btc_15m', 0):.4f}"
+                            if not btc_conf and feat_to_score:
+                                btc_conf = f"1D:{feat_to_score.get('btc_1D', 0):.4f} 4H:{feat_to_score.get('btc_4H', 0):.4f} 1H:{feat_to_score.get('btc_1H', 0):.4f} 15m:{feat_to_score.get('btc_15m', 0):.4f}"
                             elif not btc_conf:
                                 btc_conf = ""
 
@@ -782,25 +811,23 @@ class Engine:
                             else:
                                 log.debug(signal_msg)
 
-                            if not self._asset_is_tradable(sym, side, features=feat, signal=signal):
+                            if not self._asset_is_tradable(sym, side, features=feat_to_score, signal=signal):
                                 if pos_key in self.open_positions: del self.open_positions[pos_key]
                                 if pos_key in self.pending_entries: self.pending_entries.remove(pos_key)
                                 continue
 
                             log.debug(f"ROUTING SIGNAL: {sym} {side.upper()} via {signal.get('strategy_id')}")
 
-                            if feat is not None:
-                                feat["asset_regime"] = self.asset_regimes.get(sym, "stable")
-                                for k, v in feat.items():
+                            if feat_to_score is not None:
+                                feat_to_score["asset_regime"] = self.asset_regimes.get(sym, "stable")
+                                for k, v in feat_to_score.items():
                                     if k not in signal:
                                         signal[k] = v
 
                             signal.update({
                                 "symbol": sym,
-                                "features": feat
+                                "features": feat_to_score
                             })
-
-                            self._write_metrics_log(sym, side, signal.get("strategy_id", "unknown"), signal)
 
                             self.session_signals += 1
                             resp = await self.router.route_signal(signal)
