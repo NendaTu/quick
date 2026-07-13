@@ -32,6 +32,8 @@ class Engine:
         self.be_wins = 0        # Breakeven protected wins
         self.losing_trades = 0
         self.cumulative_pnl = 0.0
+        self.gross_profit = 0.0
+        self.gross_loss = 0.0
         self.session_signals = 0 # [REPAIR-20260708] Track total signals emitted
 
         # Performance tracking
@@ -228,6 +230,16 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
+    @property
+    def profit_ratio(self) -> float:
+        """
+        Calculates Profit Ratio (Gross Profit / Gross Loss).
+        If no losses, returns float('inf') if gross_profit > 0 else 1.0.
+        """
+        if self.gross_loss > 0:
+            return self.gross_profit / self.gross_loss
+        return float('inf') if self.gross_profit > 0 else 1.0
+
     def _write_metrics_log(self, symbol: str, side: str, strategy_id: str, scoring_result: dict):
         import os
         from datetime import datetime
@@ -331,6 +343,11 @@ class Engine:
             self.equity += round_trip_pnl
 
         self.cumulative_pnl += round_trip_pnl
+
+        if round_trip_pnl > 0:
+            self.gross_profit += round_trip_pnl
+        else:
+            self.gross_loss += abs(round_trip_pnl)
 
         self.equity_history.append({
             "ts": time.time(),
@@ -853,7 +870,9 @@ class Engine:
 
         sim_ready = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
 
-        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} (Progress: {sim_ready}/{total_count}) | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
+        pr_val = self.profit_ratio
+        pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
+        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} (Progress: {sim_ready}/{total_count}) | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled} | PR: {pr_str}")
 
     async def _sync_exchange_state(self):
         log.info(f"Synchronizing state with {self.mode.upper()} exchange...")

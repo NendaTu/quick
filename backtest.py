@@ -706,7 +706,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             if (i - start_idx) % 1440 == 0:
                 dt_str = datetime.fromtimestamp(c['ts'], tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | Open: {len(engine.open_positions)}")
+                pr_val = engine.profit_ratio
+                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
+                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
 
             o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
@@ -1034,7 +1036,9 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
             if step_idx % 1440 == 0:
                 dt_str = datetime.fromtimestamp(current_ts, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | Open: {len(engine.open_positions)}")
+                pr_val = engine.profit_ratio
+                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
+                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
 
             # Step A: Update prices and simulate price action for all active assets
             for asset in assets:
