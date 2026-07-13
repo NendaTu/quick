@@ -2,6 +2,11 @@ import sys
 import os
 import asyncio
 import math
+import signal
+try:
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+except Exception:
+    pass
 import random
 import logging
 import time
@@ -27,7 +32,8 @@ class Tee:
         self.original_stream = original_stream
         self.filepath = filepath
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        self.file = open(filepath, "w", encoding="utf-8", buffering=1)
+        # Use append mode "a" to allow stdout and stderr streams to write concurrently without clobbering each other.
+        self.file = open(filepath, "a", encoding="utf-8", buffering=1)
 
     def write(self, data):
         self.original_stream.write(data)
@@ -701,7 +707,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             if (i - start_idx) % 1440 == 0:
                 dt_str = datetime.fromtimestamp(c['ts'], tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | Open: {len(engine.open_positions)}")
+                pr_val = engine.profit_ratio
+                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
+                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
 
             o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
@@ -729,6 +737,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                     if asset in engine.books:
                         engine.books[asset].bids = list(sim.books[asset].bids)
                         engine.books[asset].asks = list(sim.books[asset].asks)
+                        engine.books[asset].timestamp = c['ts']
 
                 # [PERF-002] Order processing is only needed if we have positions or pending orders
                 if sim.positions or sim.pending_orders:
@@ -790,8 +799,27 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                         active_signals.append(signal)
 
                 for signal in active_signals:
+                    # 1. Scoring Confluence Gating Check
+                    feat = sim.get_features(asset)
+                    if not feat:
+                        continue
+
+                    from ta.scoring import ScoringEngine
+                    se = ScoringEngine()
+                    strategy_id = signal.get("strategy_id", "unknown")
+
+                    if strategy_id == "model":
+                        scoring_result = se.evaluate(feat, side=signal["side"], config_context=config, dynamic_weights=engine.model.weights)
+                    else:
+                        scoring_result = se.evaluate(feat, side=signal["side"], config_context=config)
+                        # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
+                        engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
+
+                    if scoring_result["decision"] == "REJECTED":
+                        continue
+
                     # [TECH-001] Collision check for backtest loop
-                    if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
+                    if not engine._asset_is_tradable(asset, signal["side"], features=feat, signal=signal):
                         continue
 
                     # Place trade via unified engine
@@ -802,7 +830,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                     res = sim.place_trade_oco(
                         asset, signal["side"], signal.get("qty", 0),
                         signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
-                        features=signal,
+                        features=feat,
                         strategy_id=signal.get("strategy_id"),
                         **kwargs
                     )
@@ -1029,7 +1057,9 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
             if step_idx % 1440 == 0:
                 dt_str = datetime.fromtimestamp(current_ts, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | Open: {len(engine.open_positions)}")
+                pr_val = engine.profit_ratio
+                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
+                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
 
             # Step A: Update prices and simulate price action for all active assets
             for asset in assets:
@@ -1063,6 +1093,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                         if asset in engine.books:
                             engine.books[asset].bids = list(sim.books[asset].bids)
                             engine.books[asset].asks = list(sim.books[asset].asks)
+                            engine.books[asset].timestamp = current_ts
 
             # Step B: Process orders ONCE for the shared simulator at this timestamp
             if sim.positions or sim.pending_orders:
@@ -1122,7 +1153,26 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                                     active_signals.append(sig)
 
                     for signal in active_signals:
-                        if not engine._asset_is_tradable(asset, signal["side"], features=None, signal=signal):
+                        # 1. Scoring Confluence Gating Check
+                        feat = sim.get_features(asset)
+                        if not feat:
+                            continue
+
+                        from ta.scoring import ScoringEngine
+                        se = ScoringEngine()
+                        strategy_id = signal.get("strategy_id", "unknown")
+
+                        if strategy_id == "model":
+                            scoring_result = se.evaluate(feat, side=signal["side"], config_context=config, dynamic_weights=engine.model.weights)
+                        else:
+                            scoring_result = se.evaluate(feat, side=signal["side"], config_context=config)
+                            # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
+                            engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
+
+                        if scoring_result["decision"] == "REJECTED":
+                            continue
+
+                        if not engine._asset_is_tradable(asset, signal["side"], features=feat, signal=signal):
                             continue
 
                         # Place trade via unified engine
@@ -1133,7 +1183,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                         sim.place_trade_oco(
                             asset, signal["side"], signal.get("qty", 0),
                             signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
-                            features=signal,
+                            features=feat,
                             strategy_id=signal.get("strategy_id"),
                             **kwargs
                         )
@@ -1331,8 +1381,13 @@ def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
 async def main():
     global START_DATE, END_DATE
 
-    # Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
+    # Truncate/initialize console-log.txt once before redirecting streams to prevent FD clobbering
     console_log_path = "docs/temp/console-log.txt"
+    os.makedirs(os.path.dirname(console_log_path), exist_ok=True)
+    with open(console_log_path, "w", encoding="utf-8") as f:
+        pass
+
+    # Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
     stdout_tee = Tee(sys.stdout, console_log_path)
     stderr_tee = Tee(sys.stderr, console_log_path)
     sys.stdout = stdout_tee
@@ -1421,7 +1476,11 @@ async def main():
 
     # 1. Acquisition of data (Using unified discovery)
     required_tfs = get_required_timeframes(chain)
-    await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
+    try:
+        await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
+    except KeyboardInterrupt:
+        log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
+        return
 
     # 2. Run backtests based on toggle
     all_results = []

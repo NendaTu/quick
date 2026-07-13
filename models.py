@@ -1,6 +1,7 @@
 import math
 import logging
 import config
+from ta.scoring import ScoringEngine
 from tools.trading_utils import calculate_position_size, calculate_tp_for_roe, calculate_kelly_size
 import ta.indicators.rsi as rsi_ind
 import ta.indicators.atr as atr_ind
@@ -112,263 +113,55 @@ class LearningModel:
         if not features:
             return None
 
-        # 1. Trend Strength Filter (Symmetric)
-        drt = features.get("drt", 0.5)
-        trend_offset = abs(drt - 0.5)
-        if getattr(cfg, 'RESTRICT_DRT', False) and trend_offset < drt_pat.STRENGTH_MIN:
-            return None
+        se = ScoringEngine()
+        buy_res = se.evaluate(features, side="buy", config_context=cfg, dynamic_weights=self.weights)
+        sell_res = se.evaluate(features, side="sell", config_context=cfg, dynamic_weights=self.weights)
 
-        imb = features.get("imbalance", 0)
-        # 2. Imbalance filter
-        if getattr(cfg, 'RESTRICT_IMBALANCE', True) and abs(imb) < flow_ind.MIN_IMBALANCE:
-            return None
+        if hasattr(self.simulator, "engine") and self.simulator.engine:
+            self.simulator.engine._write_metrics_log(symbol, "buy", "model", buy_res)
+            self.simulator.engine._write_metrics_log(symbol, "sell", "model", sell_res)
 
-        # 3. Liquidity/Volume filter
-        vol_pct = features.get("vol_pct", 0)
-        if getattr(cfg, 'RESTRICT_VOL_PCT', False) and vol_pct < flow_ind.VOL_PCT_MIN:
-            return None
+        direction = None
+        scoring_result = None
 
-        # 4. Spread filter
-        mid = features.get("mid", 0)
-        book_bid, book_ask = book.best_bid, book.best_ask
-        spread_pct = (book_ask - book_bid) / mid if mid > 0 else 0
-        if getattr(cfg, 'RESTRICT_SPREAD', False) and spread_pct > getattr(cfg, 'MAX_SPREAD_PCT', 0.002):
-            return None
+        buy_passed = (buy_res["decision"] == "TAKEN")
+        sell_passed = (sell_res["decision"] == "TAKEN")
+        report_only = getattr(cfg, 'BY_DEFAULT_REPORT_ONLY', True)
 
-        # 5. ATR filter
-        atr = features.get("atr", 0)
-        if getattr(cfg, 'RESTRICT_ATR', False) and atr < atr_ind.MIN_VOLATILITY:
-            return None
-
-        # --- SCORING WITH LEARNED WEIGHTS ---
-        score = 0
-
-        # Imbalance contribution
-        imb_score = 0
-        if imb > 0.10: imb_score = 2
-        elif imb > flow_ind.MIN_IMBALANCE: imb_score = 1
-        elif imb < -0.10: imb_score = -2
-        elif imb < -flow_ind.MIN_IMBALANCE: imb_score = -1
-
-        if getattr(cfg, 'RESTRICT_IMBALANCE', True) or not getattr(cfg, 'RESTRICT_SCORE', False):
-            score += imb_score * self.weights["imbalance"]
-            features["imb_score"] = imb_score
-
-        # RSI contribution
-        rsi = features.get("rsi", 50)
-        rsi_score = 0
-        if rsi < rsi_ind.LONG_THRESHOLD: rsi_score = 1
-        elif rsi > rsi_ind.SHORT_THRESHOLD: rsi_score = -1
-
-        if getattr(cfg, 'RESTRICT_RSI', False) or not getattr(cfg, 'RESTRICT_SCORE', False):
-            score += rsi_score * self.weights["rsi"]
-            features["rsi_score"] = rsi_score
-
-        # MACD contribution
-        macd_hist = features.get("macd_hist", 0)
-        macd_score = 0
-        if macd_hist > 0: macd_score = 1
-        elif macd_hist < 0: macd_score = -1
-
-        if getattr(cfg, 'RESTRICT_MACD', False) or not getattr(cfg, 'RESTRICT_SCORE', False):
-            score += macd_score * self.weights["macd"]
-            features["macd_score"] = macd_score
-
-        # Trend/Confluence contribution
-        asset_15m = features.get("asset_15m", 0)
-        trend_score = 0
-        trend_15m_min = getattr(cfg, 'TREND_15M_MIN', 0.0001)
-        if asset_15m > trend_15m_min: trend_score = 1
-        elif asset_15m < -trend_15m_min: trend_score = -1
-
-        if getattr(cfg, 'RESTRICT_15M_TREND', False) or not getattr(cfg, 'RESTRICT_SCORE', False):
-            score += trend_score * self.weights["trend"]
-            features["trend_score"] = trend_score
-
-        supertrend_dir = features.get("supertrend_dir", 0)
-        st_score = 0
-        if supertrend_dir == 1: st_score = 1
-        elif supertrend_dir == -1: st_score = -1
-
-        if not getattr(cfg, 'RESTRICT_SUPERTREND', False) or not getattr(cfg, 'RESTRICT_SCORE', False):
-            score += st_score * self.weights.get("trend", 1.0)
-
-        # 6. POI Confluence contribution
-        if features.get("poi_active"):
-            poi_score = features.get("poi_confluence_score", 0)
-            score += (poi_score / 20.0)
-
-        # 7. Trade Delta (Order Flow) contribution
-        trade_delta = features.get("trade_delta", 0.0)
-        if trade_delta != 0:
-            score += trade_delta * 1.5
-
-        # Imbalance Delta contribution
-        imb_delta = features.get("imb_delta", 0.0)
-        if imb_delta != 0:
-            import ta.indicators.book_delta as bd
-            score += imb_delta * bd.SCORE_WEIGHT
-
-        price_slope = features.get("mid_slope", 0.0)
-        if abs(price_slope) < 0.0001 and abs(imb_delta) > 0.05:
-            bonus = 1.0 if imb_delta > 0 else -1.0
-            score += bonus
-
-        # 8. Market Structure (BOS vs MSS) contribution
-        struct = features.get("structure_signal")
-        if struct:
-            if "bos" in struct: score += 1.5
-            elif "mss" in struct: score += 0.5
-
-
-        required_min_score = getattr(cfg, 'MIN_REQUIRED_SCORE', 1.5)
-        if not features.get("poi_active"):
-            required_min_score += 0.5
-
-        if getattr(cfg, 'RESTRICT_SCORE', False) and abs(score) < required_min_score:
-            return None
-
-        session = features.get("current_session")
-        if session == 'asia':
-            if abs(score) < (required_min_score + 1.0):
-                return None
-
-        confidence = min(1.0, (abs(score) + 1) / 10)
-        if getattr(cfg, 'RESTRICT_CONFIDENCE', False) and confidence < getattr(cfg, 'MIN_CONFIDENCE', 0.66):
-            return None
-
-        if getattr(cfg, 'RESTRICT_DIRECTIONAL_SANITY', False):
-            if score > 0 and drt < 0.5:
-                return None
-            if score < 0 and drt > 0.5:
-                return None
-
-        if score > 0: direction = "buy"
-        elif score < 0: direction = "sell"
-        elif imb > 0: direction = "buy"
-        elif imb < 0: direction = "sell"
-        else: direction = "buy" if drt >= 0.5 else "sell"
-
-        curr_price = features.get("mid", 0)
-        session = features.get("current_session")
-        if session:
-            prev_session = 'asia' if session == 'london' else 'london' if session == 'ny' else 'ny'
-            ph = features.get(f"{prev_session}_h", 0)
-            pl = features.get(f"{prev_session}_l", 0)
-
-            if ph > 0 and pl > 0:
-                dist_h = (ph / curr_price - 1) if curr_price > 0 else 0
-                dist_l = (curr_price / pl - 1) if curr_price > 0 else 0
-
-                if direction == "buy" and dist_h > 0 and dist_h < 0.01:
-                    score += 0.5
-                elif direction == "sell" and dist_l > 0 and dist_l < 0.01:
-                    score -= 0.5
-
-        gate_direction = direction
-        if getattr(cfg, 'CONTRARIAN_GLOBAL', False) and getattr(cfg, 'CONTRARIAN_FILTER', False):
-            gate_direction = "sell" if direction == "buy" else "buy"
-
-        if getattr(cfg, 'RESTRICT_STRUCTURE', False):
-            if not struct:
-                return None
-            if gate_direction == "buy" and "bullish" not in struct:
-                return None
-            if gate_direction == "sell" and "bearish" not in struct:
-                return None
-
-        if getattr(cfg, 'RESTRICT_SUPERTREND', False) and supertrend_dir != 0:
-            if gate_direction == "buy" and supertrend_dir != 1:
-                return None
-            if gate_direction == "sell" and supertrend_dir != -1:
-                return None
-
-        if getattr(cfg, 'RESTRICT_MACD', False):
-            if gate_direction == "buy" and macd_hist <= 0:
-                return None
-            if gate_direction == "sell" and macd_hist >= 0:
-                return None
-
-        if getattr(cfg, 'RESTRICT_15M_TREND', False):
-            if gate_direction == "buy" and asset_15m <= 0:
-                return None
-            if gate_direction == "sell" and asset_15m >= 0:
-                return None
-
-        is_momentum_rider = False
-        if getattr(cfg, 'RESTRICT_RSI', False):
-            upper_limit = rsi_ind.SHORT_THRESHOLD
-            lower_limit = rsi_ind.LONG_THRESHOLD
-
-            if getattr(cfg, 'USE_ADAPTIVE_RSI', False):
-                drt_f = features.get("drt_fast", 0.5)
-                if gate_direction == "buy" and drt_f < 0.6:
-                    lower_limit = rsi_ind.TIGHT_LONG
-                elif gate_direction == "sell" and drt_f > 0.4:
-                    upper_limit = rsi_ind.TIGHT_SHORT
-
-            if gate_direction == "buy":
-                if rsi > lower_limit:
-                    return None
-                adx = features.get("adx", 0.0)
-                if rsi < rsi_ind.BUY_FLOOR and adx > STRONG_TREND_THRESHOLD:
-                    is_momentum_rider = True
-            if gate_direction == "sell":
-                if rsi < upper_limit:
-                    return None
-                adx = features.get("adx", 0.0)
-                if getattr(cfg, 'RESTRICT_RSI_SHORT_CEILING', False) and rsi > rsi_ind.SHORT_CEILING and adx > STRONG_TREND_THRESHOLD:
-                    is_momentum_rider = True
-
-        if getattr(cfg, 'USE_DRT_VELOCITY', False):
-            drt_active = features.get("drt", 0.5)
-            drt_fast = features.get("drt_fast", 0.5)
-            if gate_direction == "buy" and drt_active <= drt_fast:
-                return None
-            if gate_direction == "sell" and drt_active >= drt_fast:
-                return None
-
-        if getattr(cfg, 'RESTRICT_BTC_MOMENTUM', False):
-            btc_15m = features.get("btc_15m", 0)
-            btc_mom_thresh = getattr(cfg, 'BTC_MOMENTUM_THRESHOLD', 0.001)
-            if gate_direction == "buy" and btc_15m < -btc_mom_thresh:
-                return None
-            if gate_direction == "sell" and btc_15m > btc_mom_thresh:
-                return None
-
-        if getattr(cfg, 'RESTRICT_BTC_CONFLUENCE', False):
-            btc_15m = features.get("btc_15m", 0)
-            btc_1h = features.get("btc_1h", 0)
-            btc_conf_15m_min = getattr(cfg, 'BTC_CONF_15M_MIN', 0.0002)
-            btc_conf_1h_min = getattr(cfg, 'BTC_CONF_1H_MIN', 0.0002)
-            if gate_direction == "buy":
-                if btc_15m < btc_conf_15m_min or btc_1h < btc_conf_1h_min:
-                    return None
+        if report_only:
+            abs_buy = abs(buy_res["aggregated_score"])
+            abs_sell = abs(sell_res["aggregated_score"])
+            if abs_buy >= abs_sell:
+                direction = "buy"
+                scoring_result = buy_res
             else:
-                if btc_15m > -btc_conf_15m_min or btc_1h > -btc_conf_1h_min:
-                    return None
-
-        if getattr(cfg, 'RESTRICT_VOLUME_INFLUX', True):
-            vol_influx = features.get("volume_influx", False)
-            vol_spike = features.get("volume_spike", False)
-            if not vol_influx and not vol_spike:
+                direction = "sell"
+                scoring_result = sell_res
+        else:
+            if buy_passed and sell_passed:
+                if buy_res["aggregated_score"] >= abs(sell_res["aggregated_score"]):
+                    direction = "buy"
+                    scoring_result = buy_res
+                else:
+                    direction = "sell"
+                    scoring_result = sell_res
+            elif buy_passed:
+                direction = "buy"
+                scoring_result = buy_res
+            elif sell_passed:
+                direction = "sell"
+                scoring_result = sell_res
+            else:
                 return None
 
-        if getattr(cfg, 'RESTRICT_HTF_BIAS', True):
-            from ta.patterns.trend import NEUTRAL_ALLOWS_TRADES
-            bias = features.get("bias", "neutral")
-            if bias != "neutral" or not NEUTRAL_ALLOWS_TRADES:
-                if gate_direction == "buy" and bias == "bearish":
-                    return None
-                if gate_direction == "sell" and bias == "bullish":
-                    return None
-
-        if getattr(cfg, 'RESTRICT_ASSET_CONFLUENCE', False):
-            asset_15m = features.get("asset_15m", 0)
-            if gate_direction == "buy" and asset_15m < 0:
-                return None
-            if gate_direction == "sell" and asset_15m > 0:
-                return None
+        # Determine if we are momentum riding
+        is_momentum_rider = False
+        adx = features.get("adx", 0.0)
+        rsi = features.get("rsi", 50.0)
+        if direction == "buy" and rsi < rsi_ind.BUY_FLOOR and adx > STRONG_TREND_THRESHOLD:
+            is_momentum_rider = True
+        elif direction == "sell" and rsi > rsi_ind.SHORT_CEILING and adx > STRONG_TREND_THRESHOLD:
+            is_momentum_rider = True
 
         contrarian_global = getattr(cfg, 'CONTRARIAN_GLOBAL', False)
         if contrarian_global:
