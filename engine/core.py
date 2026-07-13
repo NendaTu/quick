@@ -32,6 +32,8 @@ class Engine:
         self.be_wins = 0        # Breakeven protected wins
         self.losing_trades = 0
         self.cumulative_pnl = 0.0
+        self.gross_profit = 0.0
+        self.gross_loss = 0.0
         self.session_signals = 0 # [REPAIR-20260708] Track total signals emitted
 
         # Performance tracking
@@ -228,8 +230,18 @@ class Engine:
                 log.error(f"Maintenance error: {e}")
                 await asyncio.sleep(60)
 
-    def _write_metrics_log(self, symbol: str, side: str, strategy_id: str, features: dict):
-        import os, json
+    @property
+    def profit_ratio(self) -> float:
+        """
+        Calculates Profit Ratio (Gross Profit / Gross Loss).
+        If no losses, returns float('inf') if gross_profit > 0 else 1.0.
+        """
+        if self.gross_loss > 0:
+            return self.gross_profit / self.gross_loss
+        return float('inf') if self.gross_profit > 0 else 1.0
+
+    def _write_metrics_log(self, symbol: str, side: str, strategy_id: str, scoring_result: dict):
+        import os
         from datetime import datetime
 
         log_dir = "docs/temp"
@@ -238,19 +250,34 @@ class Engine:
         start_dt = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M%S")
         filepath = os.path.join(log_dir, f"{start_dt}.metrics-log.txt")
 
-        now = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        keys = ["rsi", "rsi_ceiling", "imbalance", "macd", "trend_15m", "supertrend", "drt", "sanity", "btc_mom", "btc_conf", "htf_bias", "structure", "vol_influx", "atr", "spread", "vol_pct", "confidence"]
 
-        sanitized = {}
-        for k, v in features.items():
-            if isinstance(v, (int, float, str, bool)) or v is None:
-                sanitized[k] = v
-            else:
-                sanitized[k] = str(v)
+        if not os.path.exists(filepath):
+            header = ["timestamp", "symbol", "target_side", "strategy_id"]
+            for k in keys:
+                header.append(f"{k}_raw")
+                header.append(f"{k}_weighted")
+            header.extend(["aggregated_score", "entry_threshold", "decision", "rejection_reason"])
+            with open(filepath, "w") as f:
+                f.write(",".join(header) + "\n")
 
-        metrics_json = json.dumps(sanitized)
-
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        row = [now_str, symbol, side, strategy_id]
+        raw_scores = scoring_result.get("raw_scores", {})
+        weighted_scores = scoring_result.get("weighted_scores", {})
+        for k in keys:
+            raw_val = raw_scores.get(k, 0.0)
+            weighted_val = weighted_scores.get(k, 0.0)
+            row.append(f"{raw_val:.4f}")
+            row.append(f"{weighted_val:.4f}")
+        row.extend([
+            f"{scoring_result.get('aggregated_score', 0.0):.4f}",
+            f"{scoring_result.get('entry_threshold', 30.0):.4f}",
+            scoring_result.get("decision", "REJECTED"),
+            scoring_result.get("reason", "").replace(",", ";")
+        ])
         with open(filepath, "a") as f:
-            f.write(f"[{now}] ENTRY {symbol} {side.upper()} | Strategy: {strategy_id} | Metrics: {metrics_json}\n")
+            f.write(",".join(row) + "\n")
 
     def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False, ts: float = None, strategy_id: str = None, features: dict = None):
         pos_key = f"{symbol}_{side}"
@@ -316,6 +343,11 @@ class Engine:
             self.equity += round_trip_pnl
 
         self.cumulative_pnl += round_trip_pnl
+
+        if round_trip_pnl > 0:
+            self.gross_profit += round_trip_pnl
+        else:
+            self.gross_loss += abs(round_trip_pnl)
 
         self.equity_history.append({
             "ts": time.time(),
@@ -484,8 +516,6 @@ class Engine:
             log.info(f"REGIMES | Classification Complete: {counts}")
 
     def _asset_is_tradable(self, symbol: str, side: str, features: dict = None, signal: dict = None) -> bool:
-        if getattr(self.config, 'BYPASS_GLOBAL_FILTERS', False):
-            return True
         if signal and signal.get("bypass_global_filters"):
             return True
 
@@ -538,7 +568,7 @@ class Engine:
         await asyncio.sleep(5)
         log.info("Trading loop started.")
 
-        engine_indicators_bypassed = getattr(self.config, 'BYPASS_GLOBAL_FILTERS', False)
+        engine_indicators_bypassed = False
         if not engine_indicators_bypassed and self.strategies:
             all_bypassed = True
             for strat in self.strategies:
@@ -840,7 +870,9 @@ class Engine:
 
         sim_ready = len([s for s in getattr(self.exchange, "ready_assets", []) if s in self.enabled_assets])
 
-        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} (Progress: {sim_ready}/{total_count}) | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled}")
+        pr_val = self.profit_ratio
+        pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
+        log.info(f"HEARTBEAT | Elapsed: {elapsed_str} | Loaded: {ready_count}/{total_count} (Progress: {sim_ready}/{total_count}) | Pursued: {pursued} | Abandoned: {abandoned} | Signaled: {signaled} | PR: {pr_str}")
 
     async def _sync_exchange_state(self):
         log.info(f"Synchronizing state with {self.mode.upper()} exchange...")

@@ -2,6 +2,11 @@ import sys
 import os
 import asyncio
 import logging
+import signal
+try:
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+except Exception:
+    pass
 import multiprocessing
 import importlib
 import time
