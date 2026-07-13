@@ -12,8 +12,8 @@ class BitgetExchange(DataAcquisitionManager, BaseExchange):
     # [TECH-001] Optimized Acquisition Defaults
     # Targeting a zero-429 baseline for long historical runs.
     # Note: Bitget historical candles has a tighter limit than standard public API.
-    DEFAULT_RPS = 10
-    DEFAULT_CONCURRENCY = 5
+    DEFAULT_RPS = 7
+    DEFAULT_CONCURRENCY = 3
 
     def __init__(self, api_key: str, secret_key: str, passphrase: str, is_demo: bool = False, config_context=None):
         # [REPAIR-20260708] Unified Rate Limiter (Cumulative across all internal clients)
