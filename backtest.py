@@ -1,31 +1,16 @@
 import sys
 import os
-import asyncio
-import math
 import signal
 try:
     signal.signal(signal.SIGINT, signal.default_int_handler)
 except Exception:
     pass
-import random
-import logging
-import time
-import importlib
-import importlib.util
-import inspect
-from datetime import datetime
-import pytz
-from typing import List, Dict, Any, Optional
 
-# Ensure project root is in path
-sys.path.append(os.getcwd())
-
-import config
-from database import Database
-from bitget_client import BitGetClient, RateLimiter
-from engine.simulation import SimulationEngine
-from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
-from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
+# Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
+console_log_path = "docs/temp/console-log.txt"
+os.makedirs(os.path.dirname(console_log_path), exist_ok=True)
+with open(console_log_path, "w", encoding="utf-8") as f:
+    pass
 
 class Tee:
     def __init__(self, original_stream, filepath):
@@ -50,6 +35,33 @@ class Tee:
             self.file.close()
         except:
             pass
+
+stdout_tee = Tee(sys.stdout, console_log_path)
+stderr_tee = Tee(sys.stderr, console_log_path)
+sys.stdout = stdout_tee
+sys.stderr = stderr_tee
+
+import asyncio
+import math
+import random
+import logging
+import time
+import importlib
+import importlib.util
+import inspect
+from datetime import datetime
+import pytz
+from typing import List, Dict, Any, Optional
+
+# Ensure project root is in path
+sys.path.append(os.getcwd())
+
+import config
+from database import Database
+from bitget_client import BitGetClient, RateLimiter
+from engine.simulation import SimulationEngine
+from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, ASSETS_COUNT, ASSET_OMITTED, MAX_START_DATE, MAX_END_DATE, TF_SECONDS
+from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl, calculate_position_size
 
 # --- Backtest Settings ---
 PROXIMITY_LIMIT = 5
@@ -1380,18 +1392,6 @@ def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
 
 async def main():
     global START_DATE, END_DATE
-
-    # Truncate/initialize console-log.txt once before redirecting streams to prevent FD clobbering
-    console_log_path = "docs/temp/console-log.txt"
-    os.makedirs(os.path.dirname(console_log_path), exist_ok=True)
-    with open(console_log_path, "w", encoding="utf-8") as f:
-        pass
-
-    # Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
-    stdout_tee = Tee(sys.stdout, console_log_path)
-    stderr_tee = Tee(sys.stderr, console_log_path)
-    sys.stdout = stdout_tee
-    sys.stderr = stderr_tee
 
     # Ensure they are set to defaults at start of main
     START_DATE = DEFAULT_START_DATE
