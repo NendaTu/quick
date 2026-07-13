@@ -714,6 +714,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         # Simulation Loop using unified engine
         for i in range(start_idx, len(full_history)):
             c = full_history[i]
+            import tools.logger
+            tools.logger.VIRTUAL_TIME = c['ts']
 
             # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
             if (i - start_idx) % 1440 == 0:
@@ -897,6 +899,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     total_margin = ss.get("total_margin", 0)
     avg_roe = (ss["pnl"] / total_margin * 100) if total_margin > 0 else 0
 
+    import tools.logger
+    tools.logger.VIRTUAL_TIME = None
+
     return {
         "asset": asset,
         "tf": tf,
@@ -1065,6 +1070,9 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     try:
         # Master timeline loop
         for step_idx, current_ts in enumerate(timeline):
+            import tools.logger
+            tools.logger.VIRTUAL_TIME = current_ts
+
             # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
             if step_idx % 1440 == 0:
                 dt_str = datetime.fromtimestamp(current_ts, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
@@ -1265,6 +1273,10 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
             "strategy_stats": engine.strategy_stats,
             "no_data": False
         })
+
+    import tools.logger
+    tools.logger.VIRTUAL_TIME = None
+
     return results
 
 def print_results(results):

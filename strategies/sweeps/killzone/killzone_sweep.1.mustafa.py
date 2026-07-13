@@ -204,6 +204,11 @@ class KillzoneSweepStrategy(JBaseStrategy):
                         sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; break
 
             if sweep_detected:
+                # Zombie Sweep Prevention
+                last_traded_sweep = self.get_state(f"{symbol}_last_traded_sweep_ts", self.simulator)
+                if last_traded_sweep is not None and sweep_ts <= float(last_traded_sweep):
+                    return None
+
                 if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", sweep_ts, "15m"):
                     self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Catching up sequence.")
 
@@ -359,6 +364,11 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
                 self.save_state(f"{symbol}_last_trigger_ts", m1[-1]['ts'], self.simulator)
+
+                # Save the active sweep timestamp to prevent Zombie Sweep repeat loops
+                active_sweep_ts = self.get_state(f"{symbol}_last_milestone_ts", self.simulator)
+                if active_sweep_ts:
+                    self.save_state(f"{symbol}_last_traded_sweep_ts", active_sweep_ts, self.simulator)
 
                 tp1_qty = qty * self.params["tp1_qty_ratio"]
                 # Ensure tp1_qty also follows asset precision and is at least one tick
