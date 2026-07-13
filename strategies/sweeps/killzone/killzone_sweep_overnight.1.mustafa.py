@@ -95,7 +95,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
         # This strategy will still calculate its INTERNAL requirements (Structure, Day Range)
         # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
-            "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
+            "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "h1_strength": 2,
             "m15_lookback": 100, # More lookback to capture day liquidity
             "m15_swing_strength": 2,

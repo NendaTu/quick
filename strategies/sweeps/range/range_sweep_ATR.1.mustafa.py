@@ -94,7 +94,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
         # This strategy will still calculate its INTERNAL requirements (ATR Expansion, BOS)
         # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
-            "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
+            "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "range_tf": "4H",
             "atr_multiplier": 5.0,
             "atr_period": 14,
