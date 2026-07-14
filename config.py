@@ -273,7 +273,7 @@ RESTRICT_LIQUIDITY = False
 # --- Unified Scoring Engine Parameters ---
 # ENTRY_SCORE_THRESHOLD: The minimum aggregated score required to permit a trade entry (scale 0 to 100).
 # Expect higher values to reduce trade frequency but increase entry quality, and lower values to increase frequency.
-ENTRY_SCORE_THRESHOLD = 30.0
+ENTRY_SCORE_THRESHOLD = 15.0
 
 # BY_DEFAULT_REPORT_ONLY: If True, all indicators write scores to logs but do not block trades.
 # Expect the system to trade freely while logging full scoring metrics for offline optimization.
