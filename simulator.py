@@ -355,10 +355,17 @@ class DataAcquisitionManager:
                     self._btc_confluence_cache[f"btc_{tf}"] = 0.0
             self._last_confluence_update = now
 
+        is_backtest = getattr(self, "is_backtest", False)
+        if not is_backtest:
+            # Slices out the active fluctuating unclosed candle for each timeframe to ensure closed-candle execution
+            sliced_ohlcv = {tf: data[:-1] for tf, data in self.ohlcv.get(symbol, {}).items() if len(data) > 0}
+        else:
+            sliced_ohlcv = self.ohlcv.get(symbol, {})
+
         from ta.features import extract_features
         features = extract_features(
             symbol=symbol,
-            ohlcv_data=self.ohlcv.get(symbol, {}),
+            ohlcv_data=sliced_ohlcv,
             book=book,
             trade_history_list=trades,
             confluence_history_data=self.confluence_history.get(symbol, {}),

@@ -191,6 +191,7 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
     # 4. Start Engine
     engine = engine_module.Engine(use_db=False)
     engine.start_time = time.time()
+    engine.exchange.is_backtest = True
 
     # 4.5 Load Strategy if specified
     if variant.strategy:
