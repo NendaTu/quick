@@ -282,7 +282,7 @@ BY_DEFAULT_REPORT_ONLY = False
 # --- Weight Multipliers for Scoring Conditions (0.0 = Disabled) ---
 # WEIGHT_RSI: This parameter sets the importance multiplier for the Relative Strength Index momentum condition during score aggregation.
 # Raising this weight increases the influence of overextended RSI conditions on the final entry decision.
-WEIGHT_RSI = 1.0
+WEIGHT_RSI = 0.2
 
 # WEIGHT_RSI_CEILING: This parameter adjusts the scoring weight for the RSI Short Ceiling trend preservation guardrail.
 # Raising it ensures the model is heavily penalized against shorting high-ADX parabolic momentum runs.
@@ -294,7 +294,7 @@ WEIGHT_IMBALANCE = 1.5
 
 # WEIGHT_MACD: This parameter controls the scoring weight for the MACD histogram slope alignment.
 # Increasing this weight ensures entry setups are more tightly aligned with short-term moving average convergence.
-WEIGHT_MACD = 1.0
+WEIGHT_MACD = 2.5
 
 # WEIGHT_TREND_15M: This parameter defines the scoring weight applied to the asset's own 15-minute price trend slope.
 # Increasing it biases the decision engine towards taking trend-following setups.
@@ -310,7 +310,7 @@ WEIGHT_SUPERTREND = 1.0
 
 # WEIGHT_DRT: This parameter sets the aggregation weight for the sophisticated Directional Trend regression slope.
 # Increasing it ensures entries are strongly filtered by linear regression trend strength.
-WEIGHT_DRT = 1.2
+WEIGHT_DRT = 2.0
 
 # WEIGHT_SANITY: This parameter defines the weight assigned to checking agreement between DRT slope and model bias.
 # Increasing it ensures counter-trend entries are penalized heavily during high-regime markets.
@@ -330,7 +330,7 @@ WEIGHT_HTF_BIAS = 1.0
 
 # WEIGHT_STRUCTURE: This parameter defines the scoring weight for market structure breaks like BOS and MSS.
 # Raising it places a high value on setups that confirm institutional structure shifts.
-WEIGHT_STRUCTURE = 1.5
+WEIGHT_STRUCTURE = 0.5
 
 # WEIGHT_VOL_INFLUX: This parameter sets the weight multiplier for the active volume influx and spike indicators.
 # Raising it penalizes setups taken during low-volume, illiquid trading sessions.

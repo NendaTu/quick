@@ -1,6 +1,6 @@
 # Bitget USDT-M Futures Trading Bot
 
-A high-performance algorithmic trading system for Bitget USDT-M Futures, featuring multi-timeframe technical analysis, institutional-grade pattern recognition, and a robust A/B testing suite.
+A high-performance algorithmic trading system for Bitget USDT-M Futures, featuring multi-timeframe technical analysis, institutional-grade pattern recognition, unified scoring confluence gates, and a robust A/B testing suite.
 
 ## Installation
 
@@ -35,6 +35,30 @@ A high-performance algorithmic trading system for Bitget USDT-M Futures, featuri
 
    MODE=paper  # or "demo" or "live"
    ```
+
+---
+
+## Core Innovations & Architecture
+
+### 1. Unified Entry Scoring Engine
+The bot features a **continuous, unified scoring engine** that replaces rigid binary `RESTRICT_*` flags.
+- **Continuous Evaluation**: Technical indicators (RSI, ADX, MACD, DRT, etc.) are converted to scores from `-100` (max bearish) to `+100` (max bullish).
+- **Weighted Average Aggregation**: Indictors are aggregated using a robust weighted average. User-configured weights (e.g., `WEIGHT_IMBALANCE = 1.5`, `WEIGHT_RSI = 1.0`) act as multipliers for the adaptive learning model's dynamic weights.
+- **Entry Gating**: Signals must exceed the `ENTRY_SCORE_THRESHOLD` (default `15.0`) to trigger an entry. Truly adverse conditions pull the aggregate score down, safely blocking trades.
+- **Quality Penalties**: Non-directional quality factors (like spread, ATR volatility, and depth volume) act as side-dependent penalties, pulling the score away from the direction's passing threshold.
+- **Logging**: All evaluations (taken and rejected) are written to `docs/temp/[timestamp].metrics-log.txt` in a standardized 42-column CSV schema.
+
+### 2. "Zombie Sweep" Prevention
+In high-frequency sweep-reversal strategies, there is a risk that after a successful trade and virtual cooldown expiration, the same historical sweep is entered repeatedly.
+- Once a sweep is traded, its timestamp is saved: `last_traded_sweep_ts = sweep_ts`.
+- Any subsequent sweeps at or before this timestamp are **strictly blocked**, eliminating duplicate "echo" entries and protecting your capital in choppy markets.
+
+### 3. High-Fidelity Backtesting & Virtual-Time Logging
+- **Time-Scale Correction**: Cooldowns and state transitions are compared using virtual candle timestamps instead of real system clock time, ensuring perfect alignment in backtesting.
+- **Virtual Time Logs**: Console output and file logs automatically prepend the active backtest virtual date next to the real system date-time:
+  `2026-07-13 09:52:32 [2026-05-01 00:00:00] backtest HEARTBEAT ...`
+
+---
 
 ## Usage
 
@@ -105,9 +129,10 @@ Press `CTRL+C` at any time to stop the comparison. The bot will print a final si
 
 - **`strategies/`**: Orchestration layer for trading logic.
 - **`engine/`**: Core execution and routing logic.
+- **`ta/`**: Stateless indicators, patterns, feature extractor, and continuous scoring engine.
 - **`compare_data/logs/`**: Contains isolated trade logs for each variant during A/B testing.
 - **`market_data.db`**: SQLite database for persistent storage (standard runs only).
-- **`docs/archived/`**: Historical project documentation.
+- **`docs/`**: Historical project documentation and focus logs.
 
 ## Metrics tracked in Comparisons
 - **PnL (USDT)**: Net profit/loss inclusive of all fees and slippage.
