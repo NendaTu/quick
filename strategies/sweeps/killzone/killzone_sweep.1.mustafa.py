@@ -444,7 +444,3 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 return {"action": "double_size"}
 
         return None
-
-    def _get_ohlcv(self, symbol: str, tf: str) -> List[dict]:
-        if not self.simulator: return []
-        return self.simulator.ohlcv.get(symbol, {}).get(tf, [])

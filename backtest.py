@@ -593,6 +593,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     sim = engine.exchange
     sim.db = db
+    sim.is_backtest = True
 
     # Load contract specs with local JSON cache to prevent network freezes [REPAIR]
     import json
@@ -966,6 +967,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
     sim = engine.exchange
     sim.db = db
+    sim.is_backtest = True
 
     # Load contract specs with local JSON cache to prevent network freezes [REPAIR]
     import json

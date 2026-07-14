@@ -64,7 +64,11 @@ class JBaseStrategy(BaseStrategy):
     def _get_ohlcv(self, symbol: str, tf: str):
         # Default implementation, to be overriden or used via self.simulator
         if hasattr(self, "simulator") and self.simulator:
-            return self.simulator.ohlcv.get(symbol, {}).get(tf, [])
+            h = self.simulator.ohlcv.get(symbol, {}).get(tf, [])
+            is_backtest = getattr(self.simulator, "is_backtest", False)
+            if not is_backtest and len(h) > 0:
+                return h[:-1]
+            return h
         return []
 
     def get_config(self, key: str, default: Any = None) -> Any:

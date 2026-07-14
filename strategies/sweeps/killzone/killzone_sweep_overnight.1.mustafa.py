@@ -371,7 +371,3 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
 
     def manage_position(self, position: Dict, market_data: Dict) -> Optional[Dict]:
         return None
-
-    def _get_ohlcv(self, symbol: str, tf: str) -> List[dict]:
-        if not self.simulator: return []
-        return self.simulator.ohlcv.get(symbol, {}).get(tf, [])
