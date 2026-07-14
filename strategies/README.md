@@ -72,35 +72,37 @@ Strategies must implement (or explicitly delegate) the following methods:
 - **Input**: Current `position` data and latest `market_data`.
 - **Output**: Can return updates (e.g., new SL/TP levels) or an exit signal. Return `None` to maintain status quo.
 
-## Advanced Features
+## Advanced Features & Architectural Guardrails
 
-### Configuration Overrides
-You can override global `config.py` values by passing a dictionary to the `JBaseStrategy` constructor.
+### 1. Unified Scoring Engine Confluence Check
+All strategies can leverage or are automatically gated by the central `ScoringEngine`.
+- Before an entry is executed, the Engine automatically extracts features and scores them continuously from `-100` (max bearish) to `+100` (max bullish).
+- If the final aggregate score fails to meet the `ENTRY_SCORE_THRESHOLD` (default `15.0`), the signal is safely rejected as a low-confluence setup.
+- If a strategy needs custom indicators or custom weights, it can pass an `overrides` dictionary to bypass specific indicator filters.
+
+### 2. "Zombie Sweep" Prevention
+In high-frequency sweep-reversal strategies, there is a risk that after a successful trade and virtual cooldown expiration, the same historical sweep is detected again and entered repeatedly ("Zombie Sweep").
+To prevent this clobbering loop:
+- **Phase 7 (Entry)**: Save the active sweep timestamp:
+  ```python
+  self.save_state(f"{symbol}_last_traded_sweep_ts", sweep_ts, self.simulator)
+  ```
+- **Phase 3 (Detection)**: Retrieve the last traded sweep time and strictly block duplicate entries on historical wicks:
+  ```python
+  last_traded_sweep = self.get_state(f"{symbol}_last_traded_sweep_ts", self.simulator)
+  if last_traded_sweep is not None and sweep_ts <= float(last_traded_sweep):
+      return None
+  ```
+
+### 3. Minimum Stop-Loss Distance (Breathing Room)
+Always de-hardcode tight minimum stops (like 0.1%) to avoid immediate stop-outs on spread wiggles. Ensure stops are dynamically protected by the central `SL_MOVE` (0.4%) configuration parameter:
 ```python
-super().__init__(..., config_overrides={"MAX_CONCURRENT_POSITIONS": 5})
+min_stop_dist = entry_price * getattr(config, "SL_MOVE", 0.004)
+if abs(entry_price - stop_price) < min_stop_dist:
+    stop_price = entry_price - (min_stop_dist if sweep_side == 'ssl' else -min_stop_dist)
 ```
 
-### Persistence & State Machines
-Use the built-in database methods to store and retrieve strategy-specific state. This is essential for complex multi-candle sequences (e.g., Sweep -> BOS1 -> FVG -> BOS2):
-- `self.save_state(key, value, simulator)`
-- `self.get_state(key, simulator)` (Note: uses `ast.literal_eval` for safe dict/list restoration)
-
-#### Required State Fields for Mustafa Suite compatibility:
-- `[symbol]_setup_state`: Tracks the trajectory (e.g., `WAITING_FOR_BOS1`, `COMPLETED`, `ABANDONED`).
-- `[symbol]_last_trigger_ts`: Timestamp of the last entry trigger (used for 1-hour cooldown resets).
-- `[symbol]_last_milestone_ts`: Timestamp of the most recent milestone (used for Historical Catch-up / Fast-Forward).
-
-### Historical Catch-up (Fast-Forward)
-Strategies should implement logic in `get_entry_signal` to scan history on startup. If a milestone (like a Sweep) is found in the last 4-8 hours, the strategy should "jump" to the appropriate advanced state instead of waiting for a new live event.
-
-### Scaling & Dynamic Management
-The `manage_position` method supports position scaling. For example, to double a position size during a retracement:
-```python
-return {"action": "double_size"}
-```
-
-### Adaptive Learning
-The `LearningModel` is available to provide weighted scoring based on collective predictive knowledge. Strategies can utilize this shared "brain" while maintaining their own unique logic filters.
+---
 
 ## Strategy Template
 
@@ -133,6 +135,7 @@ It is designed for [market conditions...] using [timeframes...].
 - May underperform during [e.g., news events, bank holidays]
 """
 from strategies.base_strategy import JBaseStrategy
+import config
 
 class MyNewStrategy(JBaseStrategy):
     def __init__(self, config_overrides=None, simulator=None):

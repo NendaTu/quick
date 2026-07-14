@@ -84,17 +84,14 @@ class RangeSweepATRStrategy(JBaseStrategy):
         self.simulator = simulator
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
-        # [TECH-001] Explicit history requirements for authenticity
-        # Values matched to technical module scan depths and catch-up range.
-        self.required_history = {"4H": 40, "1H": 120, "15m": 60, "1m": 300}
-
         # --- Strategy-Specific Parameters ---
         # [TECH-001] bypass_external_filters:
         # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
         # This strategy will still calculate its INTERNAL requirements (ATR Expansion, BOS)
         # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
-            "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
+            "execution_tf": "1m", # Timeframe used for final entry execution and low timeframe structure breaks
+            "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "range_tf": "4H",
             "atr_multiplier": 5.0,
             "atr_period": 14,
@@ -106,8 +103,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
             "fvg_depth": 50,
             "tp1_rrr": 1.5,
             "tp2_rrr": 2.5,
-            "tp1_qty_ratio": 0.5
+            "tp1_qty_ratio": 0.7,
+            "max_active_anchors": 5 # Maximum concurrent unswept anchors kept alive
         }
+
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths and catch-up range.
+        self.required_history = {"4H": 40, "1H": 120, "15m": 60, self.params["execution_tf"]: 300}
 
         if config_overrides:
             for k in self.params:
@@ -116,12 +118,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         symbol = market_data["symbol"]
+        exec_tf = self.params.get("execution_tf", "1m")
 
         range_tf = self.params["range_tf"]
         h4 = self._get_ohlcv(symbol, range_tf)
         h1 = self._get_ohlcv(symbol, "1H")
         m15 = self._get_ohlcv(symbol, "15m")
-        m1 = self._get_ohlcv(symbol, "1m")
+        m1 = self._get_ohlcv(symbol, exec_tf)
 
         if not h4 or not h1 or not m15 or not m1: return None
 
@@ -136,17 +139,17 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 self.save_state(state_key, "IDLE", self.simulator)
                 state = "IDLE"
 
-        anchor_raw = self.get_state(f"{symbol}_atr_anchor", self.simulator) # {high, low, ts}
-        anchor = None
-        if anchor_raw and anchor_raw != "None":
+        anchors_raw = self.get_state(f"{symbol}_atr_anchors", self.simulator) or []
+        anchors = []
+        if anchors_raw and anchors_raw != "None":
             try:
                 import ast
-                if isinstance(anchor_raw, str):
-                    anchor = ast.literal_eval(anchor_raw)
+                if isinstance(anchors_raw, str):
+                    anchors = ast.literal_eval(anchors_raw)
                 else:
-                    anchor = anchor_raw
+                    anchors = anchors_raw
             except:
-                anchor = None
+                anchors = []
 
         # Check for NEW expansion candle [CACHED]
         last_h4_ts = h4[-1]['ts']
@@ -161,10 +164,6 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 timeframe=range_tf
             )
             self._cache[cache_key_exp] = {'ts': last_h4_ts, 'expansion': expansion}
-
-        # DEBUG
-        # if len(h4) % 10 == 0:
-        #    self.logger.info(f"DEBUG | {symbol} {range_tf} len={len(h4)} exp={expansion.get('is_expansion')} ratio={expansion.get('ratio', 0):.2f}")
 
         if expansion['is_expansion']:
             cand = expansion['candle']
@@ -188,32 +187,53 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 if state == "WAITING_FOR_SWEEP":
                     # Expired/invalidated
                     self.save_state(state_key, "IDLE", self.simulator)
-                    self.save_state(f"{symbol}_atr_anchor", None, self.simulator)
+                    self.save_state(f"{symbol}_atr_anchors", [], self.simulator)
                     state = "IDLE"
-                    anchor = None
+                    anchors = []
             else:
-                # If sequence hasn't started (Phase 3), we always take the most recent expansion
-                if state in ["IDLE", "WAITING_FOR_SWEEP"] or anchor is None:
-                    if anchor is None or cand['ts'] != anchor['ts']:
+                if state in ["IDLE", "WAITING_FOR_SWEEP"]:
+                    # Verify if this anchor timestamp is already registered
+                    if not any(a['ts'] == cand['ts'] for a in anchors):
                         self.logger.info(f"[{symbol}] Expansion Candle detected ({expansion['ratio']:.1f}x ATR)!")
-                        self.save_state(f"{symbol}_atr_anchor", new_anchor, self.simulator)
+                        anchors.append(new_anchor)
+
+                        # Enforce maximum concurrent active anchors
+                        max_anchors = self.params.get("max_active_anchors", 5)
+                        while len(anchors) > max_anchors:
+                            anchors.pop(0) # Oldest unswept anchor is replaced
+
+                        self.save_state(f"{symbol}_atr_anchors", anchors, self.simulator)
                         self.save_state(state_key, "WAITING_FOR_SWEEP", self.simulator)
                         state = "WAITING_FOR_SWEEP"
-                        anchor = new_anchor
                         self.record_milestone("Phase 1: ATR Expansion Anchor", cand['ts'], range_tf)
 
         # Check for range expiration
         # If too many 4H candles pass since the anchor without a sweep, reset.
-        if state == "WAITING_FOR_SWEEP" and anchor:
-            if len(h4) < 2: return None
-            last_closed_h4_ts = h4[-2]['ts']
+        if state == "WAITING_FOR_SWEEP" and anchors:
+            last_closed_h4_ts = h4[-2]['ts'] if len(h4) >= 2 else 0
             # Allow 24 hours (6 candles of 4H) for a sweep to occur
-            if last_closed_h4_ts > anchor['ts'] + (6 * 14400) and not expansion['is_expansion']:
-                # Sequence never started (no sweep) within 24 hours.
+            anchors = [a for a in anchors if last_closed_h4_ts <= a['ts'] + (6 * 14400)]
+            self.save_state(f"{symbol}_atr_anchors", anchors, self.simulator)
+            if not anchors:
                 self.save_state(state_key, "IDLE", self.simulator)
-                self.save_state(f"{symbol}_atr_anchor", None, self.simulator)
                 state = "IDLE"
-                anchor = None
+
+        # Load our active setup anchor if we are in an active trajectory
+        anchor = None
+        if state in ["IDLE", "WAITING_FOR_SWEEP"]:
+            # During monitoring, we don't have an active setup anchor yet, so we default to the latest one
+            anchor = anchors[-1] if anchors else None
+        else:
+            anchor_raw = self.get_state(f"{symbol}_atr_active_setup_anchor", self.simulator)
+            if anchor_raw and anchor_raw != "None":
+                try:
+                    import ast
+                    if isinstance(anchor_raw, str):
+                        anchor = ast.literal_eval(anchor_raw)
+                    else:
+                        anchor = anchor_raw
+                except:
+                    anchor = None
 
         if not anchor: return None
 
@@ -239,17 +259,34 @@ class RangeSweepATRStrategy(JBaseStrategy):
             sweep_detected = False
             sweep_side = None
             sweep_ts = 0
+            swept_anchor = None
 
-            # Check last 6 hours (24 candles) for a sweep of the anchor
-            for c in m15[-24:]:
-                if bias == 'bullish':
-                    if c['l'] < anchor['low'] and c['c'] > anchor['low']:
-                        sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; break
-                else: # bearish
-                    if c['h'] > anchor['high'] and c['c'] < anchor['high']:
-                        sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; break
+            # Iterate through all active concurrent anchors to detect if any is swept
+            for a_cand in anchors:
+                for c in m15[-24:]:
+                    if bias == 'bullish':
+                        if c['l'] < a_cand['low'] and c['c'] > a_cand['low']:
+                            sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; swept_anchor = a_cand; break
+                    else: # bearish
+                        if c['h'] > a_cand['high'] and c['c'] < a_cand['high']:
+                            sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; swept_anchor = a_cand; break
+                if sweep_detected:
+                    break
 
             if sweep_detected:
+                # Zombie Sweep Prevention
+                last_traded_sweep = self.get_state(f"{symbol}_atr_last_traded_sweep_ts", self.simulator)
+                if last_traded_sweep is not None and sweep_ts <= float(last_traded_sweep):
+                    return None
+
+                # Lock this swept anchor as our active setup anchor
+                self.save_state(f"{symbol}_atr_active_setup_anchor", swept_anchor, self.simulator)
+                anchor = swept_anchor
+
+                # Remove the swept anchor from the concurrent monitoring pool
+                anchors = [a for a in anchors if a['ts'] != swept_anchor['ts']]
+                self.save_state(f"{symbol}_atr_anchors", anchors, self.simulator)
+
                 self.record_milestone(f"Phase 2: 1H {bias.upper()} Bias", h1[-1]['ts'], "1H")
                 self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", sweep_ts, "15m")
                 self.logger.info(f"[{symbol}] Sweep of ATR Anchor detected! Catching up sequence.")
@@ -282,7 +319,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 m1_struct = identify_structure(ctx_m1, strength=self.params["m1_strength"])
                 m1_sig = m1_struct.get('structure_signal') or ''
                 if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                    self.record_milestone("Phase 4: 1m BOS1", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 4: {exec_tf} BOS1", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
                     self.save_state(f"{symbol}_atr_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_FVG"
@@ -291,7 +328,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 5: 1m FVG Formed", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 5: {exec_tf} FVG Formed", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
                     self.save_state(f"{symbol}_atr_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_RETEST"
@@ -300,7 +337,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 6: 1m FVG Retest", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 6: {exec_tf} FVG Retest", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                     self.save_state(f"{symbol}_atr_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_BOS2"
@@ -331,8 +368,8 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     fvg_extreme = fvg_data.get('nearest_fvg_top') or (entry_price * 1.005)
                     stop_price = fvg_extreme + tick_size
 
-                # Enforce minimum stop-loss distance guard (at least 0.1% of entry price to avoid zero-width fee traps)
-                min_stop_dist = entry_price * 0.001
+                # Enforce minimum stop-loss distance guard (at least SL_MOVE to avoid zero-width fee traps)
+                min_stop_dist = entry_price * getattr(config, "SL_MOVE", 0.004)
                 if abs(entry_price - stop_price) < min_stop_dist:
                     if sweep_side == 'ssl':
                         stop_price = entry_price - min_stop_dist
@@ -392,11 +429,16 @@ class RangeSweepATRStrategy(JBaseStrategy):
                         if (qty * entry_price) / float(spec.get('maxLever', 20)) > equity * 0.95:
                             return None
 
-                if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
+                if self.record_milestone(f"Phase 7: {exec_tf} BOS2 (Entry Trigger)", m1[-1]['ts'], exec_tf):
                     self.logger.info(f"[{symbol}] {sweep_side.upper()} Entry Triggered!")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
                 self.save_state(f"{symbol}_atr_last_trigger_ts", m1[-1]['ts'], self.simulator)
+
+                # Save the active sweep timestamp to prevent Zombie Sweep repeat loops
+                active_sweep_ts = self.get_state(f"{symbol}_atr_last_milestone_ts", self.simulator)
+                if active_sweep_ts:
+                    self.save_state(f"{symbol}_atr_last_traded_sweep_ts", active_sweep_ts, self.simulator)
 
                 tp1_qty = round(qty * self.params["tp1_qty_ratio"], qty_place)
 
@@ -425,7 +467,8 @@ class RangeSweepATRStrategy(JBaseStrategy):
         Implements TP1 50% exit and Double-Down logic.
         """
         symbol = market_data["symbol"]
-        m1 = self._get_ohlcv(symbol, "1m")
+        exec_tf = self.params.get("execution_tf", "1m")
+        m1 = self._get_ohlcv(symbol, exec_tf)
         if not m1: return None
 
         entry_price = position['entry']
@@ -452,7 +495,3 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 return {"action": "double_size"}
 
         return None
-
-    def _get_ohlcv(self, symbol: str, tf: str) -> List[dict]:
-        if not self.simulator: return []
-        return self.simulator.ohlcv.get(symbol, {}).get(tf, [])

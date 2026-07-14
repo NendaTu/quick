@@ -85,17 +85,14 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
         self.simulator = simulator
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
-        # [TECH-001] Explicit history requirements for authenticity
-        # Values matched to technical module scan depths and catch-up range.
-        self.required_history = {"1H": 120, "15m": 120, "1m": 300}
-
         # --- Strategy-Specific Parameters ---
         # [TECH-001] bypass_external_filters:
         # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
         # This strategy will still calculate its INTERNAL requirements (Structure, Day Range)
         # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
-            "bypass_external_filters": True, # [TECH-001] Toggle for Layer 1 safety checks
+            "execution_tf": "1m", # Timeframe used for final entry execution and low timeframe structure breaks
+            "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "h1_strength": 2,
             "m15_lookback": 100, # More lookback to capture day liquidity
             "m15_swing_strength": 2,
@@ -103,8 +100,13 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             "fvg_depth": 50,
             "tp1_rrr": 1.2, # Lower targets for overnight
             "tp2_rrr": 2.0,
-            "tp1_qty_ratio": 0.5
+            "tp1_qty_ratio": 0.7,
+            "max_active_anchors": 5 # Maximum concurrent unswept anchors kept alive
         }
+
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths and catch-up range.
+        self.required_history = {"1H": 120, "15m": 120, self.params["execution_tf"]: 300}
 
         if config_overrides:
             for k in self.params:
@@ -113,10 +115,11 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         symbol = market_data["symbol"]
+        exec_tf = self.params.get("execution_tf", "1m")
 
         h1 = self._get_ohlcv(symbol, "1H")
         m15 = self._get_ohlcv(symbol, "15m")
-        m1 = self._get_ohlcv(symbol, "1m")
+        m1 = self._get_ohlcv(symbol, exec_tf)
 
         if not h1 or not m15 or not m1: return None
 
@@ -150,6 +153,39 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
         state_key = f"{symbol}_ov_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
+        # Manage dynamic list of up to 5 concurrent preceding day range anchors
+        day_ranges_raw = self.get_state(f"{symbol}_day_ranges", self.simulator) or []
+        day_ranges = []
+        if day_ranges_raw and day_ranges_raw != "None":
+            try:
+                import ast
+                if isinstance(day_ranges_raw, str):
+                    day_ranges = ast.literal_eval(day_ranges_raw)
+                else:
+                    day_ranges = day_ranges_raw
+            except:
+                day_ranges = []
+
+        if day_range and not any(r['ts'] == day_range['ts'] for r in day_ranges):
+            day_ranges.append(day_range)
+            max_anchors = self.params.get("max_active_anchors", 5)
+            while len(day_ranges) > max_anchors:
+                day_ranges.pop(0) # Remove oldest unswept day range
+            self.save_state(f"{symbol}_day_ranges", day_ranges, self.simulator)
+
+        # Load active setup range if running in a trajectory
+        if state not in ["IDLE", "COMPLETED"]:
+            day_range_raw = self.get_state(f"{symbol}_active_setup_day_range", self.simulator)
+            if day_range_raw and day_range_raw != "None":
+                try:
+                    import ast
+                    if isinstance(day_range_raw, str):
+                        day_range = ast.literal_eval(day_range_raw)
+                    else:
+                        day_range = day_range_raw
+                except:
+                    pass
+
         # [REPAIR-20260708] Cooldown reset to allow multiple trades per session
         if state == "COMPLETED":
             last_trigger = self.get_state(f"{symbol}_ov_last_trigger_ts", self.simulator)
@@ -181,18 +217,40 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             sweep_detected = False
             sweep_side = None
             sweep_ts = 0
+            swept_range = None
 
-            # Check for sweep of day range extremes during this overnight session
-            # (Last 8 hours = 32 15m candles)
-            for c in m15[-32:]:
-                if bias == 'bullish':
-                    if c['l'] < day_range['core_low'] and c['c'] > day_range['core_low']:
-                        sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; break
-                else: # bearish
-                    if c['h'] > day_range['core_high'] and c['c'] < day_range['core_high']:
-                        sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; break
+            # Iterate through all active concurrent day range anchors
+            for r_cand in day_ranges:
+                for c in m15[-32:]:
+                    if bias == 'bullish':
+                        if c['l'] < r_cand['core_low'] and c['c'] > r_cand['core_low']:
+                            sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; swept_range = r_cand; break
+                    else: # bearish
+                        if c['h'] > r_cand['core_high'] and c['c'] < r_cand['core_high']:
+                            sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; swept_range = r_cand; break
+                if sweep_detected:
+                    break
 
             if sweep_detected:
+                # Zombie Sweep Prevention
+                last_traded_sweep = self.get_state(f"{symbol}_ov_last_traded_sweep_ts", self.simulator)
+                if last_traded_sweep is not None and sweep_ts <= float(last_traded_sweep):
+                    return None
+
+                # Lock this swept range as our active setup day range
+                self.save_state(f"{symbol}_active_setup_day_range", swept_range, self.simulator)
+                day_range = swept_range
+
+                # Remove the swept range from the concurrent monitoring queue
+                day_ranges = [r for r in day_ranges if r['ts'] != swept_range['ts']]
+                self.save_state(f"{symbol}_day_ranges", day_ranges, self.simulator)
+
+            if sweep_detected:
+                # Zombie Sweep Prevention
+                last_traded_sweep = self.get_state(f"{symbol}_ov_last_traded_sweep_ts", self.simulator)
+                if last_traded_sweep is not None and sweep_ts <= float(last_traded_sweep):
+                    return None
+
                 if self.record_milestone(f"Phase 3: Day {sweep_side.upper()} Sweep", sweep_ts, "15m"):
                     self.logger.info(f"[{symbol}] Overnight Sweep of Day {sweep_side.upper()} detected! Catching up sequence.")
 
@@ -224,7 +282,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                 m1_struct = identify_structure(ctx_m1, strength=self.params["m1_strength"])
                 m1_sig = m1_struct.get('structure_signal') or ''
                 if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                    self.record_milestone("Phase 4: 1m BOS1", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 4: {exec_tf} BOS1", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
                     self.save_state(f"{symbol}_ov_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_FVG"
@@ -233,7 +291,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 5: 1m FVG Formed", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 5: {exec_tf} FVG Formed", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
                     self.save_state(f"{symbol}_ov_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_RETEST"
@@ -242,7 +300,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 6: 1m FVG Retest", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 6: {exec_tf} FVG Retest", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                     self.save_state(f"{symbol}_ov_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_BOS2"
@@ -274,8 +332,8 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                     fvg_extreme = fvg_data.get('nearest_fvg_top') or (entry_price * 1.005)
                     stop_price = fvg_extreme + tick_size
 
-                # Enforce minimum stop-loss distance guard (at least 0.1% of entry price to avoid zero-width fee traps)
-                min_stop_dist = entry_price * 0.001
+                # Enforce minimum stop-loss distance guard (at least SL_MOVE to avoid zero-width fee traps)
+                min_stop_dist = entry_price * getattr(config, "SL_MOVE", 0.004)
                 if abs(entry_price - stop_price) < min_stop_dist:
                     if sweep_side == 'ssl':
                         stop_price = entry_price - min_stop_dist
@@ -328,11 +386,16 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                         if (qty * entry_price) / float(spec.get('maxLever', 20)) > equity * 0.95:
                             return None
 
-                if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
+                if self.record_milestone(f"Phase 7: {exec_tf} BOS2 (Entry Trigger)", m1[-1]['ts'], exec_tf):
                     self.logger.info(f"[{symbol}] {sweep_side.upper()} Triggered! Target: Day Liquidity. Hub: {hub}")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
                 self.save_state(f"{symbol}_ov_last_trigger_ts", m1[-1]['ts'], self.simulator)
+
+                # Save the active sweep timestamp to prevent Zombie Sweep repeat loops
+                active_sweep_ts = self.get_state(f"{symbol}_ov_last_milestone_ts", self.simulator)
+                if active_sweep_ts:
+                    self.save_state(f"{symbol}_ov_last_traded_sweep_ts", active_sweep_ts, self.simulator)
 
                 tp1_qty = round(qty * self.params["tp1_qty_ratio"], qty_place)
 
@@ -359,7 +422,3 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
 
     def manage_position(self, position: Dict, market_data: Dict) -> Optional[Dict]:
         return None
-
-    def _get_ohlcv(self, symbol: str, tf: str) -> List[dict]:
-        if not self.simulator: return []
-        return self.simulator.ohlcv.get(symbol, {}).get(tf, [])

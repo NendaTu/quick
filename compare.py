@@ -2,6 +2,11 @@ import sys
 import os
 import asyncio
 import logging
+import signal
+try:
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+except Exception:
+    pass
 import multiprocessing
 import importlib
 import time
@@ -186,6 +191,7 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
     # 4. Start Engine
     engine = engine_module.Engine(use_db=False)
     engine.start_time = time.time()
+    engine.exchange.is_backtest = True
 
     # 4.5 Load Strategy if specified
     if variant.strategy:

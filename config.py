@@ -238,25 +238,9 @@ USE_ATR_CAPPED_TP = False
 # When enabled, expect position sizing models to automatically half your risk when ATR exceeds thresholds.
 USE_VOL_ADJUSTED_RISK = False
 
-# RESTRICT_BTC_MOMENTUM: Enables gating trades based on Bitcoin's 15m momentum direction.
-# When enabled, expect longs to be blocked if Bitcoin's 15m momentum is negative.
-RESTRICT_BTC_MOMENTUM = False
-
 # BTC_MOMENTUM_THRESHOLD: The minimum momentum rate required to pass the Bitcoin momentum gate.
 # Expect trades to be blocked unless Bitcoin's rate of change exceeds this threshold.
 BTC_MOMENTUM_THRESHOLD = 0.001
-
-# BYPASS_GLOBAL_FILTERS: Toggles bypassing all Layer 1 safety checks (Correlations, Cooldowns, Regimes).
-# When enabled, expect entries to bypass core checks and rely solely on strategy-internal triggers.
-BYPASS_GLOBAL_FILTERS = False
-
-# RESTRICT_BTC_CONFLUENCE: Enables gating trades based on Bitcoin's multi-timeframe trend alignment.
-# When enabled, expect trades to be blocked unless aligned with Bitcoin's HTF direction.
-RESTRICT_BTC_CONFLUENCE = False
-
-# RESTRICT_ASSET_CONFLUENCE: Enables gating trades based on the asset's own 15m trend alignment.
-# When enabled, expect longs to be blocked if the asset's 15m trend is bearish.
-RESTRICT_ASSET_CONFLUENCE = False
 
 # BTC_CONF_15M_MIN: The minimum 15m trend rate required to pass the Bitcoin confluence gate.
 # Expect longs to be blocked unless Bitcoin's 15m trend rate exceeds this positive value.
@@ -270,85 +254,103 @@ BTC_CONF_1H_MIN = 0.0002
 # Expect trend scoring models to ignore weak movement below this threshold.
 TREND_15M_MIN = 0.0001
 
-# RESTRICT_DRT: Enables gating trades based on DRT trend strength floors.
-# When enabled, expect trades to be blocked unless DRT confirms a strong active trend.
-RESTRICT_DRT = False
-
-# RESTRICT_CONFIDENCE: Enables gating trades based on minimum model prediction confidence.
-# When enabled, expect signals to be discarded unless the confidence exceeds your minimum.
-RESTRICT_CONFIDENCE = False
-
-# RESTRICT_DIRECTIONAL_SANITY: Enables checking that model scoring matches the DRT trend direction.
-# When enabled, expect longs to be blocked if DRT indicates a bearish premium.
-RESTRICT_DIRECTIONAL_SANITY = False
-
-# RESTRICT_RSI: Enables gating trades based on standard RSI overbought/oversold boundaries.
-# When enabled, expect trades to be blocked unless RSI indicates an overextended extreme.
-RESTRICT_RSI = False
-
-# RESTRICT_RSI_SHORT_CEILING: Toggles checking the ADX trend strength when shorting at extreme RSI.
-# When enabled, expect shorts to be blocked if RSI is extremely high and trend momentum is strong.
-RESTRICT_RSI_SHORT_CEILING = False
-
-# RESTRICT_MACD: Enables gating trades based on the MACD histogram direction.
-# When enabled, expect longs to be blocked if the MACD histogram is negative.
-RESTRICT_MACD = False
-
-# RESTRICT_15M_TREND: Enables gating trades based on the 15m trend direction.
-# When enabled, expect longs to be blocked if the 15m trend is negative.
-RESTRICT_15M_TREND = False
-
-# RESTRICT_SUPERTREND: Enables gating trades based on the Supertrend direction.
-# When enabled, expect longs to be blocked if Supertrend is bearish.
-RESTRICT_SUPERTREND = False
-
-# RESTRICT_ATR: Enables gating trades based on a minimum absolute ATR volatility floor.
-# When enabled, expect trades to be blocked on stagnant assets with zero volatility.
-RESTRICT_ATR = False
-
-# RESTRICT_VOL_PCT: Enables gating trades based on a minimum relative order book volume.
-# When enabled, expect trades to be blocked if liquidity is too low for sizing.
-RESTRICT_VOL_PCT = False
-
-# RESTRICT_SPREAD: Enables gating trades based on a maximum allowed order book spread.
-# When enabled, expect trades to be blocked if the bid-ask spread is wider than your limit.
-RESTRICT_SPREAD = False
-
-# RESTRICT_LIQUIDITY: Enables gating trades based on active bids/asks volume in the order book.
-# When enabled, expect trades to be blocked if there are no active limits on either side.
-RESTRICT_LIQUIDITY = False
-
-# RESTRICT_SLIPPAGE: Enables checking actual entry execution slippage against your maximum limit.
-# When enabled, expect entry fills to be rejected if they slip too far from your target limit.
-RESTRICT_SLIPPAGE = False
-
-# RESTRICT_SCORE: Enables gating trades based on a minimum absolute model prediction score.
-# When enabled, expect signals to be discarded unless the scoring exceeds your required threshold.
-RESTRICT_SCORE = False
-
 # MIN_CONFIDENCE: The minimum confidence required to pass the confidence gate (0.66 = 66%).
 # Expect signals to be discarded if their calculated prediction confidence falls below this floor.
 MIN_CONFIDENCE = 0.66
-
-# RESTRICT_IMBALANCE: Enables gating trades based on minimum order book bid/ask volume imbalance.
-# When enabled, expect trades to be blocked unless order book volume points strongly in your trade direction.
-RESTRICT_IMBALANCE = False
-
-# RESTRICT_HTF_BIAS: Enables gating trades based on Higher Timeframe trend bias alignment.
-# When enabled, expect longs to be blocked if the HTF trend bias is bearish.
-RESTRICT_HTF_BIAS = False
-
-# RESTRICT_VOLUME_INFLUX: Enables gating trades based on active volume influx or spikes.
-# When enabled, expect trades to be blocked unless there is active volume expansion.
-RESTRICT_VOLUME_INFLUX = False
 
 # RESTRICT_MIN_VAL: Enables checking that the total trade value exceeds the exchange minimum.
 # When enabled, expect signals to be rejected if the calculated contract size is below exchange limits.
 RESTRICT_MIN_VAL = True
 
-# RESTRICT_STRUCTURE: Enables gating trades based on market structure break alignment (BOS/MSS).
-# When enabled, expect trades to be blocked unless a clear structure break is identified.
-RESTRICT_STRUCTURE = False
+# RESTRICT_SLIPPAGE: Enables checking actual entry execution slippage against your maximum limit.
+# When enabled, expect entry fills to be rejected if they slip too far from your target limit.
+RESTRICT_SLIPPAGE = False
+
+# RESTRICT_LIQUIDITY: Enables gating trades based on active bids/asks volume in the order book.
+# When enabled, expect trades to be blocked if there are no active limits on either side.
+RESTRICT_LIQUIDITY = False
+
+# --- Unified Scoring Engine Parameters ---
+# ENTRY_SCORE_THRESHOLD: The minimum aggregated score required to permit a trade entry (scale 0 to 100).
+# Expect higher values to reduce trade frequency but increase entry quality, and lower values to increase frequency.
+ENTRY_SCORE_THRESHOLD = 15.0
+
+# BY_DEFAULT_REPORT_ONLY: If True, all indicators write scores to logs but do not block trades.
+# Expect the system to trade freely while logging full scoring metrics for offline optimization.
+BY_DEFAULT_REPORT_ONLY = False
+
+# --- Weight Multipliers for Scoring Conditions (0.0 = Disabled) ---
+# WEIGHT_RSI: This parameter sets the importance multiplier for the Relative Strength Index momentum condition during score aggregation.
+# Raising this weight increases the influence of overextended RSI conditions on the final entry decision.
+WEIGHT_RSI = 0.2
+
+# WEIGHT_RSI_CEILING: This parameter adjusts the scoring weight for the RSI Short Ceiling trend preservation guardrail.
+# Raising it ensures the model is heavily penalized against shorting high-ADX parabolic momentum runs.
+WEIGHT_RSI_CEILING = 1.2
+
+# WEIGHT_IMBALANCE: This parameter configures the score weight assigned to the limit order book volume imbalance.
+# Raising it makes the final scoring highly sensitive to asymmetric buyer or seller queue depth.
+WEIGHT_IMBALANCE = 1.5
+
+# WEIGHT_MACD: This parameter controls the scoring weight for the MACD histogram slope alignment.
+# Increasing this weight ensures entry setups are more tightly aligned with short-term moving average convergence.
+WEIGHT_MACD = 2.5
+
+# WEIGHT_TREND_15M: This parameter defines the scoring weight applied to the asset's own 15-minute price trend slope.
+# Increasing it biases the decision engine towards taking trend-following setups.
+WEIGHT_TREND_15M = 3.0
+
+# WEIGHT_ASSET_CONF: This parameter represents the weight for the redundant 15-minute asset confluence check.
+# Setting this to zero avoids double-counting since the 15-minute asset trend is already represented.
+WEIGHT_ASSET_CONF = 0.0
+
+# WEIGHT_SUPERTREND: This parameter adjusts the scoring weight for the Supertrend direction alignment.
+# Increasing this weight places more emphasis on entering trades in agreement with the active Supertrend flip.
+WEIGHT_SUPERTREND = 1.0
+
+# WEIGHT_DRT: This parameter sets the aggregation weight for the sophisticated Directional Trend regression slope.
+# Increasing it ensures entries are strongly filtered by linear regression trend strength.
+WEIGHT_DRT = 2.0
+
+# WEIGHT_SANITY: This parameter defines the weight assigned to checking agreement between DRT slope and model bias.
+# Increasing it ensures counter-trend entries are penalized heavily during high-regime markets.
+WEIGHT_SANITY = 3.5
+
+# WEIGHT_BTC_MOM: This parameter configures the score contribution weight from Bitcoin's 15-minute momentum slope.
+# Adjusting this higher makes all altcoin setups highly dependent on BTC momentum direction.
+WEIGHT_BTC_MOM = 1.5
+
+# WEIGHT_BTC_CONF: This parameter sets the weight of Bitcoin's multi-timeframe trend alignment score.
+# Increasing it restricts entries unless BTC is trending strongly in the same direction.
+WEIGHT_BTC_CONF = 1.5
+
+# WEIGHT_HTF_BIAS: This parameter adjusts the weight applied to the higher timeframe macro bias indicator.
+# Raising it ensures the system trades in strict harmony with 4H and 1D price action.
+WEIGHT_HTF_BIAS = 3.5
+
+# WEIGHT_STRUCTURE: This parameter defines the scoring weight for market structure breaks like BOS and MSS.
+# Raising it places a high value on setups that confirm institutional structure shifts.
+WEIGHT_STRUCTURE = 0.5
+
+# WEIGHT_VOL_INFLUX: This parameter sets the weight multiplier for the active volume influx and spike indicators.
+# Raising it penalizes setups taken during low-volume, illiquid trading sessions.
+WEIGHT_VOL_INFLUX = 1.0
+
+# WEIGHT_ATR: This parameter configures the scoring weight for the absolute ATR volatility floor check.
+# Increasing it reduces scores when asset volatility is too low to cover trading fees.
+WEIGHT_ATR = 1.0
+
+# WEIGHT_SPREAD: This parameter adjusts the importance of the order book bid-ask spread check.
+# Raising this weight ensures signals taken during high-slippage wide spreads are severely penalized.
+WEIGHT_SPREAD = 1.0
+
+# WEIGHT_VOL_PCT: This parameter sets the scoring weight for the relative order book volume capacity limit.
+# Increasing it ensures setups are scaled down or penalized when order book depth is thin.
+WEIGHT_VOL_PCT = 1.0
+
+# WEIGHT_CONFIDENCE: This parameter controls the weight multiplier applied to the learning model's prediction confidence.
+# Raising it ensures the decision engine heavily favors high-probability setups.
+WEIGHT_CONFIDENCE = 1.0
 
 
 # --- Logging & UI ---

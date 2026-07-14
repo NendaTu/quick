@@ -1,21 +1,42 @@
 import logging
 import sys
-from typing import Optional
+from datetime import datetime
+import pytz
+
+# VIRTUAL_TIME: Tracked globally during backtests and simulation to prefix console logs with virtual dates.
+VIRTUAL_TIME = None
+
+class VirtualTimeFormatter(logging.Formatter):
+    """
+    Custom logging formatter that dynamically appends the active backtest virtual time
+    as [YYYY-MM-DD HH:MM:SS] next to the real-time system clock prefix.
+    """
+    def format(self, record):
+        global VIRTUAL_TIME
+        if VIRTUAL_TIME is not None:
+            # Convert virtual timestamp to readable UTC date-time
+            dt_str = datetime.fromtimestamp(VIRTUAL_TIME, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            orig_asctime = self.formatTime(record, self.datefmt)
+            prefix = f"{orig_asctime} [{dt_str}]"
+            formatted_msg = super().format(record)
+            if formatted_msg.startswith(orig_asctime):
+                return prefix + formatted_msg[len(orig_asctime):]
+            return f"[{dt_str}] " + formatted_msg
+        return super().format(record)
 
 def setup_logging(db=None, level=logging.INFO):
     """
     [TECH-001] Centralized logging setup to prevent global escalation
     and duplicate handlers across main, backtest, and compare.
     """
-    # Configure root logger
     root = logging.getLogger()
     root.setLevel(logging.DEBUG) # Always capture DEBUG for potentially the DB
 
-    # Remove existing handlers to prevent duplicates
     for handler in root.handlers[:]:
         root.removeHandler(handler)
 
-    formatter = logging.Formatter("%(asctime)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    # Use our custom VirtualTimeFormatter
+    formatter = VirtualTimeFormatter("%(asctime)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
@@ -29,7 +50,6 @@ def setup_logging(db=None, level=logging.INFO):
     logging.getLogger("scalper.database").setLevel(logging.INFO)
     logging.getLogger("scalper.engine").setLevel(logging.INFO)
 
-    # DB handler if provided
     if db:
         from main import DBLogHandler
         db_handler = DBLogHandler(db)
