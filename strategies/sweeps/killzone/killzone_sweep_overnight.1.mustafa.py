@@ -100,7 +100,8 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             "fvg_depth": 50,
             "tp1_rrr": 1.2, # Lower targets for overnight
             "tp2_rrr": 2.0,
-            "tp1_qty_ratio": 0.7
+            "tp1_qty_ratio": 0.7,
+            "max_active_anchors": 5 # Maximum concurrent unswept anchors kept alive
         }
 
         # [TECH-001] Explicit history requirements for authenticity
@@ -152,6 +153,39 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
         state_key = f"{symbol}_ov_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
+        # Manage dynamic list of up to 5 concurrent preceding day range anchors
+        day_ranges_raw = self.get_state(f"{symbol}_day_ranges", self.simulator) or []
+        day_ranges = []
+        if day_ranges_raw and day_ranges_raw != "None":
+            try:
+                import ast
+                if isinstance(day_ranges_raw, str):
+                    day_ranges = ast.literal_eval(day_ranges_raw)
+                else:
+                    day_ranges = day_ranges_raw
+            except:
+                day_ranges = []
+
+        if day_range and not any(r['ts'] == day_range['ts'] for r in day_ranges):
+            day_ranges.append(day_range)
+            max_anchors = self.params.get("max_active_anchors", 5)
+            while len(day_ranges) > max_anchors:
+                day_ranges.pop(0) # Remove oldest unswept day range
+            self.save_state(f"{symbol}_day_ranges", day_ranges, self.simulator)
+
+        # Load active setup range if running in a trajectory
+        if state not in ["IDLE", "COMPLETED"]:
+            day_range_raw = self.get_state(f"{symbol}_active_setup_day_range", self.simulator)
+            if day_range_raw and day_range_raw != "None":
+                try:
+                    import ast
+                    if isinstance(day_range_raw, str):
+                        day_range = ast.literal_eval(day_range_raw)
+                    else:
+                        day_range = day_range_raw
+                except:
+                    pass
+
         # [REPAIR-20260708] Cooldown reset to allow multiple trades per session
         if state == "COMPLETED":
             last_trigger = self.get_state(f"{symbol}_ov_last_trigger_ts", self.simulator)
@@ -183,16 +217,33 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             sweep_detected = False
             sweep_side = None
             sweep_ts = 0
+            swept_range = None
 
-            # Check for sweep of day range extremes during this overnight session
-            # (Last 8 hours = 32 15m candles)
-            for c in m15[-32:]:
-                if bias == 'bullish':
-                    if c['l'] < day_range['core_low'] and c['c'] > day_range['core_low']:
-                        sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; break
-                else: # bearish
-                    if c['h'] > day_range['core_high'] and c['c'] < day_range['core_high']:
-                        sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; break
+            # Iterate through all active concurrent day range anchors
+            for r_cand in day_ranges:
+                for c in m15[-32:]:
+                    if bias == 'bullish':
+                        if c['l'] < r_cand['core_low'] and c['c'] > r_cand['core_low']:
+                            sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; swept_range = r_cand; break
+                    else: # bearish
+                        if c['h'] > r_cand['core_high'] and c['c'] < r_cand['core_high']:
+                            sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; swept_range = r_cand; break
+                if sweep_detected:
+                    break
+
+            if sweep_detected:
+                # Zombie Sweep Prevention
+                last_traded_sweep = self.get_state(f"{symbol}_ov_last_traded_sweep_ts", self.simulator)
+                if last_traded_sweep is not None and sweep_ts <= float(last_traded_sweep):
+                    return None
+
+                # Lock this swept range as our active setup day range
+                self.save_state(f"{symbol}_active_setup_day_range", swept_range, self.simulator)
+                day_range = swept_range
+
+                # Remove the swept range from the concurrent monitoring queue
+                day_ranges = [r for r in day_ranges if r['ts'] != swept_range['ts']]
+                self.save_state(f"{symbol}_day_ranges", day_ranges, self.simulator)
 
             if sweep_detected:
                 # Zombie Sweep Prevention

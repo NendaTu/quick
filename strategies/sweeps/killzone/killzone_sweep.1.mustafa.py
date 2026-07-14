@@ -106,7 +106,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
             "tp1_rrr": 1.5,
             "tp2_rrr": 2.5,
             "tp1_qty_ratio": 0.7,
-            "prior_close_hour": 16
+            "prior_close_hour": 16,
+            "max_active_anchors": 5 # Maximum concurrent unswept anchors kept alive
         }
 
         # [TECH-001] Explicit history requirements for authenticity
@@ -164,6 +165,39 @@ class KillzoneSweepStrategy(JBaseStrategy):
         state_key = f"{symbol}_setup_state"
         state = self.get_state(state_key, self.simulator) or "IDLE"
 
+        # Manage dynamic list of up to 5 concurrent overnight range anchors
+        ov_ranges_raw = self.get_state(f"{symbol}_ov_ranges", self.simulator) or []
+        ov_ranges = []
+        if ov_ranges_raw and ov_ranges_raw != "None":
+            try:
+                import ast
+                if isinstance(ov_ranges_raw, str):
+                    ov_ranges = ast.literal_eval(ov_ranges_raw)
+                else:
+                    ov_ranges = ov_ranges_raw
+            except:
+                ov_ranges = []
+
+        if ov_range and not any(r['ts'] == ov_range['ts'] for r in ov_ranges):
+            ov_ranges.append(ov_range)
+            max_anchors = self.params.get("max_active_anchors", 5)
+            while len(ov_ranges) > max_anchors:
+                ov_ranges.pop(0) # Remove oldest unswept overnight range
+            self.save_state(f"{symbol}_ov_ranges", ov_ranges, self.simulator)
+
+        # Load active setup range if running in a trajectory
+        if state not in ["IDLE", "COMPLETED"]:
+            ov_range_raw = self.get_state(f"{symbol}_active_setup_ov_range", self.simulator)
+            if ov_range_raw and ov_range_raw != "None":
+                try:
+                    import ast
+                    if isinstance(ov_range_raw, str):
+                        ov_range = ast.literal_eval(ov_range_raw)
+                    else:
+                        ov_range = ov_range_raw
+                except:
+                    pass
+
         # [REPAIR-20260708] Cooldown reset to allow multiple trades per session
         if state == "COMPLETED":
             last_trigger = self.get_state(f"{symbol}_last_trigger_ts", self.simulator)
@@ -196,20 +230,33 @@ class KillzoneSweepStrategy(JBaseStrategy):
             sweep_detected = False
             sweep_side = None
             sweep_ts = 0
+            swept_range = None
 
-            for c in m15[-16:]:
-                if bias == 'bullish':
-                    if c['l'] < ov_range['overnight_low'] and c['c'] > ov_range['overnight_low']:
-                        sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; break
-                else: # bearish
-                    if c['h'] > ov_range['overnight_high'] and c['c'] < ov_range['overnight_high']:
-                        sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; break
+            # Iterate through all active concurrent overnight range anchors
+            for r_cand in ov_ranges:
+                for c in m15[-16:]:
+                    if bias == 'bullish':
+                        if c['l'] < r_cand['overnight_low'] and c['c'] > r_cand['overnight_low']:
+                            sweep_detected = True; sweep_side = 'ssl'; sweep_ts = c['ts']; swept_range = r_cand; break
+                    else: # bearish
+                        if c['h'] > r_cand['overnight_high'] and c['c'] < r_cand['overnight_high']:
+                            sweep_detected = True; sweep_side = 'bsl'; sweep_ts = c['ts']; swept_range = r_cand; break
+                if sweep_detected:
+                    break
 
             if sweep_detected:
                 # Zombie Sweep Prevention
                 last_traded_sweep = self.get_state(f"{symbol}_last_traded_sweep_ts", self.simulator)
                 if last_traded_sweep is not None and sweep_ts <= float(last_traded_sweep):
                     return None
+
+                # Lock this swept range as our active setup overnight range
+                self.save_state(f"{symbol}_active_setup_ov_range", swept_range, self.simulator)
+                ov_range = swept_range
+
+                # Remove the swept range from the concurrent monitoring queue
+                ov_ranges = [r for r in ov_ranges if r['ts'] != swept_range['ts']]
+                self.save_state(f"{symbol}_ov_ranges", ov_ranges, self.simulator)
 
                 if self.record_milestone(f"Phase 3: 15m {sweep_side.upper()} Sweep", sweep_ts, "15m"):
                     self.logger.info(f"[{symbol}] 15m Sweep detected ({sweep_side.upper()})! Catching up sequence.")
