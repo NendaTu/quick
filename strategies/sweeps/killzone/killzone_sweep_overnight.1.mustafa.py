@@ -100,7 +100,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
             "fvg_depth": 50,
             "tp1_rrr": 1.2, # Lower targets for overnight
             "tp2_rrr": 2.0,
-            "tp1_qty_ratio": 0.5
+            "tp1_qty_ratio": 0.7
         }
 
         # [TECH-001] Explicit history requirements for authenticity

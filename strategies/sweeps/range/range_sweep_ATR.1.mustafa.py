@@ -103,7 +103,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
             "fvg_depth": 50,
             "tp1_rrr": 1.5,
             "tp2_rrr": 2.5,
-            "tp1_qty_ratio": 0.5
+            "tp1_qty_ratio": 0.7
         }
 
         # [TECH-001] Explicit history requirements for authenticity

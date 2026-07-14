@@ -298,7 +298,7 @@ WEIGHT_MACD = 2.5
 
 # WEIGHT_TREND_15M: This parameter defines the scoring weight applied to the asset's own 15-minute price trend slope.
 # Increasing it biases the decision engine towards taking trend-following setups.
-WEIGHT_TREND_15M = 1.0
+WEIGHT_TREND_15M = 2.5
 
 # WEIGHT_ASSET_CONF: This parameter represents the weight for the redundant 15-minute asset confluence check.
 # Setting this to zero avoids double-counting since the 15-minute asset trend is already represented.
@@ -314,7 +314,7 @@ WEIGHT_DRT = 2.0
 
 # WEIGHT_SANITY: This parameter defines the weight assigned to checking agreement between DRT slope and model bias.
 # Increasing it ensures counter-trend entries are penalized heavily during high-regime markets.
-WEIGHT_SANITY = 1.0
+WEIGHT_SANITY = 2.0
 
 # WEIGHT_BTC_MOM: This parameter configures the score contribution weight from Bitcoin's 15-minute momentum slope.
 # Adjusting this higher makes all altcoin setups highly dependent on BTC momentum direction.
@@ -326,7 +326,7 @@ WEIGHT_BTC_CONF = 1.5
 
 # WEIGHT_HTF_BIAS: This parameter adjusts the weight applied to the higher timeframe macro bias indicator.
 # Raising it ensures the system trades in strict harmony with 4H and 1D price action.
-WEIGHT_HTF_BIAS = 1.0
+WEIGHT_HTF_BIAS = 2.0
 
 # WEIGHT_STRUCTURE: This parameter defines the scoring weight for market structure breaks like BOS and MSS.
 # Raising it places a high value on setups that confirm institutional structure shifts.
