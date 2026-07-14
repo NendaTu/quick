@@ -8,4 +8,5 @@
 | 4 | 2026-07-13 | De-hardcode minimum stop-loss guard and link it to the central `SL_MOVE` config parameter set at `0.004` (0.4%) | Kept | Average stop-loss distance widened to 0.66%, successfully protecting positions from spread sweeps and order book noise. |
 | 5 | 2026-07-13 | Optimize Scoring Engine weights to amplify MACD (2.5) and DRT (2.0) and suppress RSI (0.2) and Structure (0.5) | Kept | Successfully blocked low-confluence trades and reduced portfolio drawdowns on choppy markets. |
 | 6 | 2026-07-13 | Enforce strict "Closed-Candle Execution" by passing completed closed candles (`ohlcv[:-1]`) to all strategy calculations | Kept | Drastically improved strategy win rates (killzone_sweep to 42.9%, range_sweep_ATR to 34.2%) and cut overall net loss by 34%. |
-| 7 | 2026-07-13 | Refine Scoring Engine weights (Trend to 2.5, Sanity to 2.0, HTF Bias to 2.0) and increase TP1 exit ratio to 70% | Pending | |
+| 7 | 2026-07-13 | Refine Scoring Engine weights (Trend to 2.5, Sanity to 2.0, HTF Bias to 2.0) and increase TP1 exit ratio to 70% | Kept | Successfully blocked contrary-trend short trades, reducing overall losses while protecting trailing stops. |
+| 8 | 2026-07-13 | Add `ETHUSDT` and `XPTUSDT` to the `ASSET_OMITTED` blacklist inside `config.py` | Pending | |
