@@ -88,16 +88,13 @@ class KillzoneSweepStrategy(JBaseStrategy):
         self.simulator = simulator
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
-        # [TECH-001] Explicit history requirements for authenticity
-        # Values matched to technical module scan depths and catch-up range.
-        self.required_history = {"1H": 120, "15m": 60, "1m": 300}
-
         # --- Strategy-Specific Parameters (with overrides) ---
         # [TECH-001] bypass_external_filters:
         # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
         # This strategy will still calculate its INTERNAL requirements (FVG, Structure, Sessions)
         # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
+            "execution_tf": "1m", # Timeframe used for final entry execution and low timeframe structure breaks
             "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "fvg_penetration_required": False,
             "max_double_downs": 1,
@@ -112,6 +109,10 @@ class KillzoneSweepStrategy(JBaseStrategy):
             "prior_close_hour": 16
         }
 
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths and catch-up range.
+        self.required_history = {"1H": 120, "15m": 60, self.params["execution_tf"]: 300}
+
         # Apply parameter overrides from config_overrides if they exist
         if config_overrides:
             for k in self.params:
@@ -121,11 +122,12 @@ class KillzoneSweepStrategy(JBaseStrategy):
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         symbol = market_data["symbol"]
+        exec_tf = self.params.get("execution_tf", "1m")
 
         # We need data for all 3 timeframes
         h1 = self._get_ohlcv(symbol, "1H")
         m15 = self._get_ohlcv(symbol, "15m")
-        m1 = self._get_ohlcv(symbol, "1m")
+        m1 = self._get_ohlcv(symbol, exec_tf)
 
         if not h1 or not m15 or not m1:
             return None
@@ -242,8 +244,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 m1_struct = identify_structure(ctx_m1, strength=self.params["m1_strength"])
                 m1_sig = m1_struct.get('structure_signal') or ''
                 if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                    self.record_milestone("Phase 4: 1m BOS1", curr_c['ts'], "1m")
-                    self.logger.info(f"[{symbol}] 1m BOS1 detected in history! Entering WAITING_FOR_FVG")
+                    self.record_milestone(f"Phase 4: {exec_tf} BOS1", curr_c['ts'], exec_tf)
+                    self.logger.info(f"[{symbol}] {exec_tf} BOS1 detected in history! Entering WAITING_FOR_FVG")
                     self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
                     self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_FVG"
@@ -252,8 +254,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 5: 1m FVG Formed", curr_c['ts'], "1m")
-                    self.logger.info(f"[{symbol}] 1m FVG detected in history! Entering WAITING_FOR_RETEST")
+                    self.record_milestone(f"Phase 5: {exec_tf} FVG Formed", curr_c['ts'], exec_tf)
+                    self.logger.info(f"[{symbol}] {exec_tf} FVG detected in history! Entering WAITING_FOR_RETEST")
                     self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
                     self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_RETEST"
@@ -262,8 +264,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 6: 1m FVG Retest", curr_c['ts'], "1m")
-                    self.logger.info(f"[{symbol}] 1m FVG Retest complete in history! Entering WAITING_FOR_BOS2")
+                    self.record_milestone(f"Phase 6: {exec_tf} FVG Retest", curr_c['ts'], exec_tf)
+                    self.logger.info(f"[{symbol}] {exec_tf} FVG Retest complete in history! Entering WAITING_FOR_BOS2")
                     self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                     self.save_state(f"{symbol}_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_BOS2"
@@ -355,7 +357,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                             return None
 
                 # TRIGGER ENTRY & LOG DATA
-                if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
+                if self.record_milestone(f"Phase 7: {exec_tf} BOS2 (Entry Trigger)", m1[-1]['ts'], exec_tf):
                     self.logger.info(f"[{symbol}] {sweep_side.upper()} BOS2 Triggered ({m1_sig})! Hub: {hub}")
                     self.logger.info(f"  - Entry: {entry_price:.8f}")
                     self.logger.info(f"  - SL   : {stop_price:.8f} (Risk: {risk:.8f})")
@@ -407,7 +409,8 @@ class KillzoneSweepStrategy(JBaseStrategy):
         Implements TP1 50% exit and Double-Down logic.
         """
         symbol = market_data["symbol"]
-        m1 = self._get_ohlcv(symbol, "1m")
+        exec_tf = self.params.get("execution_tf", "1m")
+        m1 = self._get_ohlcv(symbol, exec_tf)
         if not m1: return None
 
         # 1. TP1 logic is already handled by engine (BE+TP1+TP2)

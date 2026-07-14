@@ -84,16 +84,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
         self.simulator = simulator
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
-        # [TECH-001] Explicit history requirements for authenticity
-        # Values matched to technical module scan depths and catch-up range.
-        self.required_history = {"4H": 40, "1H": 120, "15m": 60, "1m": 300}
-
         # --- Strategy-Specific Parameters ---
         # [TECH-001] bypass_external_filters:
         # If True, the core Engine skips Layer 1 safety checks (Correlation, Cooldown, Regimes).
         # This strategy will still calculate its INTERNAL requirements (ATR Expansion, BOS)
         # regardless of this toggle, as they are mandatory for its logic.
         self.params = {
+            "execution_tf": "1m", # Timeframe used for final entry execution and low timeframe structure breaks
             "bypass_external_filters": False, # [TECH-001] Toggle for Layer 1 safety checks
             "range_tf": "4H",
             "atr_multiplier": 5.0,
@@ -109,6 +106,10 @@ class RangeSweepATRStrategy(JBaseStrategy):
             "tp1_qty_ratio": 0.5
         }
 
+        # [TECH-001] Explicit history requirements for authenticity
+        # Values matched to technical module scan depths and catch-up range.
+        self.required_history = {"4H": 40, "1H": 120, "15m": 60, self.params["execution_tf"]: 300}
+
         if config_overrides:
             for k in self.params:
                 if k in config_overrides:
@@ -116,12 +117,13 @@ class RangeSweepATRStrategy(JBaseStrategy):
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         symbol = market_data["symbol"]
+        exec_tf = self.params.get("execution_tf", "1m")
 
         range_tf = self.params["range_tf"]
         h4 = self._get_ohlcv(symbol, range_tf)
         h1 = self._get_ohlcv(symbol, "1H")
         m15 = self._get_ohlcv(symbol, "15m")
-        m1 = self._get_ohlcv(symbol, "1m")
+        m1 = self._get_ohlcv(symbol, exec_tf)
 
         if not h4 or not h1 or not m15 or not m1: return None
 
@@ -287,7 +289,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 m1_struct = identify_structure(ctx_m1, strength=self.params["m1_strength"])
                 m1_sig = m1_struct.get('structure_signal') or ''
                 if (sweep_side == 'ssl' and 'bullish' in m1_sig) or (sweep_side == 'bsl' and 'bearish' in m1_sig):
-                    self.record_milestone("Phase 4: 1m BOS1", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 4: {exec_tf} BOS1", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_FVG", self.simulator)
                     self.save_state(f"{symbol}_atr_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_FVG"
@@ -296,7 +298,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 5: 1m FVG Formed", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 5: {exec_tf} FVG Formed", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_RETEST", self.simulator)
                     self.save_state(f"{symbol}_atr_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_RETEST"
@@ -305,7 +307,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                 fvg_data = detect_fvgs(ctx_m1, depth=self.params["fvg_depth"])
                 target_fvg = 'bullish' if sweep_side == 'ssl' else 'bearish'
                 if fvg_data.get('nearest_fvg_type') == target_fvg:
-                    self.record_milestone("Phase 6: 1m FVG Retest", curr_c['ts'], "1m")
+                    self.record_milestone(f"Phase 6: {exec_tf} FVG Retest", curr_c['ts'], exec_tf)
                     self.save_state(state_key, "WAITING_FOR_BOS2", self.simulator)
                     self.save_state(f"{symbol}_atr_last_milestone_ts", curr_c['ts'], self.simulator)
                     state = "WAITING_FOR_BOS2"
@@ -397,7 +399,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                         if (qty * entry_price) / float(spec.get('maxLever', 20)) > equity * 0.95:
                             return None
 
-                if self.record_milestone("Phase 7: 1m BOS2 (Entry Trigger)", m1[-1]['ts'], "1m"):
+                if self.record_milestone(f"Phase 7: {exec_tf} BOS2 (Entry Trigger)", m1[-1]['ts'], exec_tf):
                     self.logger.info(f"[{symbol}] {sweep_side.upper()} Entry Triggered!")
 
                 self.save_state(state_key, "COMPLETED", self.simulator)
@@ -435,7 +437,8 @@ class RangeSweepATRStrategy(JBaseStrategy):
         Implements TP1 50% exit and Double-Down logic.
         """
         symbol = market_data["symbol"]
-        m1 = self._get_ohlcv(symbol, "1m")
+        exec_tf = self.params.get("execution_tf", "1m")
+        m1 = self._get_ohlcv(symbol, exec_tf)
         if not m1: return None
 
         entry_price = position['entry']
