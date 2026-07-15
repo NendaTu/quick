@@ -32,14 +32,14 @@ def test_detect_order_blocks():
     # Check unmitigated state
     res = detect_order_blocks(ohlcv, period=5)
     assert res['ob_active_count'] == 1
-    assert res['nearest_ob_type'] == 'bullish'
+    assert res['latest_ob_type'] == 'bullish'
     assert len(res['active_obs']) == 1
 
     # Now mitigate it by dipping next candle low into its range [9.5, 10.1]
     ohlcv[24] = {"ts": 1024, "o": 11.0, "h": 11.1, "l": 9.8, "c": 10.9, "v": 100} # Mitigating dip
     res_mitigated = detect_order_blocks(ohlcv, period=5)
     assert res_mitigated['ob_active_count'] == 0
-    assert res_mitigated['nearest_ob_type'] is None
+    assert res_mitigated['latest_ob_type'] is None
 
 def test_detect_breakers():
     # Verify that failed order blocks turn into breakers
@@ -62,7 +62,7 @@ def test_detect_breakers():
 
     res = detect_breakers(ohlcv, period=5)
     assert res['breaker_count'] == 1
-    assert res['nearest_breaker_type'] == 'bearish'
+    assert res['latest_breaker_type'] == 'bearish'
     assert len(res['breakers']) == 1
 
 def test_no_look_ahead_bias():
@@ -90,3 +90,19 @@ def test_no_look_ahead_bias():
     assert abs(atr_series_A[5] - atr_series_B[5]) < 1e-9
     # Index 10 is before candle 20, so its ATR must remain identical
     assert abs(atr_series_A[10] - atr_series_B[10]) < 1e-9
+
+def test_validation_and_failures():
+    # 1. Invalid keys
+    with pytest.raises(ValueError, match="missing required OHLCV keys"):
+        detect_order_blocks([{"ts": 1000, "o": 10.0, "h": 10.1}], period=5)
+
+    # 2. Chronological failure
+    with pytest.raises(ValueError, match="not in chronological order"):
+        detect_order_blocks([
+            {"ts": 1000, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0},
+            {"ts": 999, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0}
+        ], period=5)
+
+    # 3. Invalid Period
+    with pytest.raises(ValueError, match="greater than 0"):
+        detect_order_blocks([{"ts": 1000, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0}], period=0)

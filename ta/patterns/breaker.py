@@ -14,7 +14,7 @@ How it works:
    if subsequent candles wick into its range.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from ta.patterns.ob import compute_atr_series
 
 # --- Configuration ---
@@ -31,8 +31,9 @@ def detect_breakers(
     ohlcv: List[dict],
     period: int = 14,
     invalidation_margin: Optional[float] = None,
-    impulse_mult: Optional[float] = None
-) -> Dict:
+    impulse_mult: Optional[float] = None,
+    closed_only: bool = False
+) -> Dict[str, Any]:
     """
     Identifies active (unmitigated) and historical breaker blocks.
     Evaluates signals strictly using closed candles to prevent look-ahead bias and repainting.
@@ -44,16 +45,28 @@ def detect_breakers(
         invalidation_margin = INVALIDATION_MARGIN
     if impulse_mult is None:
         impulse_mult = IMPULSE_MULT
+
+    if period <= 0:
+        raise ValueError(f"Period must be greater than 0, got {period}")
+
+    # Chronological & Schema validation to fail loudly on malformed inputs [REPAIR]
+    for idx, c in enumerate(ohlcv):
+        if not all(k in c for k in ('ts', 'o', 'h', 'l', 'c')):
+            raise ValueError(f"Candle at index {idx} is missing required OHLCV keys: {c}")
+        if idx > 0 and c['ts'] <= ohlcv[idx-1]['ts']:
+            raise ValueError(f"Candles are not in chronological order: index {idx} ts {c['ts']} <= index {idx-1} ts {ohlcv[idx-1]['ts']}")
+
     if not ENABLED or len(ohlcv) < period + 3:
         return {
             'breaker_count': 0,
             'nearest_breaker_type': None,
+            'latest_breaker_type': None,
             'breakers': [],
             'all_breakers': []
         }
 
-    # Evaluate using closed candles only to prevent repainting
-    closed_ohlcv = ohlcv[:-1]
+    # Support closed_only to prevent positional look-ahead assumptions [REPAIR-002]
+    closed_ohlcv = ohlcv if closed_only else ohlcv[:-1]
     highs = [c['h'] for c in closed_ohlcv]
     lows = [c['l'] for c in closed_ohlcv]
     closes = [c['c'] for c in closed_ohlcv]
@@ -61,10 +74,17 @@ def detect_breakers(
     # Compute rolling ATR series to prevent historical drift/repainting [REPAIR-001]
     atr_series = compute_atr_series(highs, lows, closes, period)
 
+    # Converge Wilder's smoothed ATR by enforcing dynamic warmup pruning [REPAIR-001]
+    warmup_bars = min(len(closed_ohlcv) // 3, period + 50)
+
     obs = []
 
     # 1. Identify Candidate OBs in history
     for i in range(1, len(closed_ohlcv) - 1):
+        # Only discover/report OBs formed AFTER the converged warmup buffer period
+        if i < warmup_bars:
+            continue
+
         curr = closed_ohlcv[i]
         nxt = closed_ohlcv[i+1]
         atr_val = atr_series[i]
@@ -75,9 +95,10 @@ def detect_breakers(
         impulse_range = nxt['h'] - nxt['l']
         is_impulsive = impulse_range > (impulse_mult * atr_val)
 
-        # Doji Hardening: treat open == close as bearish/bullish based on next direction
-        is_bearish = curr['c'] < curr['o'] or (curr['c'] == curr['o'] and nxt['c'] > curr['h'])
-        is_bullish = curr['c'] > curr['o'] or (curr['c'] == curr['o'] and nxt['c'] < curr['l'])
+        # Doji Hardening: treat open == close (within relative epsilon) as bearish/bullish based on next direction
+        is_doji = abs(curr['c'] - curr['o']) < (curr['o'] * 1e-5)
+        is_bearish = curr['c'] < curr['o'] or (is_doji and nxt['c'] > curr['h'])
+        is_bullish = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
 
         if is_bearish and is_impulsive and nxt['c'] > curr['h']:
             obs.append({
@@ -136,10 +157,12 @@ def detect_breakers(
                 break
 
     active_breakers = [br for br in breakers if br['state'] == 'active']
+    latest_breaker_type = active_breakers[-1]['type'] if active_breakers else None
 
     return {
         'breaker_count': len(active_breakers),
-        'nearest_breaker_type': active_breakers[-1]['type'] if active_breakers else None,
+        'latest_breaker_type': latest_breaker_type,
+        'nearest_breaker_type': latest_breaker_type,  # Legacy alias
         'breakers': active_breakers,
         'all_breakers': breakers
     }
