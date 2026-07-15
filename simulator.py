@@ -688,9 +688,26 @@ class Simulator(DataAcquisitionManager):
 
                 sid = self.order_id_counter; self.order_id_counter += 1
                 tp_orders = []
+                use_tp3 = (o.get("tp3_price") is not None)
                 use_tp_split = (self.config.EXIT_STRATEGY == "BE+TP1+TP2" or o.get("tp1_price") is not None)
 
-                if use_tp_split and o.get("tp1_price"):
+                if use_tp3:
+                    tid1 = self.order_id_counter; self.order_id_counter += 1
+                    tid2 = self.order_id_counter; self.order_id_counter += 1
+                    tid3 = self.order_id_counter; self.order_id_counter += 1
+                    tp1_price = o["tp1_price"]
+                    tp2_price = o["tp2_price"]
+                    tp3_price = o["tp3_price"]
+                    tp1_qty = o["tp1_qty"]
+                    tp2_qty = o["tp2_qty"]
+                    tp3_qty = o["qty"] - tp1_qty - tp2_qty
+
+                    tp_orders.extend([
+                        {"id": tid1, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp1_price, "qty": tp1_qty, "is_tp1": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                        {"id": tid2, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                        {"id": tid3, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp3_price, "qty": tp3_qty, "is_tp3": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                    ])
+                elif use_tp_split and o.get("tp1_price"):
                     tid1 = self.order_id_counter; self.order_id_counter += 1
                     tid2 = self.order_id_counter; self.order_id_counter += 1
                     tp2_price = o.get("tp2_price") or o.get("exit_price") or o.get("tp_price")
@@ -825,9 +842,26 @@ class Simulator(DataAcquisitionManager):
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
+            use_tp3 = (kwargs.get("tp3_price") is not None)
             use_tp_split = (self.config.EXIT_STRATEGY == "BE+TP1+TP2" or kwargs.get("tp1_price") is not None)
 
-            if use_tp_split and kwargs.get("tp1_price"):
+            if use_tp3:
+                tid1 = self.order_id_counter; self.order_id_counter += 1
+                tid2 = self.order_id_counter; self.order_id_counter += 1
+                tid3 = self.order_id_counter; self.order_id_counter += 1
+                tp1_price = kwargs["tp1_price"]
+                tp2_price = kwargs["tp2_price"]
+                tp3_price = kwargs["tp3_price"]
+                tp1_qty = kwargs["tp1_qty"]
+                tp2_qty = kwargs["tp2_qty"]
+                tp3_qty = qty - tp1_qty - tp2_qty
+
+                tp_orders.extend([
+                    {"id": tid1, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp1_price, "qty": tp1_qty, "is_tp1": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                    {"id": tid3, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp3_price, "qty": tp3_qty, "is_tp3": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                ])
+            elif use_tp_split and kwargs.get("tp1_price"):
                 tid1 = self.order_id_counter; self.order_id_counter += 1
                 tid2 = self.order_id_counter; self.order_id_counter += 1
                 tp2_price = kwargs.get("tp2_price") or tp_price or kwargs.get("exit_price")
@@ -955,6 +989,19 @@ class Simulator(DataAcquisitionManager):
                         o["is_breakeven"] = True
 
                         log.info(f"TP1 HIT: SL for {sym} {side.upper()} moved to {o['triggerPrice']:.8f} (Halfway Entry/TP1)")
+                        break
+            elif order.get("is_tp2"):
+                for o in self.pending_orders:
+                    if o["symbol"] == sym and o["pos_side"] == side and o["type"] == "stop":
+                        o["qty"] = pos["qty"]
+
+                        entry_price = pos["entry_price"]
+                        spec = self.contract_specs.get(sym, {})
+                        price_place = int(spec.get('pricePlace', 2))
+                        o["triggerPrice"] = round(entry_price, price_place)
+                        o["is_breakeven"] = True
+
+                        log.info(f"TP2 HIT: SL for {sym} {side.upper()} moved to break-even {o['triggerPrice']:.8f}")
                         break
         else:
             del self.positions[(sym, side)]

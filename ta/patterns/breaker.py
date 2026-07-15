@@ -1,78 +1,49 @@
 """
-Order Block (OB) Identification Module
+Breaker Block (Breaker) Identification Module
 
 How it works:
-1. This module identifies "Order Blocks"—price zones where institutional
-   buying or selling occurred before a strong, fast move.
-2. A Bullish OB is a bearish candle followed by a rapid upward "impulse"
-   that breaks its high.
-3. A Bearish OB is a bullish candle followed by a rapid downward "impulse"
-   that breaks its low.
-4. This file is stateless, strictly focused on technical analysis discovery,
-   and does not contain entries, exits, stops, or signal triggers.
+1. This module identifies "Breaker Blocks"—which are failed Order Blocks
+   that have flipped polarity.
+2. A Bullish Breaker is a failed bearish Order Block. When price closes
+   above the top of a Bearish OB, that block flips polarity to become
+   a source of future demand (Bullish Breaker).
+3. A Bearish Breaker is a failed bullish Order Block. When price closes
+   below the bottom of a Bullish OB, that block flips polarity to become
+   a source of future supply (Bearish Breaker).
+4. Retests / Mitigation: Once a breaker forms, it can be mitigated/filled
+   if subsequent candles wick into its range.
 """
 
 from typing import List, Dict, Optional, Any
 import math
+from ta.patterns.ob import compute_atr_series
 
 # --- Configuration ---
-# Toggle to enable/disable Order Block detection.
+# Toggle to enable/disable Breaker Block detection.
 ENABLED = True
 
-# Impulse candle range must be > IMPULSE_MULT * ATR.
+# Standard impulse candle multiplier (matching ob.py).
 IMPULSE_MULT = 1.5
 
-def compute_atr_series(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> List[float]:
-    """
-    Computes a full series of ATR values matching the length of the input lists.
-    Each element i represents the ATR at that index, calculated using data up to index i.
-    Uses Wilder's Smoothing for stable volatility estimation.
-    """
-    if period <= 0:
-        raise ValueError(f"Period must be greater than 0, got {period}")
+# Margin (%) required to invalidate an OB and turn it into a Breaker.
+INVALIDATION_MARGIN = 0.001
 
-    atr_series = [0.0] * len(closes)
-    if len(closes) < period + 1:
-        return atr_series
-
-    # 1. Calculate True Ranges
-    tr_series = [0.0]  # First element is 0 as we need previous close
-    for i in range(1, len(closes)):
-        tr = max(highs[i] - lows[i],
-                 abs(highs[i] - closes[i - 1]),
-                 abs(lows[i] - closes[i - 1]))
-        tr_series.append(tr)
-
-    # 2. Initial Seed (SMA) at index `period`
-    initial_tr_sum = sum(tr_series[1:period + 1])
-    atr = initial_tr_sum / period
-    atr_series[period] = atr
-
-    # 3. Recursive Smoothing (Wilder's)
-    for i in range(period + 1, len(closes)):
-        tr = tr_series[i]
-        atr = (atr * (period - 1) + tr) / period
-        atr_series[i] = atr
-
-    return atr_series
-
-def detect_order_blocks(
+def detect_breakers(
     ohlcv: List[dict],
     period: int = 14,
+    invalidation_margin: Optional[float] = None,
     impulse_mult: Optional[float] = None,
     closed_only: bool = False
 ) -> Dict[str, Any]:
     """
-    Identifies active (unfilled/unmitigated) and historical order blocks.
+    Identifies active (unmitigated) and historical breaker blocks.
     Evaluates signals strictly using closed candles to prevent look-ahead bias and repainting.
-    Judges historic candles against the contemporary ATR value at that point in time.
+    Judges historic candles against contemporary ATR series.
 
-    NOTE: The 'index' field of returning order blocks is relative to the input array
-    and can change if the history window is sliced or shifted. Always use 'ts' as
-    the unique identifier/dedupe key.
-
-    NOTE: 'latest_ob_type' refers to the most recently formed active OB, not price distance.
+    NOTE: Always use 'ts' as the unique identifier/dedupe key for breakers.
     """
+    if invalidation_margin is None:
+        invalidation_margin = INVALIDATION_MARGIN
     if impulse_mult is None:
         impulse_mult = IMPULSE_MULT
 
@@ -97,11 +68,11 @@ def detect_order_blocks(
 
     if not ENABLED or len(ohlcv) < period + 3:
         return {
-            'ob_active_count': 0,
-            'latest_ob_type': None,
-            'nearest_ob_type': None,  # Legacy alias
-            'active_obs': [],
-            'all_obs': []
+            'breaker_count': 0,
+            'nearest_breaker_type': None,
+            'latest_breaker_type': None,
+            'breakers': [],
+            'all_breakers': []
         }
 
     # Support closed_only to prevent positional look-ahead assumptions [REPAIR-002]
@@ -118,7 +89,7 @@ def detect_order_blocks(
 
     obs = []
 
-    # 1. Identify OBs in history
+    # 1. Identify Candidate OBs in history
     for i in range(1, len(closed_ohlcv) - 1):
         # Only discover/report OBs formed AFTER the stable, converged warmup period
         if i < warmup_bars:
@@ -142,40 +113,69 @@ def detect_order_blocks(
 
         if is_bearish and is_impulsive and nxt['c'] > curr['h']:
             obs.append({
-                'type': 'bullish',
+                'type': 'bullish',  # Originally a Bullish OB
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': 'active',
                 'ts': curr['ts']
             })
         elif is_bullish and is_impulsive and nxt['c'] < curr['l']:
             obs.append({
-                'type': 'bearish',
+                'type': 'bearish',  # Originally a Bearish OB
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': 'active',
                 'ts': curr['ts']
             })
 
-    # 2. Update states (mitigation) based on subsequent candles up to the current live candle
+    breakers = []
+
+    # 2. Check for invalidations (breaks) to identify Breaker Blocks
     for ob in obs:
+        post_ob_candles = closed_ohlcv[ob['index']+2:]
+        for idx, pc in enumerate(post_ob_candles):
+            is_broken = False
+            breaker_type = None
+
+            if ob['type'] == 'bullish' and pc['c'] < ob['bottom'] * (1 - invalidation_margin):
+                # Bullish OB fails and becomes a Bearish Breaker
+                is_broken = True
+                breaker_type = 'bearish'
+            elif ob['type'] == 'bearish' and pc['c'] > ob['top'] * (1 + invalidation_margin):
+                # Bearish OB fails and becomes a Bullish Breaker
+                is_broken = True
+                breaker_type = 'bullish'
+
+            if is_broken:
+                # The index/timestamp where the break occurred
+                breaker_formation_idx = ob['index'] + 2 + idx
+                breakers.append({
+                    'type': breaker_type,
+                    'top': ob['top'],
+                    'bottom': ob['bottom'],
+                    'index': breaker_formation_idx,
+                    'ts': pc['ts'],
+                    'state': 'active'
+                })
+                break  # This block is now permanently a Breaker, stop scanning for break
+
+    # 3. Check for mitigation of Breaker Blocks by subsequent candles up to the current live candle
+    for br in breakers:
         # NOTE: Mitigation intentionally scans subsequent candles including the live candle,
         # which is 100% safe because a live candle's high/low can only expand during formation.
-        post_ob_candles = ohlcv[ob['index']+2:]
-        for pc in post_ob_candles:
-            if pc['l'] <= ob['top'] and pc['h'] >= ob['bottom']:
-                ob['state'] = 'mitigated'
+        post_breaker_candles = ohlcv[br['index']+1:]
+        for pc in post_breaker_candles:
+            if pc['l'] <= br['top'] and pc['h'] >= br['bottom']:
+                br['state'] = 'mitigated'
                 break
 
-    active_obs = [ob for ob in obs if ob['state'] == 'active']
-    latest_ob_type = active_obs[-1]['type'] if active_obs else None
+    active_breakers = [br for br in breakers if br['state'] == 'active']
+    latest_breaker_type = active_breakers[-1]['type'] if active_breakers else None
 
     return {
-        'ob_active_count': len(active_obs),
-        'latest_ob_type': latest_ob_type,
-        'nearest_ob_type': latest_ob_type,  # Legacy alias for backward compatibility
-        'active_obs': active_obs,
-        'all_obs': obs
+        'breaker_count': len(active_breakers),
+        'latest_breaker_type': latest_breaker_type,
+        'nearest_breaker_type': latest_breaker_type,  # Legacy alias
+        'breakers': active_breakers,
+        'all_breakers': breakers
     }
