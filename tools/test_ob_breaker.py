@@ -1,4 +1,5 @@
 import pytest
+import math
 from ta.patterns.ob import detect_order_blocks, compute_atr_series
 from ta.patterns.breaker import detect_breakers
 
@@ -16,18 +17,18 @@ def test_detect_order_blocks():
     # Verify that a clear impulsive block is discovered and mitigated correctly
     ohlcv = []
     # Base candles with zero volatility, keeping subsequent candles outside of OB range [9.5, 10.1]
-    for i in range(25):
-        if i >= 12:
+    for i in range(100):
+        if i >= 72:
             ohlcv.append({"ts": 1000 + i, "o": 11.0, "h": 11.1, "l": 10.9, "c": 11.0, "v": 100})
         else:
             ohlcv.append({"ts": 1000 + i, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100})
 
-    # Set index 9 to not be a doji so it doesn't trigger secondary OB signals
-    ohlcv[9] = {"ts": 1009, "o": 10.1, "h": 10.2, "l": 9.9, "c": 10.0, "v": 100}
+    # Set index 69 to not be a doji so it doesn't trigger secondary OB signals
+    ohlcv[69] = {"ts": 1069, "o": 10.1, "h": 10.2, "l": 9.9, "c": 10.0, "v": 100}
 
-    # Setup an OB at index 10: Bearish candle (10) followed by dynamic Bullish impulse (11)
-    ohlcv[10] = {"ts": 1010, "o": 10.0, "h": 10.1, "l": 9.5, "c": 9.6, "v": 100} # Bearish OB anchor [9.5, 10.1]
-    ohlcv[11] = {"ts": 1011, "o": 9.6, "h": 11.5, "l": 9.5, "c": 11.4, "v": 100} # Impulse breakout
+    # Setup an OB at index 70: Bearish candle (70) followed by dynamic Bullish impulse (71)
+    ohlcv[70] = {"ts": 1070, "o": 10.0, "h": 10.1, "l": 9.5, "c": 9.6, "v": 100} # Bearish OB anchor [9.5, 10.1]
+    ohlcv[71] = {"ts": 1071, "o": 9.6, "h": 11.5, "l": 9.5, "c": 11.4, "v": 100} # Impulse breakout
 
     # Check unmitigated state
     res = detect_order_blocks(ohlcv, period=5)
@@ -36,7 +37,7 @@ def test_detect_order_blocks():
     assert len(res['active_obs']) == 1
 
     # Now mitigate it by dipping next candle low into its range [9.5, 10.1]
-    ohlcv[24] = {"ts": 1024, "o": 11.0, "h": 11.1, "l": 9.8, "c": 10.9, "v": 100} # Mitigating dip
+    ohlcv[99] = {"ts": 1099, "o": 11.0, "h": 11.1, "l": 9.8, "c": 10.9, "v": 100} # Mitigating dip
     res_mitigated = detect_order_blocks(ohlcv, period=5)
     assert res_mitigated['ob_active_count'] == 0
     assert res_mitigated['latest_ob_type'] is None
@@ -44,21 +45,21 @@ def test_detect_order_blocks():
 def test_detect_breakers():
     # Verify that failed order blocks turn into breakers
     ohlcv = []
-    for i in range(25):
-        if i >= 12:
+    for i in range(100):
+        if i >= 72:
             ohlcv.append({"ts": 1000 + i, "o": 11.0, "h": 11.1, "l": 10.9, "c": 11.0, "v": 100})
         else:
             ohlcv.append({"ts": 1000 + i, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100})
 
-    # Set index 9 to not be a doji so it doesn't trigger secondary OB signals
-    ohlcv[9] = {"ts": 1009, "o": 10.1, "h": 10.2, "l": 9.9, "c": 10.0, "v": 100}
+    # Set index 69 to not be a doji so it doesn't trigger secondary OB signals
+    ohlcv[69] = {"ts": 1069, "o": 10.1, "h": 10.2, "l": 9.9, "c": 10.0, "v": 100}
 
-    # Setup an OB at index 10: Bearish candle (10) followed by Bullish impulse (11)
-    ohlcv[10] = {"ts": 1010, "o": 10.0, "h": 10.1, "l": 9.5, "c": 9.6, "v": 100} # Bearish OB anchor [9.5, 10.1]
-    ohlcv[11] = {"ts": 1011, "o": 9.6, "h": 11.5, "l": 9.5, "c": 11.4, "v": 100} # Impulse breakout
+    # Setup an OB at index 70: Bearish candle (70) followed by Bullish impulse (71)
+    ohlcv[70] = {"ts": 1070, "o": 10.0, "h": 10.1, "l": 9.5, "c": 9.6, "v": 100} # Bearish OB anchor [9.5, 10.1]
+    ohlcv[71] = {"ts": 1071, "o": 9.6, "h": 11.5, "l": 9.5, "c": 11.4, "v": 100} # Impulse breakout
 
-    # Now break it by closing well below its bottom (9.5) at index 15
-    ohlcv[15] = {"ts": 1015, "o": 9.4, "h": 9.5, "l": 9.1, "c": 9.2, "v": 100} # Breaks bottom (invalidation)
+    # Now break it by closing well below its bottom (9.5) at index 75
+    ohlcv[75] = {"ts": 1075, "o": 9.4, "h": 9.5, "l": 9.1, "c": 9.2, "v": 100} # Breaks bottom (invalidation)
 
     res = detect_breakers(ohlcv, period=5)
     assert res['breaker_count'] == 1
@@ -68,7 +69,7 @@ def test_detect_breakers():
 def test_no_look_ahead_bias():
     # Setup ohlcv
     ohlcv = []
-    for i in range(25):
+    for i in range(100):
         ohlcv.append({"ts": 1000 + i, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100})
 
     # Run A: Baseline
@@ -77,19 +78,19 @@ def test_no_look_ahead_bias():
     closes = [c['c'] for c in ohlcv[:-1]]
     atr_series_A = compute_atr_series(highs, lows, closes, period=5)
 
-    # Run B: Perturb a candle well in the future (candle 20)
+    # Run B: Perturb a candle well in the future (candle 90)
     ohlcv_perturbed = [dict(c) for c in ohlcv]
-    ohlcv_perturbed[20] = {"ts": 1020, "o": 15.0, "h": 16.5, "l": 14.5, "c": 15.0, "v": 100}
+    ohlcv_perturbed[90] = {"ts": 1090, "o": 15.0, "h": 16.5, "l": 14.5, "c": 15.0, "v": 100}
 
     highs_perturbed = [c['h'] for c in ohlcv_perturbed[:-1]]
     lows_perturbed = [c['l'] for c in ohlcv_perturbed[:-1]]
     closes_perturbed = [c['c'] for c in ohlcv_perturbed[:-1]]
     atr_series_B = compute_atr_series(highs_perturbed, lows_perturbed, closes_perturbed, period=5)
 
-    # Index 5 is before candle 20, so its ATR must remain identical
-    assert abs(atr_series_A[5] - atr_series_B[5]) < 1e-9
-    # Index 10 is before candle 20, so its ATR must remain identical
-    assert abs(atr_series_A[10] - atr_series_B[10]) < 1e-9
+    # Index 60 is before candle 90, so its ATR must remain identical
+    assert abs(atr_series_A[60] - atr_series_B[60]) < 1e-9
+    # Index 75 is before candle 90, so its ATR must remain identical
+    assert abs(atr_series_A[75] - atr_series_B[75]) < 1e-9
 
 def test_validation_and_failures():
     # 1. Invalid keys
@@ -106,3 +107,37 @@ def test_validation_and_failures():
     # 3. Invalid Period
     with pytest.raises(ValueError, match="greater than 0"):
         detect_order_blocks([{"ts": 1000, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0}], period=0)
+
+    # 4. NaN values fail loudly
+    with pytest.raises(ValueError, match="inconsistent or NaN OHLC values"):
+        detect_order_blocks([{"ts": 1000, "o": float('nan'), "h": 10.1, "l": 9.9, "c": 10.0}], period=5)
+
+    # 5. Impossible low > high
+    with pytest.raises(ValueError, match="inconsistent or NaN OHLC values"):
+        detect_order_blocks([{"ts": 1000, "o": 10.0, "h": 9.5, "l": 10.1, "c": 10.0}], period=5)
+
+def test_warmup_stability_regression():
+    # Setup growing/sliced history to verify perfect stability of identified blocks
+    ohlcv = []
+    for i in range(200):
+        if i >= 122:
+            ohlcv.append({"ts": 1000 + i, "o": 11.0, "h": 11.1, "l": 10.9, "c": 11.0, "v": 100})
+        else:
+            ohlcv.append({"ts": 1000 + i, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100})
+
+    ohlcv[119] = {"ts": 1119, "o": 10.1, "h": 10.2, "l": 9.9, "c": 10.0, "v": 100}
+    ohlcv[120] = {"ts": 1120, "o": 10.0, "h": 10.1, "l": 9.5, "c": 9.6, "v": 100} # Bearish OB
+    ohlcv[121] = {"ts": 1121, "o": 9.6, "h": 11.5, "l": 9.5, "c": 11.4, "v": 100} # Impulse
+
+    # Run 1: Full 200 candle history
+    res_full = detect_order_blocks(ohlcv, period=5)
+    assert res_full['ob_active_count'] == 1
+    assert res_full['active_obs'][0]['ts'] == 1120
+
+    # Run 2: Sliced 150 candle window (simulate sliding live engine buffer)
+    # This starting point moves the seed, but because index 120 is past warmup_bars (5 + 50 = 55),
+    # the ATR will have completely converged, and the OB will remain identical!
+    sliced_ohlcv = ohlcv[50:]
+    res_sliced = detect_order_blocks(sliced_ohlcv, period=5)
+    assert res_sliced['ob_active_count'] == 1
+    assert res_sliced['active_obs'][0]['ts'] == 1120

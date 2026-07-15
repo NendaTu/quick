@@ -13,6 +13,7 @@ How it works:
 """
 
 from typing import List, Dict, Optional, Any
+import math
 
 # --- Configuration ---
 # Toggle to enable/disable Order Block detection.
@@ -27,6 +28,9 @@ def compute_atr_series(highs: List[float], lows: List[float], closes: List[float
     Each element i represents the ATR at that index, calculated using data up to index i.
     Uses Wilder's Smoothing for stable volatility estimation.
     """
+    if period <= 0:
+        raise ValueError(f"Period must be greater than 0, got {period}")
+
     atr_series = [0.0] * len(closes)
     if len(closes) < period + 1:
         return atr_series
@@ -75,12 +79,21 @@ def detect_order_blocks(
     if period <= 0:
         raise ValueError(f"Period must be greater than 0, got {period}")
 
-    # Chronological & Schema validation to fail loudly on malformed inputs [REPAIR]
+    # Chronological & Schema validation to fail loudly on malformed/NaN inputs [REPAIR]
     for idx, c in enumerate(ohlcv):
         if not all(k in c for k in ('ts', 'o', 'h', 'l', 'c')):
             raise ValueError(f"Candle at index {idx} is missing required OHLCV keys: {c}")
         if idx > 0 and c['ts'] <= ohlcv[idx-1]['ts']:
             raise ValueError(f"Candles are not in chronological order: index {idx} ts {c['ts']} <= index {idx-1} ts {ohlcv[idx-1]['ts']}")
+        # Check for NaN and physically impossible candles (such as high < low, or open/close outside high/low) [REPAIR]
+        is_invalid = (
+            math.isnan(c['o']) or math.isnan(c['h']) or math.isnan(c['l']) or math.isnan(c['c']) or
+            c['o'] < c['l'] or c['o'] > c['h'] or
+            c['c'] < c['l'] or c['c'] > c['h'] or
+            c['h'] < c['l']
+        )
+        if is_invalid:
+            raise ValueError(f"Candle at index {idx} has inconsistent or NaN OHLC values: {c}")
 
     if not ENABLED or len(ohlcv) < period + 3:
         return {
@@ -100,15 +113,14 @@ def detect_order_blocks(
     # Compute rolling ATR series to prevent historical drift/repainting [REPAIR-001]
     atr_series = compute_atr_series(highs, lows, closes, period)
 
-    # Converge Wilder's smoothed ATR by enforcing dynamic warmup pruning [REPAIR-001]
-    # This prevents early SMA seed values from triggering different results on sliding windows.
-    warmup_bars = min(len(closed_ohlcv) // 3, period + 50)
+    # Decouple warmup entirely from array length using a stable, fixed floor [REPAIR-001]
+    warmup_bars = period + 50
 
     obs = []
 
     # 1. Identify OBs in history
     for i in range(1, len(closed_ohlcv) - 1):
-        # Only discover/report OBs formed AFTER the converged warmup buffer period
+        # Only discover/report OBs formed AFTER the stable, converged warmup period
         if i < warmup_bars:
             continue
 
@@ -122,8 +134,9 @@ def detect_order_blocks(
         impulse_range = nxt['h'] - nxt['l']
         is_impulsive = impulse_range > (impulse_mult * atr_val)
 
-        # Doji Hardening: treat open == close (within relative epsilon) as bearish/bullish based on next direction
-        is_doji = abs(curr['c'] - curr['o']) < (curr['o'] * 1e-5)
+        # Doji Hardening: treat small body relative to range (within 10% tolerance) as doji [REPAIR]
+        candle_range = curr['h'] - curr['l']
+        is_doji = abs(curr['c'] - curr['o']) <= (candle_range * 0.1) if candle_range > 0.0 else True
         is_bearish = curr['c'] < curr['o'] or (is_doji and nxt['c'] > curr['h'])
         is_bullish = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
 
@@ -148,6 +161,8 @@ def detect_order_blocks(
 
     # 2. Update states (mitigation) based on subsequent candles up to the current live candle
     for ob in obs:
+        # NOTE: Mitigation intentionally scans subsequent candles including the live candle,
+        # which is 100% safe because a live candle's high/low can only expand during formation.
         post_ob_candles = ohlcv[ob['index']+2:]
         for pc in post_ob_candles:
             if pc['l'] <= ob['top'] and pc['h'] >= ob['bottom']:
