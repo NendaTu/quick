@@ -78,6 +78,13 @@ Every strategy file must support clean offline auditing and consistent sandbox o
 2. **Captured Console Output**: The runtime execution logs of the strategy backtest must cleanly tee standard outputs to `docs/temp/console-log.txt`.
 3. **Specs Cache**: The strategy backtest routine must automatically create and update the local specifications cache file in `docs/temp/contract_specs_cache.json` on execution.
 
+### 5. Mandatory Account & Risk Standards
+Every strategy file must respect your configured risk limits and capital allocation settings to guarantee capital safety:
+- **USE_VIRTUAL_BALANCE**: If True in live/demo mode, strategies must size positions using `INITIAL_EQUITY` as a virtual baseline.
+- **INITIAL_EQUITY**: Starting capital allocated for backtesting or virtual sizing.
+- **REINVESTMENT_PERCENTAGE**: Compounding fraction of net profits reinvested into subsequent contract sizes.
+- **RISK_PER_TRADE**: Maximum fraction of total equity to risk on any single trade.
+
 ## Advanced Features & Architectural Guardrails
 
 ### 1. Unified Scoring Engine Confluence Check

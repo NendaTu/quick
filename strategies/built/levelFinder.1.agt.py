@@ -39,9 +39,9 @@ BACKTEST RESULTS (Multi-Timeframe 1m, 3m, 5m, 15m)
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Date Range             | Asset      | TF    |   Win% (L/S) |       PnL (L/S) |     ROE% |        PnL |    ROI% |   Trades |       Equity
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-2026-03-01 to 2026-03-02 | SOLUSDT    | 1m    |      33%/20% |       -0.2/-0.3 |     -7.5% |      -0.44 |    -1.1% |        8 |        39.56
+2026-03-01 to 2026-03-02 | SOLUSDT    | 1m    |       0%/67% |         0.0/0.4 |     21.1% |       0.37 |     0.9% |        3 |        40.37
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-OVERALL                | ALL        | MIX   |      33%/20% |       -0.2/-0.3 |      N/A |      -0.44 |    -1.1% |        8 |          N/A
+OVERALL                | ALL        | MIX   |       0%/67% |         0.0/0.4 |      N/A |       0.37 |     0.9% |        3 |          N/A
 =====================================================================================================================================================================
 ```
 """
@@ -156,23 +156,32 @@ class LevelFinderStrategy(JBaseStrategy):
             tp2_price = round(tp2_price, price_place)
             tp3_price = round(tp3_price, price_place)
 
-            # Quantity (Compounding Aware)
-            equity = market_data.get("equity") or (self.simulator.equity if self.simulator else config.INITIAL_EQUITY)
-            starting_equity = getattr(config, 'INITIAL_EQUITY', 15.0)
+            # --- Account, Risk, & Compounding Integration [REPAIR] ---
+            use_virtual = getattr(config, 'USE_VIRTUAL_BALANCE', False)
+            starting_equity = getattr(config, 'INITIAL_EQUITY', 40.0)
             reinvest_pct = getattr(config, 'REINVESTMENT_PERCENTAGE', 1.0)
+            risk_per_trade = getattr(config, 'RISK_PER_TRADE', 0.01)
 
-            if equity > starting_equity:
-                riskable_equity = starting_equity + (equity - starting_equity) * reinvest_pct
+            # Get total equity from simulator or market data
+            total_equity = market_data.get("equity") or (self.simulator.equity if self.simulator else starting_equity)
+
+            # Handle virtual balance override if enabled in live/demo mode
+            if use_virtual and self.simulator and getattr(self.simulator, "mode", "paper") != "paper":
+                total_equity = starting_equity # Under live/demo with USE_VIRTUAL_BALANCE, lock to initial equity for compounding baseline
+
+            # Calculate riskable equity base for compounding
+            if total_equity > starting_equity:
+                riskable_equity = starting_equity + (total_equity - starting_equity) * reinvest_pct
             else:
-                riskable_equity = equity
+                riskable_equity = total_equity
 
-            qty = calculate_position_size(riskable_equity, config.RISK_PER_TRADE, entry_price, stop_price)
+            qty = calculate_position_size(riskable_equity, risk_per_trade, entry_price, stop_price)
 
             # Quantities formatting according to specs
             qty, qty_place = format_order_quantity(
                 qty,
                 entry_price,
-                equity,
+                total_equity,
                 self.simulator.contract_specs if self.simulator else None,
                 symbol,
                 logger=self.logger
