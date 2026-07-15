@@ -15,10 +15,6 @@ How it works:
 from typing import List, Dict, Optional, Any
 import math
 
-# --- Configuration ---
-# Toggle to enable/disable Order Block detection.
-ENABLED = True
-
 # Impulse candle range must be > IMPULSE_MULT * ATR.
 IMPULSE_MULT = 1.5
 
@@ -60,7 +56,8 @@ def detect_order_blocks(
     ohlcv: List[dict],
     period: int = 14,
     impulse_mult: Optional[float] = None,
-    closed_only: bool = False
+    closed_only: bool = False,
+    enabled: bool = True
 ) -> Dict[str, Any]:
     """
     Identifies active (unfilled/unmitigated) and historical order blocks.
@@ -72,6 +69,11 @@ def detect_order_blocks(
     the unique identifier/dedupe key.
 
     NOTE: 'latest_ob_type' refers to the most recently formed active OB, not price distance.
+
+    NOTE: Wilder's smoothed ATR calculation is path-dependent from the first candle.
+    To ensure identical outputs and avoid sliding-window path-dependency, callers must
+    always provide a fixed-origin growing list of candles, or ensure the history window size
+    is sufficiently large (at least 5x period beyond the warmup floor).
     """
     if impulse_mult is None:
         impulse_mult = IMPULSE_MULT
@@ -79,23 +81,37 @@ def detect_order_blocks(
     if period <= 0:
         raise ValueError(f"Period must be greater than 0, got {period}")
 
-    # Chronological & Schema validation to fail loudly on malformed/NaN inputs [REPAIR]
+    if impulse_mult <= 0.0:
+        raise ValueError(f"impulse_mult must be greater than 0, got {impulse_mult}")
+
+    # Chronological & Schema validation to fail loudly on malformed/NaN/Infinity inputs [REPAIR]
     for idx, c in enumerate(ohlcv):
         if not all(k in c for k in ('ts', 'o', 'h', 'l', 'c')):
             raise ValueError(f"Candle at index {idx} is missing required OHLCV keys: {c}")
         if idx > 0 and c['ts'] <= ohlcv[idx-1]['ts']:
             raise ValueError(f"Candles are not in chronological order: index {idx} ts {c['ts']} <= index {idx-1} ts {ohlcv[idx-1]['ts']}")
-        # Check for NaN and physically impossible candles (such as high < low, or open/close outside high/low) [REPAIR]
+
+        # Type & Numeric Bounds validation [REPAIR]
+        for k in ('o', 'h', 'l', 'c'):
+            val = c[k]
+            if not isinstance(val, (int, float)):
+                raise ValueError(f"Candle at index {idx} has non-numeric type for '{k}': {val} ({type(val)})")
+            if math.isnan(val) or math.isinf(val):
+                raise ValueError(f"Candle at index {idx} has invalid NaN or Infinity value for '{k}': {val}")
+
+        # Check for physically impossible candles (such as high < low, or open/close outside high/low) [REPAIR]
         is_invalid = (
-            math.isnan(c['o']) or math.isnan(c['h']) or math.isnan(c['l']) or math.isnan(c['c']) or
             c['o'] < c['l'] or c['o'] > c['h'] or
             c['c'] < c['l'] or c['c'] > c['h'] or
             c['h'] < c['l']
         )
         if is_invalid:
-            raise ValueError(f"Candle at index {idx} has inconsistent or NaN OHLC values: {c}")
+            raise ValueError(f"Candle at index {idx} has inconsistent OHLC values: {c}")
 
-    if not ENABLED or len(ohlcv) < period + 3:
+    # Decouple warmup entirely from array length using a stable, scaled floor [REPAIR-001]
+    warmup_bars = period + (4 * period)
+
+    if not enabled or len(ohlcv) < (warmup_bars + 3):
         return {
             'ob_active_count': 0,
             'latest_ob_type': None,
@@ -112,9 +128,6 @@ def detect_order_blocks(
 
     # Compute rolling ATR series to prevent historical drift/repainting [REPAIR-001]
     atr_series = compute_atr_series(highs, lows, closes, period)
-
-    # Decouple warmup entirely from array length using a stable, fixed floor [REPAIR-001]
-    warmup_bars = period + 50
 
     obs = []
 
@@ -134,28 +147,34 @@ def detect_order_blocks(
         impulse_range = nxt['h'] - nxt['l']
         is_impulsive = impulse_range > (impulse_mult * atr_val)
 
-        # Doji Hardening: treat small body relative to range (within 10% tolerance) as doji [REPAIR]
+        # Doji Hardening: treat small body relative to range (within 10% tolerance) as doji / ambiguous [REPAIR]
         candle_range = curr['h'] - curr['l']
         is_doji = abs(curr['c'] - curr['o']) <= (candle_range * 0.1) if candle_range > 0.0 else True
-        is_bearish = curr['c'] < curr['o'] or (is_doji and nxt['c'] > curr['h'])
-        is_bullish = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
+        is_bearish_or_ambiguous = curr['c'] < curr['o'] or (is_doji and nxt['c'] > curr['h'])
+        is_bullish_or_ambiguous = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
 
-        if is_bearish and is_impulsive and nxt['c'] > curr['h']:
+        # Sweep-through Check on Creation [REPAIR-001]
+        # Avoids reporting order blocks where the impulse candle already swept past the zone bottom (Bullish OB)
+        # or top (Bearish OB) during formation. We check for strict violations (undercuts/sweeps).
+        is_swept = (is_bearish_or_ambiguous and nxt['l'] < curr['l']) or (is_bullish_or_ambiguous and nxt['h'] > curr['h'])
+        ob_state = 'mitigated' if is_swept else 'active'
+
+        if is_bearish_or_ambiguous and is_impulsive and nxt['c'] > curr['h']:
             obs.append({
                 'type': 'bullish',
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': 'active',
+                'state': ob_state,
                 'ts': curr['ts']
             })
-        elif is_bullish and is_impulsive and nxt['c'] < curr['l']:
+        elif is_bullish_or_ambiguous and is_impulsive and nxt['c'] < curr['l']:
             obs.append({
                 'type': 'bearish',
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': 'active',
+                'state': ob_state,
                 'ts': curr['ts']
             })
 
