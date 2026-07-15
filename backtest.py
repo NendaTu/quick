@@ -1460,55 +1460,80 @@ async def main():
         query_cmd = " -> ".join(query_parts)
 
     db = Database()
-
-    # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
-    from engine.exchanges.bitget import BitgetExchange
-    limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
-    client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, rate_limiter=limiter)
-
-    # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
-    if not assets_to_run:
-        assets_to_run = await discover_assets(client)
+    client = None
 
     try:
-        # Apply global overrides to config module if specified
-        for k, v in overrides.items():
-            if hasattr(config, k):
-                setattr(config, k, v)
-                log.info(f"Overriding config.{k} = {v}")
+        # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+        from engine.exchanges.bitget import BitgetExchange
+        limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+        client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, rate_limiter=limiter)
 
-        chain = parse_confluence_command(query_cmd)
-        # Apply overrides to wrappers in the chain
-        for segment in chain.segments:
-            for wrapper in segment:
-                wrapper.overrides = overrides
-                # Re-load instance with overrides
-                wrapper.instance = wrapper._load_strategy(wrapper.path)
-    except Exception as e:
-        print(f"Error parsing command: {e}")
-        return
+        # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
+        if not assets_to_run:
+            assets_to_run = await discover_assets(client)
 
-    # 1. Acquisition of data (Using unified discovery)
-    required_tfs = get_required_timeframes(chain)
-    try:
-        await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
-    except KeyboardInterrupt:
-        log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
-        return
+        try:
+            # Apply global overrides to config module if specified
+            for k, v in overrides.items():
+                if hasattr(config, k):
+                    setattr(config, k, v)
+                    log.info(f"Overriding config.{k} = {v}")
 
-    # 2. Run backtests based on toggle
-    all_results = []
+            chain = parse_confluence_command(query_cmd)
+            # Apply overrides to wrappers in the chain
+            for segment in chain.segments:
+                for wrapper in segment:
+                    wrapper.overrides = overrides
+                    # Re-load instance with overrides
+                    wrapper.instance = wrapper._load_strategy(wrapper.path)
+        except Exception as e:
+            print(f"Error parsing command: {e}")
+            return
 
-    if USE_PORTFOLIO_MODE:
-        log.info("Running in Concurrent Portfolio Mode (Sharing Capital)...")
-        all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m", overrides=overrides)
-    else:
-        log.info("Running in Isolated Single-Asset Mode...")
+        # 1. Acquisition of data (Using unified discovery)
+        required_tfs = get_required_timeframes(chain)
+        try:
+            await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
+        except KeyboardInterrupt:
+            log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
+            return
+
+        # 2. Run backtests based on toggle
+        all_results = []
+
+        if USE_PORTFOLIO_MODE:
+            log.info("Running in Concurrent Portfolio Mode (Sharing Capital)...")
+            all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m", overrides=overrides)
+        else:
+            log.info("Running in Isolated Single-Asset Mode...")
+            for asset in assets_to_run:
+                # Only run for the entry timeframe (1m) as requested by user
+                res = await run_backtest(chain, db, client, asset, "1m", overrides=overrides)
+                if res is None:
+                     res = {
+                         "asset": asset,
+                         "no_data": True,
+                         "roi": 0,
+                         "pnl": 0,
+                         "trades": 0,
+                         "side_stats": {
+                             "long": {"wins": 0, "trades": 0, "pnl": 0},
+                             "short": {"wins": 0, "trades": 0, "pnl": 0}
+                         }
+                     }
+                all_results.append(res)
+
+        # Ensure all requested assets are present in the final table (even if they had no data)
+        final_results = []
+        run_assets = [r["asset"] for r in all_results]
         for asset in assets_to_run:
-            # Only run for the entry timeframe (1m) as requested by user
-            res = await run_backtest(chain, db, client, asset, "1m", overrides=overrides)
-            if res is None:
-                 res = {
+            if asset in run_assets:
+                for r in all_results:
+                    if r["asset"] == asset:
+                        final_results.append(r)
+                        break
+            else:
+                 final_results.append({
                      "asset": asset,
                      "no_data": True,
                      "roi": 0,
@@ -1518,55 +1543,43 @@ async def main():
                          "long": {"wins": 0, "trades": 0, "pnl": 0},
                          "short": {"wins": 0, "trades": 0, "pnl": 0}
                      }
-                 }
-            all_results.append(res)
+                 })
 
-    # Ensure all requested assets are present in the final table (even if they had no data)
-    final_results = []
-    run_assets = [r["asset"] for r in all_results]
-    for asset in assets_to_run:
-        if asset in run_assets:
-            for r in all_results:
-                if r["asset"] == asset:
-                    final_results.append(r)
-                    break
-        else:
-             final_results.append({
-                 "asset": asset,
-                 "no_data": True,
-                 "roi": 0,
-                 "pnl": 0,
-                 "trades": 0,
-                 "side_stats": {
-                     "long": {"wins": 0, "trades": 0, "pnl": 0},
-                     "short": {"wins": 0, "trades": 0, "pnl": 0}
-                 }
-             })
+        # Print Milestone Reports
+        for asset in assets_to_run:
+            found_report = False
+            for segment in chain.segments:
+                for wrapper in segment:
+                    if hasattr(wrapper.instance, "get_milestone_report"):
+                        report = wrapper.instance.get_milestone_report()
+                        if report:
+                            if not found_report:
+                                print(f"\n[Milestone Report: {asset}]")
+                                found_report = True
+                            print(report)
 
-    # Print Milestone Reports
-    for asset in assets_to_run:
-        found_report = False
-        for segment in chain.segments:
-            for wrapper in segment:
-                if hasattr(wrapper.instance, "get_milestone_report"):
-                    report = wrapper.instance.get_milestone_report()
-                    if report:
-                        if not found_report:
-                            print(f"\n[Milestone Report: {asset}]")
-                            found_report = True
-                        print(report)
+        # 3. Output Table
+        print_results(final_results)
 
-    # 3. Output Table
-    print_results(final_results)
+    finally:
+        if client:
+            try:
+                await client.close()
+            except Exception as ce:
+                log.error(f"Error closing client: {ce}")
+        try:
+            db.stop()
+        except Exception as de:
+            log.error(f"Error stopping database: {de}")
 
-    await client.close()
-    db.stop()
-
-    # Restore original streams and close file
-    sys.stdout = stdout_tee.original_stream
-    sys.stderr = stderr_tee.original_stream
-    stdout_tee.close()
-    stderr_tee.close()
+        # Restore original streams and close file
+        try:
+            sys.stdout = stdout_tee.original_stream
+            sys.stderr = stderr_tee.original_stream
+            stdout_tee.close()
+            stderr_tee.close()
+        except Exception as te:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())
