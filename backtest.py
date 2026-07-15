@@ -646,6 +646,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     # Discovery of relevant timeframes from the strategy chain
     relevant_tfs = get_required_timeframes(chain)
+    if tf not in relevant_tfs:
+        relevant_tfs.append(tf)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in [asset, BTC_SYMBOL]:
@@ -1012,6 +1014,8 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
     # Discovery of relevant timeframes from the strategy chain
     relevant_tfs = get_required_timeframes(chain)
+    if tf not in relevant_tfs:
+        relevant_tfs.append(tf)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in assets + [BTC_SYMBOL]:

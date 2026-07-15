@@ -12,7 +12,8 @@ How it works:
    and does not contain entries, exits, stops, or signal triggers.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
+import math
 
 # --- Configuration ---
 # Toggle to enable/disable Order Block detection.
@@ -27,6 +28,9 @@ def compute_atr_series(highs: List[float], lows: List[float], closes: List[float
     Each element i represents the ATR at that index, calculated using data up to index i.
     Uses Wilder's Smoothing for stable volatility estimation.
     """
+    if period <= 0:
+        raise ValueError(f"Period must be greater than 0, got {period}")
+
     atr_series = [0.0] * len(closes)
     if len(closes) < period + 1:
         return atr_series
@@ -50,28 +54,58 @@ def compute_atr_series(highs: List[float], lows: List[float], closes: List[float
         atr = (atr * (period - 1) + tr) / period
         atr_series[i] = atr
 
-    # Backfill pre-period values with the initial seed to avoid 0.0 values
-    for i in range(1, period):
-        atr_series[i] = atr_series[period]
-
     return atr_series
 
-def detect_order_blocks(ohlcv: List[dict], period: int = 14, impulse_mult: float = IMPULSE_MULT) -> Dict:
+def detect_order_blocks(
+    ohlcv: List[dict],
+    period: int = 14,
+    impulse_mult: Optional[float] = None,
+    closed_only: bool = False
+) -> Dict[str, Any]:
     """
     Identifies active (unfilled/unmitigated) and historical order blocks.
     Evaluates signals strictly using closed candles to prevent look-ahead bias and repainting.
     Judges historic candles against the contemporary ATR value at that point in time.
+
+    NOTE: The 'index' field of returning order blocks is relative to the input array
+    and can change if the history window is sliced or shifted. Always use 'ts' as
+    the unique identifier/dedupe key.
+
+    NOTE: 'latest_ob_type' refers to the most recently formed active OB, not price distance.
     """
+    if impulse_mult is None:
+        impulse_mult = IMPULSE_MULT
+
+    if period <= 0:
+        raise ValueError(f"Period must be greater than 0, got {period}")
+
+    # Chronological & Schema validation to fail loudly on malformed/NaN inputs [REPAIR]
+    for idx, c in enumerate(ohlcv):
+        if not all(k in c for k in ('ts', 'o', 'h', 'l', 'c')):
+            raise ValueError(f"Candle at index {idx} is missing required OHLCV keys: {c}")
+        if idx > 0 and c['ts'] <= ohlcv[idx-1]['ts']:
+            raise ValueError(f"Candles are not in chronological order: index {idx} ts {c['ts']} <= index {idx-1} ts {ohlcv[idx-1]['ts']}")
+        # Check for NaN and physically impossible candles (such as high < low, or open/close outside high/low) [REPAIR]
+        is_invalid = (
+            math.isnan(c['o']) or math.isnan(c['h']) or math.isnan(c['l']) or math.isnan(c['c']) or
+            c['o'] < c['l'] or c['o'] > c['h'] or
+            c['c'] < c['l'] or c['c'] > c['h'] or
+            c['h'] < c['l']
+        )
+        if is_invalid:
+            raise ValueError(f"Candle at index {idx} has inconsistent or NaN OHLC values: {c}")
+
     if not ENABLED or len(ohlcv) < period + 3:
         return {
             'ob_active_count': 0,
-            'nearest_ob_type': None,
+            'latest_ob_type': None,
+            'nearest_ob_type': None,  # Legacy alias
             'active_obs': [],
             'all_obs': []
         }
 
-    # Evaluate using closed candles only to prevent repainting
-    closed_ohlcv = ohlcv[:-1]
+    # Support closed_only to prevent positional look-ahead assumptions [REPAIR-002]
+    closed_ohlcv = ohlcv if closed_only else ohlcv[:-1]
     highs = [c['h'] for c in closed_ohlcv]
     lows = [c['l'] for c in closed_ohlcv]
     closes = [c['c'] for c in closed_ohlcv]
@@ -79,10 +113,17 @@ def detect_order_blocks(ohlcv: List[dict], period: int = 14, impulse_mult: float
     # Compute rolling ATR series to prevent historical drift/repainting [REPAIR-001]
     atr_series = compute_atr_series(highs, lows, closes, period)
 
+    # Decouple warmup entirely from array length using a stable, fixed floor [REPAIR-001]
+    warmup_bars = period + 50
+
     obs = []
 
     # 1. Identify OBs in history
     for i in range(1, len(closed_ohlcv) - 1):
+        # Only discover/report OBs formed AFTER the stable, converged warmup period
+        if i < warmup_bars:
+            continue
+
         curr = closed_ohlcv[i]
         nxt = closed_ohlcv[i+1]
         atr_val = atr_series[i]
@@ -93,9 +134,11 @@ def detect_order_blocks(ohlcv: List[dict], period: int = 14, impulse_mult: float
         impulse_range = nxt['h'] - nxt['l']
         is_impulsive = impulse_range > (impulse_mult * atr_val)
 
-        # Doji Hardening: treat open == close as bearish/bullish based on next direction
-        is_bearish = curr['c'] < curr['o'] or (curr['c'] == curr['o'] and nxt['c'] > curr['h'])
-        is_bullish = curr['c'] > curr['o'] or (curr['c'] == curr['o'] and nxt['c'] < curr['l'])
+        # Doji Hardening: treat small body relative to range (within 10% tolerance) as doji [REPAIR]
+        candle_range = curr['h'] - curr['l']
+        is_doji = abs(curr['c'] - curr['o']) <= (candle_range * 0.1) if candle_range > 0.0 else True
+        is_bearish = curr['c'] < curr['o'] or (is_doji and nxt['c'] > curr['h'])
+        is_bullish = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
 
         if is_bearish and is_impulsive and nxt['c'] > curr['h']:
             obs.append({
@@ -117,8 +160,9 @@ def detect_order_blocks(ohlcv: List[dict], period: int = 14, impulse_mult: float
             })
 
     # 2. Update states (mitigation) based on subsequent candles up to the current live candle
-    # Mitigate if any subsequent candle high/low intersects the OB range
     for ob in obs:
+        # NOTE: Mitigation intentionally scans subsequent candles including the live candle,
+        # which is 100% safe because a live candle's high/low can only expand during formation.
         post_ob_candles = ohlcv[ob['index']+2:]
         for pc in post_ob_candles:
             if pc['l'] <= ob['top'] and pc['h'] >= ob['bottom']:
@@ -126,10 +170,12 @@ def detect_order_blocks(ohlcv: List[dict], period: int = 14, impulse_mult: float
                 break
 
     active_obs = [ob for ob in obs if ob['state'] == 'active']
+    latest_ob_type = active_obs[-1]['type'] if active_obs else None
 
     return {
         'ob_active_count': len(active_obs),
-        'nearest_ob_type': active_obs[-1]['type'] if active_obs else None,
+        'latest_ob_type': latest_ob_type,
+        'nearest_ob_type': latest_ob_type,  # Legacy alias for backward compatibility
         'active_obs': active_obs,
         'all_obs': obs
     }

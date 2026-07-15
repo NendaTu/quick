@@ -14,7 +14,8 @@ How it works:
    if subsequent candles wick into its range.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
+import math
 from ta.patterns.ob import compute_atr_series
 
 # --- Configuration ---
@@ -30,24 +31,52 @@ INVALIDATION_MARGIN = 0.001
 def detect_breakers(
     ohlcv: List[dict],
     period: int = 14,
-    invalidation_margin: float = INVALIDATION_MARGIN,
-    impulse_mult: float = IMPULSE_MULT
-) -> Dict:
+    invalidation_margin: Optional[float] = None,
+    impulse_mult: Optional[float] = None,
+    closed_only: bool = False
+) -> Dict[str, Any]:
     """
     Identifies active (unmitigated) and historical breaker blocks.
     Evaluates signals strictly using closed candles to prevent look-ahead bias and repainting.
     Judges historic candles against contemporary ATR series.
+
+    NOTE: Always use 'ts' as the unique identifier/dedupe key for breakers.
     """
+    if invalidation_margin is None:
+        invalidation_margin = INVALIDATION_MARGIN
+    if impulse_mult is None:
+        impulse_mult = IMPULSE_MULT
+
+    if period <= 0:
+        raise ValueError(f"Period must be greater than 0, got {period}")
+
+    # Chronological & Schema validation to fail loudly on malformed/NaN inputs [REPAIR]
+    for idx, c in enumerate(ohlcv):
+        if not all(k in c for k in ('ts', 'o', 'h', 'l', 'c')):
+            raise ValueError(f"Candle at index {idx} is missing required OHLCV keys: {c}")
+        if idx > 0 and c['ts'] <= ohlcv[idx-1]['ts']:
+            raise ValueError(f"Candles are not in chronological order: index {idx} ts {c['ts']} <= index {idx-1} ts {ohlcv[idx-1]['ts']}")
+        # Check for NaN and physically impossible candles (such as high < low, or open/close outside high/low) [REPAIR]
+        is_invalid = (
+            math.isnan(c['o']) or math.isnan(c['h']) or math.isnan(c['l']) or math.isnan(c['c']) or
+            c['o'] < c['l'] or c['o'] > c['h'] or
+            c['c'] < c['l'] or c['c'] > c['h'] or
+            c['h'] < c['l']
+        )
+        if is_invalid:
+            raise ValueError(f"Candle at index {idx} has inconsistent or NaN OHLC values: {c}")
+
     if not ENABLED or len(ohlcv) < period + 3:
         return {
             'breaker_count': 0,
             'nearest_breaker_type': None,
+            'latest_breaker_type': None,
             'breakers': [],
             'all_breakers': []
         }
 
-    # Evaluate using closed candles only to prevent repainting
-    closed_ohlcv = ohlcv[:-1]
+    # Support closed_only to prevent positional look-ahead assumptions [REPAIR-002]
+    closed_ohlcv = ohlcv if closed_only else ohlcv[:-1]
     highs = [c['h'] for c in closed_ohlcv]
     lows = [c['l'] for c in closed_ohlcv]
     closes = [c['c'] for c in closed_ohlcv]
@@ -55,10 +84,17 @@ def detect_breakers(
     # Compute rolling ATR series to prevent historical drift/repainting [REPAIR-001]
     atr_series = compute_atr_series(highs, lows, closes, period)
 
+    # Decouple warmup entirely from array length using a stable, fixed floor [REPAIR-001]
+    warmup_bars = period + 50
+
     obs = []
 
     # 1. Identify Candidate OBs in history
     for i in range(1, len(closed_ohlcv) - 1):
+        # Only discover/report OBs formed AFTER the stable, converged warmup period
+        if i < warmup_bars:
+            continue
+
         curr = closed_ohlcv[i]
         nxt = closed_ohlcv[i+1]
         atr_val = atr_series[i]
@@ -69,9 +105,11 @@ def detect_breakers(
         impulse_range = nxt['h'] - nxt['l']
         is_impulsive = impulse_range > (impulse_mult * atr_val)
 
-        # Doji Hardening: treat open == close as bearish/bullish based on next direction
-        is_bearish = curr['c'] < curr['o'] or (curr['c'] == curr['o'] and nxt['c'] > curr['h'])
-        is_bullish = curr['c'] > curr['o'] or (curr['c'] == curr['o'] and nxt['c'] < curr['l'])
+        # Doji Hardening: treat small body relative to range (within 10% tolerance) as doji [REPAIR]
+        candle_range = curr['h'] - curr['l']
+        is_doji = abs(curr['c'] - curr['o']) <= (candle_range * 0.1) if candle_range > 0.0 else True
+        is_bearish = curr['c'] < curr['o'] or (is_doji and nxt['c'] > curr['h'])
+        is_bullish = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
 
         if is_bearish and is_impulsive and nxt['c'] > curr['h']:
             obs.append({
@@ -123,6 +161,8 @@ def detect_breakers(
 
     # 3. Check for mitigation of Breaker Blocks by subsequent candles up to the current live candle
     for br in breakers:
+        # NOTE: Mitigation intentionally scans subsequent candles including the live candle,
+        # which is 100% safe because a live candle's high/low can only expand during formation.
         post_breaker_candles = ohlcv[br['index']+1:]
         for pc in post_breaker_candles:
             if pc['l'] <= br['top'] and pc['h'] >= br['bottom']:
@@ -130,10 +170,12 @@ def detect_breakers(
                 break
 
     active_breakers = [br for br in breakers if br['state'] == 'active']
+    latest_breaker_type = active_breakers[-1]['type'] if active_breakers else None
 
     return {
         'breaker_count': len(active_breakers),
-        'nearest_breaker_type': active_breakers[-1]['type'] if active_breakers else None,
+        'latest_breaker_type': latest_breaker_type,
+        'nearest_breaker_type': latest_breaker_type,  # Legacy alias
         'breakers': active_breakers,
         'all_breakers': breakers
     }
