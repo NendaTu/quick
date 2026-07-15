@@ -109,11 +109,19 @@ def test_validation_and_failures():
         detect_order_blocks([{"ts": 1000, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0}], period=0)
 
     # 4. NaN values fail loudly
-    with pytest.raises(ValueError, match="inconsistent or NaN OHLC values"):
+    with pytest.raises(ValueError, match="invalid NaN or Infinity value"):
         detect_order_blocks([{"ts": 1000, "o": float('nan'), "h": 10.1, "l": 9.9, "c": 10.0}], period=5)
 
-    # 5. Impossible low > high
-    with pytest.raises(ValueError, match="inconsistent or NaN OHLC values"):
+    # 5. Infinity fails loudly
+    with pytest.raises(ValueError, match="invalid NaN or Infinity value"):
+        detect_order_blocks([{"ts": 1000, "o": 10.0, "h": float('inf'), "l": 9.9, "c": 10.0}], period=5)
+
+    # 6. Type checks fail loudly
+    with pytest.raises(ValueError, match="non-numeric type"):
+        detect_order_blocks([{"ts": 1000, "o": "10.0", "h": 10.1, "l": 9.9, "c": 10.0}], period=5)
+
+    # 7. Impossible low > high
+    with pytest.raises(ValueError, match="inconsistent OHLC values"):
         detect_order_blocks([{"ts": 1000, "o": 10.0, "h": 9.5, "l": 10.1, "c": 10.0}], period=5)
 
 def test_warmup_stability_regression():
@@ -135,9 +143,31 @@ def test_warmup_stability_regression():
     assert res_full['active_obs'][0]['ts'] == 1120
 
     # Run 2: Sliced 150 candle window (simulate sliding live engine buffer)
-    # This starting point moves the seed, but because index 120 is past warmup_bars (5 + 50 = 55),
+    # This starting point moves the seed, but because index 120 is past warmup_bars (5 + 20 = 25),
     # the ATR will have completely converged, and the OB will remain identical!
     sliced_ohlcv = ohlcv[50:]
     res_sliced = detect_order_blocks(sliced_ohlcv, period=5)
     assert res_sliced['ob_active_count'] == 1
     assert res_sliced['active_obs'][0]['ts'] == 1120
+
+def test_sweep_through_on_creation():
+    ohlcv = []
+    for i in range(100):
+        if i >= 72:
+            ohlcv.append({"ts": 1000 + i, "o": 11.0, "h": 11.1, "l": 10.9, "c": 11.0, "v": 100})
+        else:
+            ohlcv.append({"ts": 1000 + i, "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100})
+
+    # Set index 69 to not be a doji so it doesn't trigger secondary OB signals
+    ohlcv[69] = {"ts": 1069, "o": 10.1, "h": 10.2, "l": 9.9, "c": 10.0, "v": 100}
+
+    # Setup an OB at index 70: Bearish candle (70) followed by impulse (71)
+    # But impulse's low (9.4) sweeps below curr's low (9.5), which must immediately mitigate it!
+    ohlcv[70] = {"ts": 1070, "o": 10.0, "h": 10.1, "l": 9.5, "c": 9.6, "v": 100}
+    ohlcv[71] = {"ts": 1071, "o": 9.6, "h": 11.5, "l": 9.4, "c": 11.4, "v": 100} # Sweep-through!
+
+    res = detect_order_blocks(ohlcv, period=5)
+    # The OB is found but its state should be mitigated right on creation!
+    assert res['ob_active_count'] == 0
+    assert len(res['all_obs']) == 1
+    assert res['all_obs'][0]['state'] == 'mitigated'

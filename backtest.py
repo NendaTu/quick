@@ -6,40 +6,8 @@ try:
 except Exception:
     pass
 
-# Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
-console_log_path = "docs/temp/console-log.txt"
-os.makedirs(os.path.dirname(console_log_path), exist_ok=True)
-with open(console_log_path, "w", encoding="utf-8") as f:
-    pass
-
-class Tee:
-    def __init__(self, original_stream, filepath):
-        self.original_stream = original_stream
-        self.filepath = filepath
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        # Use append mode "a" to allow stdout and stderr streams to write concurrently without clobbering each other.
-        self.file = open(filepath, "a", encoding="utf-8", buffering=1)
-
-    def write(self, data):
-        self.original_stream.write(data)
-        # Skip carriage returns and progress bar updates in the file log to prevent bloating
-        if "\r" not in data:
-            self.file.write(data)
-
-    def flush(self):
-        self.original_stream.flush()
-        self.file.flush()
-
-    def close(self):
-        try:
-            self.file.close()
-        except:
-            pass
-
-stdout_tee = Tee(sys.stdout, console_log_path)
-stderr_tee = Tee(sys.stderr, console_log_path)
-sys.stdout = stdout_tee
-sys.stderr = stderr_tee
+from tools.logger import setup_console_tee, Tee
+stdout_tee, stderr_tee = setup_console_tee()
 
 import asyncio
 import math
