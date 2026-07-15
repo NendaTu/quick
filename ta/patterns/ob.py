@@ -111,11 +111,15 @@ def detect_order_blocks(
     # Decouple warmup entirely from array length using a stable, scaled floor [REPAIR-001]
     warmup_bars = period + (4 * period)
 
-    if not enabled or len(ohlcv) < (warmup_bars + 3):
+    # The loop below needs len(closed_ohlcv) >= warmup_bars + 2 to ever reach i=warmup_bars.
+    # closed_ohlcv is ohlcv itself when closed_only=True, or ohlcv[:-1] otherwise, so the
+    # required length on the raw `ohlcv` input differs by one between the two modes.
+    implied_closed_len = len(ohlcv) if closed_only else len(ohlcv) - 1
+    if not enabled or implied_closed_len < (warmup_bars + 2):
         return {
             'ob_active_count': 0,
             'latest_ob_type': None,
-            'nearest_ob_type': None,  # Legacy alias
+            'nearest_ob_type': None,  # Legacy alias for latest_ob_type (recency, not price distance)
             'active_obs': [],
             'all_obs': []
         }
@@ -154,39 +158,70 @@ def detect_order_blocks(
         is_bullish_or_ambiguous = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
 
         # Sweep-through Check on Creation [REPAIR-001]
-        # Avoids reporting order blocks where the impulse candle already swept past the zone bottom (Bullish OB)
-        # or top (Bearish OB) during formation. We check for strict violations (undercuts/sweeps).
-        is_swept = (is_bearish_or_ambiguous and nxt['l'] < curr['l']) or (is_bullish_or_ambiguous and nxt['h'] > curr['h'])
-        ob_state = 'mitigated' if is_swept else 'active'
+        # Avoids reporting order blocks where the impulse candle already swept past the zone
+        # bottom (Bullish OB) or top (Bearish OB) during formation.
+        #
+        # IMPORTANT: this must be evaluated AFTER we know which OB type is actually forming,
+        # using only that direction's check. is_bearish_or_ambiguous and is_bullish_or_ambiguous
+        # are NOT mutually exclusive (a doji whose tiny body leans one way still sets both flags),
+        # so combining both checks with OR up front -- gated on the ambiguous flags rather than on
+        # which branch fires -- lets the *other* direction's check leak in. That other check then
+        # collapses to something already implied by the break condition itself (nxt['h'] > curr['h']
+        # is guaranteed whenever nxt['c'] > curr['h']), so it would fire on every doji-originated
+        # bullish OB whose tiny body happened to close green, marking clean, unswept OBs as
+        # mitigated on creation. Computing it per-branch avoids that entirely.
 
         if is_bearish_or_ambiguous and is_impulsive and nxt['c'] > curr['h']:
+            is_swept = nxt['l'] < curr['l']
             obs.append({
                 'type': 'bullish',
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': ob_state,
+                'state': 'mitigated' if is_swept else 'active',
                 'ts': curr['ts']
             })
         elif is_bullish_or_ambiguous and is_impulsive and nxt['c'] < curr['l']:
+            is_swept = nxt['h'] > curr['h']
             obs.append({
                 'type': 'bearish',
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': ob_state,
+                'state': 'mitigated' if is_swept else 'active',
                 'ts': curr['ts']
             })
 
-    # 2. Update states (mitigation) based on subsequent candles up to the current live candle
+    # 2. Update states (mitigation) based on subsequent candles up to the current live candle.
+    # NOTE: Mitigation intentionally scans subsequent candles including the live candle,
+    # which is 100% safe because a live candle's high/low can only expand during formation.
+    # A single forward pass is used instead of re-scanning the remaining array once per OB:
+    # each candle is checked only against OBs still unresolved at that point, and OBs already
+    # mitigated at creation (via the sweep-through check) are never tracked at all. This is a
+    # meaningful speedup whenever OBs tend to get mitigated within a bounded number of bars, as
+    # in ordinary oscillating price action -- it is NOT a fix to the theoretical worst case: a
+    # history with many OBs that all stay simultaneously active for a very long stretch is still
+    # O(N^2) here, since every live candle must be checked against every still-open zone. A
+    # genuine worst-case fix (e.g. an interval tree / sweep-line over price levels) would be a
+    # larger change; flag it separately if profiling ever shows this loop as an actual bottleneck.
+    obs_ready_at = {}
     for ob in obs:
-        # NOTE: Mitigation intentionally scans subsequent candles including the live candle,
-        # which is 100% safe because a live candle's high/low can only expand during formation.
-        post_ob_candles = ohlcv[ob['index']+2:]
-        for pc in post_ob_candles:
+        if ob['state'] == 'active':  # already-mitigated-on-formation OBs need no further scanning
+            obs_ready_at.setdefault(ob['index'] + 2, []).append(ob)
+
+    still_unmitigated = []
+    for idx, pc in enumerate(ohlcv):
+        if idx in obs_ready_at:
+            still_unmitigated.extend(obs_ready_at[idx])
+        if not still_unmitigated:
+            continue
+        remaining = []
+        for ob in still_unmitigated:
             if pc['l'] <= ob['top'] and pc['h'] >= ob['bottom']:
                 ob['state'] = 'mitigated'
-                break
+            else:
+                remaining.append(ob)
+        still_unmitigated = remaining
 
     active_obs = [ob for ob in obs if ob['state'] == 'active']
     latest_ob_type = active_obs[-1]['type'] if active_obs else None
@@ -194,7 +229,12 @@ def detect_order_blocks(
     return {
         'ob_active_count': len(active_obs),
         'latest_ob_type': latest_ob_type,
-        'nearest_ob_type': latest_ob_type,  # Legacy alias for backward compatibility
+        'nearest_ob_type': latest_ob_type,  # Legacy alias for latest_ob_type ONLY. Despite the
+                                             # name, this is recency (most recently formed), NOT
+                                             # proximity in price -- this function has no current
+                                             # price input, so a true nearest-by-price value isn't
+                                             # computable here. Callers wanting real price-distance
+                                             # nearness must derive it themselves from active_obs.
         'active_obs': active_obs,
         'all_obs': obs
     }
