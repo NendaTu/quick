@@ -72,6 +72,19 @@ Strategies must implement (or explicitly delegate) the following methods:
 - **Input**: Current `position` data and latest `market_data`.
 - **Output**: Can return updates (e.g., new SL/TP levels) or an exit signal. Return `None` to maintain status quo.
 
+### 4. Backtest Deliverables & Output Logging Standard
+Every strategy file must support clean offline auditing and consistent sandbox output verification. All running strategies are required to produce and populate three specific assets:
+1. **Confluence Metrics Log**: The strategy must cleanly trigger external metrics logging in `docs/temp/[timestamp].metrics-log.txt` showing continuous directional scores on every signal evaluation.
+2. **Captured Console Output**: The runtime execution logs of the strategy backtest must cleanly tee standard outputs to `docs/temp/console-log.txt`.
+3. **Specs Cache**: The strategy backtest routine must automatically create and update the local specifications cache file in `docs/temp/contract_specs_cache.json` on execution.
+
+### 5. Mandatory Account & Risk Standards
+Every strategy file must respect your configured risk limits and capital allocation settings to guarantee capital safety:
+- **USE_VIRTUAL_BALANCE**: If True in live/demo mode, strategies must size positions using `INITIAL_EQUITY` as a virtual baseline.
+- **INITIAL_EQUITY**: Starting capital allocated for backtesting or virtual sizing.
+- **REINVESTMENT_PERCENTAGE**: Compounding fraction of net profits reinvested into subsequent contract sizes.
+- **RISK_PER_TRADE**: Maximum fraction of total equity to risk on any single trade.
+
 ## Advanced Features & Architectural Guardrails
 
 ### 1. Unified Scoring Engine Confluence Check
@@ -101,6 +114,16 @@ min_stop_dist = entry_price * getattr(config, "SL_MOVE", 0.004)
 if abs(entry_price - stop_price) < min_stop_dist:
     stop_price = entry_price - (min_stop_dist if sweep_side == 'ssl' else -min_stop_dist)
 ```
+
+### 6. Signal Output and Console Logging Standard
+To prevent console flooding and ensure consistent output formatting, all strategies must follow these logging guidelines:
+- **Setup Discoveries, Setup Steps, and Phase Changes**: These must be logged at `debug` level (e.g. `self.logger.debug`).
+- **Signal Details (Entry, SL, TPs, Qty)**: When a setup is discovered, the strategy should log the details at `debug` level, or check the global `LOG_SIGNALS` configuration setting before logging at `info` level:
+  ```python
+  log_func = self.logger.info if getattr(config, 'LOG_SIGNALS', True) else self.logger.debug
+  log_func("Signal found...")
+  ```
+- **Entries, Fills, and Exits**: These are handled automatically by the matching simulator (`simulator.py`) or exchange layers and printed uniformly via the central `ConsolePublisher` class at `info` level. This guarantees that only signals resulting in actual, successfully routed trades are printed directly to the console.
 
 ---
 

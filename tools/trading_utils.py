@@ -1,6 +1,42 @@
 import config
+import math
 
-def calculate_fees(qty, price, is_maker=True):
+def format_order_quantity(qty, entry_price, equity, contract_specs, symbol, logger=None):
+    """
+    Formats the order quantity based on contract specifications, minimum trade size, and margin.
+    Returns a tuple: (rounded_qty, quantity_precision_places) or (None, quantity_precision_places).
+    """
+    if not contract_specs or symbol not in contract_specs:
+        return round(qty, 3), 3
+
+    spec = contract_specs[symbol]
+    qty_place = int(spec.get('quantityPlace', 3))
+    qty = math.floor(qty * (10**qty_place)) / (10**qty_place)
+
+    min_qty = float(spec.get('minTradeUSDT', 5.0)) / entry_price
+    if qty < min_qty:
+        qty = math.ceil(min_qty * (10**qty_place)) / (10**qty_place)
+        max_lev = float(spec.get('maxLever', 20))
+        if (qty * entry_price) / max_lev > equity * 0.95:
+            if logger:
+                logger.warning(f"[{symbol}] Rounded qty {qty} exceeds available margin. Skipping.")
+            return None, qty_place
+
+    return qty, qty_place
+
+def get_price_precision(symbol, contract_specs):
+    """
+    Returns (price_place, tick_size) for a symbol based on contract specs.
+    """
+    if not contract_specs or symbol not in contract_specs:
+        return 2, 0.01
+    price_place = int(contract_specs[symbol].get('pricePlace', 2))
+    return price_place, 1 / (10**price_place)
+
+def calculate_fees(qty, price, is_maker=True, config=None):
+    if config is None:
+        import config as default_config
+        config = default_config
     fee_rate = config.MAKER_FEE if is_maker else config.TAKER_FEE
     return qty * price * fee_rate
 
@@ -11,18 +47,21 @@ def calculate_pnl(qty, entry_price, exit_price, side):
     else:
         return (entry_price - exit_price) * qty
 
-def calculate_net_pnl(qty, entry_price, exit_price, side, entry_maker=True, exit_maker=True):
+def calculate_net_pnl(qty, entry_price, exit_price, side, entry_maker=True, exit_maker=True, config=None):
     """Calculates net USDT PnL after all fees."""
     gross_pnl = calculate_pnl(qty, entry_price, exit_price, side)
-    entry_fee = calculate_fees(qty, entry_price, entry_maker)
-    exit_fee = calculate_fees(qty, exit_price, exit_maker)
+    entry_fee = calculate_fees(qty, entry_price, entry_maker, config=config)
+    exit_fee = calculate_fees(qty, exit_price, exit_maker, config=config)
     return gross_pnl - entry_fee - exit_fee
 
-def calculate_roe(entry_price, exit_price, side, leverage, entry_maker=True, exit_maker=True, include_slippage=False):
+def calculate_roe(entry_price, exit_price, side, leverage, entry_maker=True, exit_maker=True, include_slippage=False, config=None):
     """
     Calculates net ROE for a position.
     ROE = Net PnL / Margin
     """
+    if config is None:
+        import config as default_config
+        config = default_config
     f1 = config.MAKER_FEE if entry_maker else config.TAKER_FEE
     f2 = config.MAKER_FEE if exit_maker else config.TAKER_FEE
     s = config.EXPECTED_SLIPPAGE if include_slippage else 0
@@ -42,7 +81,7 @@ def calculate_roe(entry_price, exit_price, side, leverage, entry_maker=True, exi
 
     return net_unit / margin_unit
 
-def calculate_tp_for_roe(entry_price, target_roe, side, leverage, entry_maker=True, exit_maker=True, include_slippage=True):
+def calculate_tp_for_roe(entry_price, target_roe, side, leverage, entry_maker=True, exit_maker=True, include_slippage=True, config=None):
     """
     Calculates the exit price required to hit a target net ROE, including slippage.
 
@@ -61,6 +100,9 @@ def calculate_tp_for_roe(entry_price, target_roe, side, leverage, entry_maker=Tr
     T * E / L - E + E*f1 + E*s = -X (1 + f2 + s)
     X = (E * (1 - f1 - s - T/L)) / (1 + f2 + s)
     """
+    if config is None:
+        import config as default_config
+        config = default_config
     f1 = config.MAKER_FEE if entry_maker else config.TAKER_FEE
     f2 = config.MAKER_FEE if exit_maker else config.TAKER_FEE
     s = config.EXPECTED_SLIPPAGE if include_slippage else 0
@@ -74,7 +116,7 @@ def calculate_tp_for_roe(entry_price, target_roe, side, leverage, entry_maker=Tr
     else:
         return (E * (1 - f1 - s - T/L)) / (1 + f2 + s)
 
-def calculate_target_roe_for_rrr(rrr, entry_price, stop_price, leverage, entry_maker=True, exit_maker=False):
+def calculate_target_roe_for_rrr(rrr, entry_price, stop_price, leverage, entry_maker=True, exit_maker=False, config=None):
     """
     Calculates the target net ROE required to achieve a specific Reward-to-Risk Ratio (RRR).
     Risk = Abs(Entry - Stop) + EntryFees + StopFees + EntrySlippage + StopSlippage
@@ -101,18 +143,22 @@ def calculate_target_roe_for_rrr(rrr, entry_price, stop_price, leverage, entry_m
         leverage,
         entry_maker=entry_maker,
         exit_maker=exit_maker,
-        include_slippage=True
+        include_slippage=True,
+        config=config
     )
 
     return abs(risk_roe) * rrr
 
-def calculate_position_size(equity, risk_fraction, entry_price, stop_price, entry_maker=True, exit_maker=False, fee_aware=True):
+def calculate_position_size(equity, risk_fraction, entry_price, stop_price, entry_maker=True, exit_maker=False, fee_aware=True, config=None):
     """
     Calculates position size based on risk and distance to stop loss.
     """
     risk_amount = equity * risk_fraction
 
     if fee_aware:
+        if config is None:
+            import config as default_config
+            config = default_config
         f1 = config.MAKER_FEE if entry_maker else config.TAKER_FEE
         f2 = config.MAKER_FEE if exit_maker else config.TAKER_FEE
         # Fee per unit for entry and exit
