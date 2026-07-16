@@ -690,11 +690,10 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
             # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
             if (i - start_idx) % 1440 == 0:
-                dt_str = datetime.fromtimestamp(c['ts'], tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+                from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
+                ConsolePublisher.publish_heartbeat(c['ts'], engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
 
             o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
@@ -1049,11 +1048,10 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
             # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
             if step_idx % 1440 == 0:
-                dt_str = datetime.fromtimestamp(current_ts, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+                from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
+                ConsolePublisher.publish_heartbeat(current_ts, engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
 
             # Step A: Update prices and simulate price action for all active assets
             for asset in assets:

@@ -18,11 +18,11 @@ from typing import List, Dict, Optional, Any
 import math
 from ta.patterns.ob import compute_atr_series
 
-# Standard impulse candle multiplier (matching ob.py).
-IMPULSE_MULT = 1.5
-
 # Margin (%) required to invalidate an OB and turn it into a Breaker.
 INVALIDATION_MARGIN = 0.001
+
+# Standard impulse candle multiplier (matching ob.py).
+IMPULSE_MULT = 1.5
 
 def detect_breakers(
     ohlcv: List[dict],
@@ -77,7 +77,9 @@ def detect_breakers(
     # Decouple warmup entirely from array length using a stable, scaled floor [REPAIR-001]
     warmup_bars = period + (4 * period)
 
-    if not enabled or len(ohlcv) < (warmup_bars + 3):
+    # Required length guard (matching ob.py logic)
+    implied_closed_len = len(ohlcv) if closed_only else len(ohlcv) - 1
+    if not enabled or implied_closed_len < (warmup_bars + 2):
         return {
             'breaker_count': 0,
             'nearest_breaker_type': None,
@@ -119,26 +121,25 @@ def detect_breakers(
         is_bearish_or_ambiguous = curr['c'] < curr['o'] or (is_doji and nxt['c'] > curr['h'])
         is_bullish_or_ambiguous = curr['c'] > curr['o'] or (is_doji and nxt['c'] < curr['l'])
 
-        # Sweep-through Check on Creation [REPAIR-001]
-        is_swept = (is_bearish_or_ambiguous and nxt['l'] < curr['l']) or (is_bullish_or_ambiguous and nxt['h'] > curr['h'])
-        ob_state = 'mitigated' if is_swept else 'active'
-
+        # Sweep-through Check on Creation evaluated strictly per branch to avoid cross-leakage [REPAIR-001]
         if is_bearish_or_ambiguous and is_impulsive and nxt['c'] > curr['h']:
+            is_swept = nxt['l'] < curr['l']
             obs.append({
                 'type': 'bullish',  # Originally a Bullish OB
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': ob_state,
+                'state': 'mitigated' if is_swept else 'active',
                 'ts': curr['ts']
             })
         elif is_bullish_or_ambiguous and is_impulsive and nxt['c'] < curr['l']:
+            is_swept = nxt['h'] > curr['h']
             obs.append({
                 'type': 'bearish',  # Originally a Bearish OB
                 'top': curr['h'],
                 'bottom': curr['l'],
                 'index': i,
-                'state': ob_state,
+                'state': 'mitigated' if is_swept else 'active',
                 'ts': curr['ts']
             })
 
@@ -173,15 +174,25 @@ def detect_breakers(
                 })
                 break  # This block is now permanently a Breaker, stop scanning for break
 
-    # 3. Check for mitigation of Breaker Blocks by subsequent candles up to the current live candle
+    # 3. Check for mitigation of Breaker Blocks (O(N) optimized forward-mitigation pass)
+    breakers_ready_at = {}
     for br in breakers:
-        # NOTE: Mitigation intentionally scans subsequent candles including the live candle,
-        # which is 100% safe because a live candle's high/low can only expand during formation.
-        post_breaker_candles = ohlcv[br['index']+1:]
-        for pc in post_breaker_candles:
+        if br['state'] == 'active':
+            breakers_ready_at.setdefault(br['index'] + 1, []).append(br)
+
+    still_unmitigated = []
+    for idx, pc in enumerate(ohlcv):
+        if idx in breakers_ready_at:
+            still_unmitigated.extend(breakers_ready_at[idx])
+        if not still_unmitigated:
+            continue
+        remaining = []
+        for br in still_unmitigated:
             if pc['l'] <= br['top'] and pc['h'] >= br['bottom']:
                 br['state'] = 'mitigated'
-                break
+            else:
+                remaining.append(br)
+        still_unmitigated = remaining
 
     active_breakers = [br for br in breakers if br['state'] == 'active']
     latest_breaker_type = active_breakers[-1]['type'] if active_breakers else None
