@@ -681,6 +681,10 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
+    overrides_dict = overrides or {}
+    hb_interval = overrides_dict.get("heartbeat_interval", 30)
+    last_hb_time = 0
+
     try:
         # Simulation Loop using unified engine
         for i in range(start_idx, len(full_history)):
@@ -688,12 +692,14 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             import tools.logger
             tools.logger.VIRTUAL_TIME = c['ts']
 
-            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
-            if (i - start_idx) % 1440 == 0:
+            # Periodic Heartbeat in Backtest Console Output based on real elapsed time
+            now_real = time.time()
+            if now_real - last_hb_time >= hb_interval:
                 from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
                 ConsolePublisher.publish_heartbeat(c['ts'], engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
+                last_hb_time = now_real
 
             o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
@@ -1040,18 +1046,24 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
+    overrides_dict = overrides or {}
+    hb_interval = overrides_dict.get("heartbeat_interval", 30)
+    last_hb_time = 0
+
     try:
         # Master timeline loop
         for step_idx, current_ts in enumerate(timeline):
             import tools.logger
             tools.logger.VIRTUAL_TIME = current_ts
 
-            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
-            if step_idx % 1440 == 0:
+            # Periodic Heartbeat in Backtest Console Output based on real elapsed time
+            now_real = time.time()
+            if now_real - last_hb_time >= hb_interval:
                 from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
                 ConsolePublisher.publish_heartbeat(current_ts, engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
+                last_hb_time = now_real
 
             # Step A: Update prices and simulate price action for all active assets
             for asset in assets:

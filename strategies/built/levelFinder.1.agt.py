@@ -203,12 +203,13 @@ class LevelFinderStrategy(JBaseStrategy):
                 tp2_qty = 0
                 tp3_qty = qty
 
-            self.logger.info(f"[{symbol}] {target_ob['type'].upper()} OB Solidified on timeframe {tf} at index {target_ob['index']}!")
-            self.logger.info(f"  - Solidifying Candle Close (Entry): {entry_price:.8f}")
-            self.logger.info(f"  - Stop Loss: {stop_price:.8f}")
-            self.logger.info(f"  - TP1 (1:1): {tp1_price:.8f} (Qty: {tp1_qty})")
-            self.logger.info(f"  - TP2 (1:2): {tp2_price:.8f} (Qty: {tp2_qty})")
-            self.logger.info(f"  - TP3 (1:3): {tp3_price:.8f} (Qty: {tp3_qty})")
+            log_func = self.logger.info if getattr(config, "LOG_SIGNALS", True) else self.logger.debug
+            log_func(f"[{symbol}] {target_ob['type'].upper()} OB Solidified on timeframe {tf} at index {target_ob['index']}!")
+            log_func(f"  - Solidifying Candle Close (Entry): {entry_price:.8f}")
+            log_func(f"  - Stop Loss: {stop_price:.8f}")
+            log_func(f"  - TP1 (1:1): {tp1_price:.8f} (Qty: {tp1_qty})")
+            log_func(f"  - TP2 (1:2): {tp2_price:.8f} (Qty: {tp2_qty})")
+            log_func(f"  - TP3 (1:3): {tp3_price:.8f} (Qty: {tp3_qty})")
 
             return {
                 "side": entry_side,

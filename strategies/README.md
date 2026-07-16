@@ -115,6 +115,16 @@ if abs(entry_price - stop_price) < min_stop_dist:
     stop_price = entry_price - (min_stop_dist if sweep_side == 'ssl' else -min_stop_dist)
 ```
 
+### 6. Signal Output and Console Logging Standard
+To prevent console flooding and ensure consistent output formatting, all strategies must follow these logging guidelines:
+- **Setup Discoveries, Setup Steps, and Phase Changes**: These must be logged at `debug` level (e.g. `self.logger.debug`).
+- **Signal Details (Entry, SL, TPs, Qty)**: When a setup is discovered, the strategy should log the details at `debug` level, or check the global `LOG_SIGNALS` configuration setting before logging at `info` level:
+  ```python
+  log_func = self.logger.info if getattr(config, 'LOG_SIGNALS', True) else self.logger.debug
+  log_func("Signal found...")
+  ```
+- **Entries, Fills, and Exits**: These are handled automatically by the matching simulator (`simulator.py`) or exchange layers and printed uniformly via the central `ConsolePublisher` class at `info` level. This guarantees that only signals resulting in actual, successfully routed trades are printed directly to the console.
+
 ---
 
 ## Strategy Template

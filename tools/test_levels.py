@@ -1,80 +1,248 @@
-import pytest
-from ta.levels import identify_levels
+"""
+Regression tests for ta/levels.py.
 
-def test_identify_levels_empty_or_small():
-    # Test that short history returns empty lists
-    ohlcv = [{"ts": 1000, "o": 1.0, "h": 1.1, "l": 0.9, "c": 1.0, "v": 10}]
-    res = identify_levels(ohlcv, period=5)
-    assert res["active_support"] == []
-    assert res["active_resistance"] == []
+Written as plain `assert`-based `test_*` functions so this file works with
+`pytest` (if the project has it) *and* standalone via:
 
-def test_identify_levels_logic():
-    # Construct a clean 25-candle history where a support level is formed at 1.0
-    # and a resistance level is formed at 2.0
-    ohlcv = []
+    python3 test_levels.py
 
-    # Baseline price level around 1.5
-    for i in range(25):
-        # Default neutral candle
-        c = {"ts": 1000 + i * 60, "o": 1.5, "h": 1.6, "l": 1.4, "c": 1.5, "v": 100}
+Place this at tests/test_levels.py (sibling to the `ta/` package) so the
+import below resolves.
+"""
+from ta.levels import identify_levels, _find_swing_points, _cluster_points, _is_level_broken
 
-        # Form a Support touch at candle 5 (price dips to 1.0)
-        if i == 5:
-            c = {"ts": 1000 + i * 60, "o": 1.5, "h": 1.6, "l": 1.0, "c": 1.5, "v": 100}
-        # Form a Resistance touch at candle 10 (price peaks to 2.0)
-        elif i == 10:
-            c = {"ts": 1000 + i * 60, "o": 1.5, "h": 2.0, "l": 1.4, "c": 1.5, "v": 100}
-        # Form a Second Support touch at candle 15 (price dips to 1.01)
-        elif i == 15:
-            c = {"ts": 1000 + i * 60, "o": 1.5, "h": 1.6, "l": 1.01, "c": 1.5, "v": 100}
-        # Form a Second Resistance touch at candle 20 (price peaks to 1.99)
-        elif i == 20:
-            c = {"ts": 1000 + i * 60, "o": 1.5, "h": 1.99, "l": 1.4, "c": 1.5, "v": 100}
 
-        ohlcv.append(c)
+def C(ts, o, h, l, c):
+    return {"ts": ts, "o": o, "h": h, "l": l, "c": c}
 
-    # Latest close is 1.5
-    # Active support is around 1.005 (touches: 2)
-    # Active resistance is around 1.995 (touches: 2)
-    res = identify_levels(ohlcv, body_or_wick="wick", period=2, min_touches=2, range_width_pct=0.02)
 
-    # Verify supports (finding the support closest to 1.0)
-    supports = [x for x in res["active_support"] if abs(x["price"] - 1.0) < 0.05]
-    assert len(supports) == 1
-    assert pytest.approx(supports[0]["price"], abs=0.01) == 1.005
-    assert supports[0]["touches"] == 2
+# ---------------------------------------------------------------------------
+# Swing-point detection
+# ---------------------------------------------------------------------------
 
-    # Verify resistances (finding the resistance closest to 2.0)
-    resistances = [x for x in res["active_resistance"] if abs(x["price"] - 2.0) < 0.05]
-    assert len(resistances) == 1
-    assert pytest.approx(resistances[0]["price"], abs=0.01) == 1.995
-    assert resistances[0]["touches"] == 2
+def test_swing_point_tie_breaking_dedupes_flat_top():
+    """Two candles tied at the same high must yield ONE peak, not two."""
+    candles = [
+        C(0, 99.6, 99.9, 99.5, 99.7),
+        C(1, 99.8, 100.0, 99.6, 99.9),
+        C(2, 100.3, 100.50, 100.2, 100.4),   # candle A: tied high
+        C(3, 100.35, 100.50, 100.25, 100.45),  # candle B: same high as A
+        C(4, 99.8, 100.0, 99.6, 99.9),
+        C(5, 99.6, 99.9, 99.5, 99.7),
+    ]
+    sp = _find_swing_points(candles, "wick", 1)
+    peaks = [p for p in sp if p["type"] == "peak" and abs(p["price"] - 100.50) < 1e-9]
+    assert len(peaks) == 1, f"expected 1 deduplicated peak, got {len(peaks)}"
+    assert peaks[0]["ts"] == 2, "tie should resolve to the earlier candle"
 
-def test_identify_levels_broken_state():
-    # Construct history where a level is formed at 2.0, and subsequently broken
-    ohlcv = []
-    for i in range(25):
-        c = {"ts": 1000 + i * 60, "o": 1.5, "h": 1.6, "l": 1.4, "c": 1.5, "v": 100}
 
-        # Peak 1 at candle 5
-        if i == 5:
-            c = {"ts": 1000 + i * 60, "o": 1.5, "h": 2.0, "l": 1.4, "c": 1.5, "v": 100}
-        # Peak 2 at candle 12
-        elif i == 12:
-            c = {"ts": 1000 + i * 60, "o": 1.5, "h": 2.01, "l": 1.4, "c": 1.5, "v": 100}
-        # Price breaks completely above 2.0 to 2.5 at candle 18
-        elif i == 18:
-            c = {"ts": 1000 + i * 60, "o": 2.5, "h": 2.6, "l": 2.4, "c": 2.5, "v": 100}
+def test_swing_point_distinct_prices_are_not_merged():
+    """Sanity check that dedup logic doesn't over-merge genuinely distinct extremes."""
+    candles = [
+        C(0, 99.0, 99.2, 98.9, 99.0),
+        C(1, 99.5, 99.7, 99.4, 99.5),
+        C(2, 100.0, 101.0, 99.9, 100.0),   # distinct peak, h=101.0
+        C(3, 99.5, 99.7, 99.4, 99.5),
+        C(4, 99.0, 99.2, 98.9, 99.0),
+        C(5, 99.5, 99.7, 99.4, 99.5),
+        C(6, 100.0, 103.0, 99.9, 100.0),   # distinct peak, h=103.0 (not tied with above)
+        C(7, 99.5, 99.7, 99.4, 99.5),
+        C(8, 99.0, 99.2, 98.9, 99.0),
+    ]
+    sp = _find_swing_points(candles, "wick", 1)
+    peaks = sorted(p["price"] for p in sp if p["type"] == "peak")
+    assert peaks == [101.0, 103.0], f"expected two distinct peaks, got {peaks}"
 
-        ohlcv.append(c)
 
-    # Current price is 2.5
-    # The level at 2.0 is now below the current close (Support category!)
-    # And since candle 18 broke above it (timestamp 1180 > last touch 1120), it is marked as Historical
-    res = identify_levels(ohlcv, body_or_wick="wick", period=2, min_touches=2, range_width_pct=0.01)
+# ---------------------------------------------------------------------------
+# Clustering
+# ---------------------------------------------------------------------------
 
-    # Verify that the 2.0 level has transitioned to historical resistance (broken level above 1.5)
-    print("DEBUG RES:", res)
-    hist_resistances = [x for x in res["historical_resistance"] if abs(x["price"] - 2.0) < 0.05]
-    assert len(hist_resistances) == 1
-    assert pytest.approx(hist_resistances[0]["price"], abs=0.01) == 2.005
+def test_clustering_stays_within_range_width_pct():
+    """No cluster's price spread should exceed its range_width_pct budget."""
+    range_pct = 0.002
+    prices = [round(100.00 + 0.05 * i, 2) for i in range(16)]
+    swing_points = [{"price": p, "ts": i, "type": "trough"} for i, p in enumerate(prices)]
+
+    clusters = _cluster_points(swing_points, range_pct)
+
+    assert len(clusters) > 1, "16 points spanning 0.75 at a 0.2%% tolerance must not collapse into one cluster"
+    for cluster in clusters:
+        pts = [x["price"] for x in cluster["points"]]
+        spread = max(pts) - min(pts)
+        budget = min(pts) * range_pct
+        assert spread <= budget + 1e-9, (
+            f"cluster spread {spread:.4f} exceeds range_width_pct budget {budget:.4f}"
+        )
+
+
+def test_clustering_groups_points_within_tolerance():
+    """Points genuinely within tolerance of each other should still cluster together."""
+    swing_points = [
+        {"price": 100.00, "ts": 1, "type": "trough"},
+        {"price": 100.05, "ts": 2, "type": "trough"},
+        {"price": 100.10, "ts": 3, "type": "trough"},
+    ]
+    clusters = _cluster_points(swing_points, range_width_pct=0.002)
+    assert len(clusters) == 1
+    assert len(clusters[0]["points"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# Break detection
+# ---------------------------------------------------------------------------
+
+def test_break_detection_uses_actual_last_touch_type():
+    """
+    The touch that is chronologically last (by ts) determines break
+    direction -- not whichever point happened to have the lower price.
+    """
+    timestamps = [201]
+    ohlcv = [C(201, 100.20, 100.60, 100.10, 100.50)]  # closes well above the level
+    level_price = 100.025
+    last_touch_ts = 200
+
+    # The chronologically-last touch was a peak -> a close above should break it.
+    assert _is_level_broken(ohlcv, timestamps, level_price, last_touch_ts, "peak") is True
+
+    # (Sanity: the reverse direction on the same candle would NOT be broken.)
+    assert _is_level_broken(ohlcv, timestamps, level_price, last_touch_ts, "trough") is False
+
+
+def test_break_detection_requires_close_beyond_level_not_just_wick():
+    """A wick through the level that closes back on the original side is a
+    retest, not a break."""
+    timestamps = [101]
+    level_price = 100.00
+    # Wicks below and above the level intrabar, but closes above it (support held).
+    ohlcv = [C(101, 100.30, 100.60, 99.90, 100.30)]
+
+    assert _is_level_broken(ohlcv, timestamps, level_price, 100, "trough") is False
+
+
+def test_break_detection_gap_through_is_still_caught():
+    """A candle that gaps cleanly past the level (no wick straddle at all)
+    must still be caught via the close-based check."""
+    timestamps = [101]
+    level_price = 100.00
+    # Whole candle sits above the level -- no wick straddle, but a real break.
+    ohlcv = [C(101, 100.50, 100.80, 100.40, 100.70)]
+
+    assert _is_level_broken(ohlcv, timestamps, level_price, 100, "peak") is True
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+def _assert_raises_value_error(**kwargs):
+    try:
+        identify_levels(**kwargs)
+    except ValueError:
+        return
+    raise AssertionError(f"expected ValueError for kwargs={kwargs}")
+
+
+def test_rejects_unsorted_timestamps():
+    candles = [C(5, 1, 1, 1, 1)] + [C(i, 1, 1, 1, 1) for i in range(20)]
+    _assert_raises_value_error(ohlcv=candles, period=1)
+
+
+def test_rejects_invalid_body_or_wick():
+    candles = [C(i, 1, 1, 1, 1) for i in range(20)]
+    _assert_raises_value_error(ohlcv=candles, body_or_wick="wik")
+
+
+def test_rejects_non_positive_period():
+    candles = [C(i, 1, 1, 1, 1) for i in range(20)]
+    _assert_raises_value_error(ohlcv=candles, period=0)
+
+
+def test_rejects_non_positive_min_touches():
+    candles = [C(i, 1, 1, 1, 1) for i in range(20)]
+    _assert_raises_value_error(ohlcv=candles, min_touches=0)
+
+
+def test_rejects_non_positive_range_width_pct():
+    candles = [C(i, 1, 1, 1, 1) for i in range(20)]
+    _assert_raises_value_error(ohlcv=candles, range_width_pct=0)
+
+
+def test_empty_result_when_insufficient_candles():
+    candles = [C(i, 1, 1, 1, 1) for i in range(5)]
+    result = identify_levels(candles, period=5)
+    assert result == {
+        "active_support": [], "active_resistance": [],
+        "historical_support": [], "historical_resistance": []
+    }
+
+
+# ---------------------------------------------------------------------------
+# End-to-end structural invariants
+# ---------------------------------------------------------------------------
+
+def _make_random_walk(n, seed=42):
+    import random
+    rng = random.Random(seed)
+    price = 100.0
+    candles = []
+    for ts in range(n):
+        o = price
+        c = max(1.0, o + rng.uniform(-0.15, 0.15))
+        h = max(o, c) + rng.uniform(0, 0.05)
+        l = min(o, c) - rng.uniform(0, 0.05)
+        candles.append(C(ts, round(o, 4), round(h, 4), round(l, 4), round(c, 4)))
+        price = c
+    return candles
+
+
+def test_support_is_below_and_resistance_is_above_current_price():
+    candles = _make_random_walk(500)
+    result = identify_levels(candles)
+    current_price = candles[-1]['c']
+    for lv in result["active_support"] + result["historical_support"]:
+        assert lv["price"] < current_price
+    for lv in result["active_resistance"] + result["historical_resistance"]:
+        assert lv["price"] >= current_price
+
+
+def test_output_is_deterministic():
+    candles = _make_random_walk(500)
+    r1 = identify_levels(candles)
+    r2 = identify_levels(candles)
+    assert r1 == r2
+
+
+def test_every_valid_cluster_meets_min_touches():
+    candles = _make_random_walk(500)
+    min_touches = 3
+    result = identify_levels(candles, min_touches=min_touches)
+    for bucket in result.values():
+        for lv in bucket:
+            assert lv["touches"] >= min_touches
+
+
+# ---------------------------------------------------------------------------
+# Standalone runner (no pytest required)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+    import traceback
+
+    tests = [(name, fn) for name, fn in list(globals().items())
+             if name.startswith("test_") and callable(fn)]
+
+    passed, failed = 0, 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS  {name}")
+            passed += 1
+        except Exception:
+            print(f"FAIL  {name}")
+            traceback.print_exc()
+            failed += 1
+
+    print(f"\n{passed} passed, {failed} failed")
+    sys.exit(1 if failed else 0)
