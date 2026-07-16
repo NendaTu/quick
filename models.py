@@ -196,7 +196,7 @@ class LearningModel:
         sl_move = max(sl_move, sl_floor)
 
         net_sl_cost = sl_move + entry_fee_rate + sl_exit_fee_rate
-        target_roe = 0.20
+        target_roe = getattr(cfg, "TARGET_NET_ROE", 0.20)
         tp_move_from_roe = (target_roe / max_lev) + entry_fee_rate + tp_exit_fee_rate + getattr(cfg, 'EXPECTED_SLIPPAGE', 0.001)
         tp_move = max(tp_move_from_roe, (net_sl_cost * 2) + entry_fee_rate + tp_exit_fee_rate + getattr(cfg, 'EXPECTED_SLIPPAGE', 0.001))
 

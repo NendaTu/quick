@@ -6,40 +6,8 @@ try:
 except Exception:
     pass
 
-# Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
-console_log_path = "docs/temp/console-log.txt"
-os.makedirs(os.path.dirname(console_log_path), exist_ok=True)
-with open(console_log_path, "w", encoding="utf-8") as f:
-    pass
-
-class Tee:
-    def __init__(self, original_stream, filepath):
-        self.original_stream = original_stream
-        self.filepath = filepath
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        # Use append mode "a" to allow stdout and stderr streams to write concurrently without clobbering each other.
-        self.file = open(filepath, "a", encoding="utf-8", buffering=1)
-
-    def write(self, data):
-        self.original_stream.write(data)
-        # Skip carriage returns and progress bar updates in the file log to prevent bloating
-        if "\r" not in data:
-            self.file.write(data)
-
-    def flush(self):
-        self.original_stream.flush()
-        self.file.flush()
-
-    def close(self):
-        try:
-            self.file.close()
-        except:
-            pass
-
-stdout_tee = Tee(sys.stdout, console_log_path)
-stderr_tee = Tee(sys.stderr, console_log_path)
-sys.stdout = stdout_tee
-sys.stderr = stderr_tee
+from tools.logger import setup_console_tee, Tee
+stdout_tee, stderr_tee = setup_console_tee()
 
 import asyncio
 import math
@@ -646,6 +614,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     # Discovery of relevant timeframes from the strategy chain
     relevant_tfs = get_required_timeframes(chain)
+    if tf not in relevant_tfs:
+        relevant_tfs.append(tf)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in [asset, BTC_SYMBOL]:
@@ -711,6 +681,10 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
+    overrides_dict = overrides or {}
+    hb_interval = overrides_dict.get("heartbeat_interval", 30)
+    last_hb_time = 0
+
     try:
         # Simulation Loop using unified engine
         for i in range(start_idx, len(full_history)):
@@ -718,13 +692,14 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             import tools.logger
             tools.logger.VIRTUAL_TIME = c['ts']
 
-            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
-            if (i - start_idx) % 1440 == 0:
-                dt_str = datetime.fromtimestamp(c['ts'], tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            # Periodic Heartbeat in Backtest Console Output based on real elapsed time
+            now_real = time.time()
+            if now_real - last_hb_time >= hb_interval:
+                from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
+                ConsolePublisher.publish_heartbeat(c['ts'], engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
+                last_hb_time = now_real
 
             o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
@@ -1012,6 +987,8 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
     # Discovery of relevant timeframes from the strategy chain
     relevant_tfs = get_required_timeframes(chain)
+    if tf not in relevant_tfs:
+        relevant_tfs.append(tf)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in assets + [BTC_SYMBOL]:
@@ -1069,19 +1046,24 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
+    overrides_dict = overrides or {}
+    hb_interval = overrides_dict.get("heartbeat_interval", 30)
+    last_hb_time = 0
+
     try:
         # Master timeline loop
         for step_idx, current_ts in enumerate(timeline):
             import tools.logger
             tools.logger.VIRTUAL_TIME = current_ts
 
-            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
-            if step_idx % 1440 == 0:
-                dt_str = datetime.fromtimestamp(current_ts, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            # Periodic Heartbeat in Backtest Console Output based on real elapsed time
+            now_real = time.time()
+            if now_real - last_hb_time >= hb_interval:
+                from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
+                ConsolePublisher.publish_heartbeat(current_ts, engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
+                last_hb_time = now_real
 
             # Step A: Update prices and simulate price action for all active assets
             for asset in assets:
@@ -1460,55 +1442,80 @@ async def main():
         query_cmd = " -> ".join(query_parts)
 
     db = Database()
-
-    # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
-    from engine.exchanges.bitget import BitgetExchange
-    limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
-    client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, rate_limiter=limiter)
-
-    # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
-    if not assets_to_run:
-        assets_to_run = await discover_assets(client)
+    client = None
 
     try:
-        # Apply global overrides to config module if specified
-        for k, v in overrides.items():
-            if hasattr(config, k):
-                setattr(config, k, v)
-                log.info(f"Overriding config.{k} = {v}")
+        # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+        from engine.exchanges.bitget import BitgetExchange
+        limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+        client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, rate_limiter=limiter)
 
-        chain = parse_confluence_command(query_cmd)
-        # Apply overrides to wrappers in the chain
-        for segment in chain.segments:
-            for wrapper in segment:
-                wrapper.overrides = overrides
-                # Re-load instance with overrides
-                wrapper.instance = wrapper._load_strategy(wrapper.path)
-    except Exception as e:
-        print(f"Error parsing command: {e}")
-        return
+        # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
+        if not assets_to_run:
+            assets_to_run = await discover_assets(client)
 
-    # 1. Acquisition of data (Using unified discovery)
-    required_tfs = get_required_timeframes(chain)
-    try:
-        await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
-    except KeyboardInterrupt:
-        log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
-        return
+        try:
+            # Apply global overrides to config module if specified
+            for k, v in overrides.items():
+                if hasattr(config, k):
+                    setattr(config, k, v)
+                    log.info(f"Overriding config.{k} = {v}")
 
-    # 2. Run backtests based on toggle
-    all_results = []
+            chain = parse_confluence_command(query_cmd)
+            # Apply overrides to wrappers in the chain
+            for segment in chain.segments:
+                for wrapper in segment:
+                    wrapper.overrides = overrides
+                    # Re-load instance with overrides
+                    wrapper.instance = wrapper._load_strategy(wrapper.path)
+        except Exception as e:
+            print(f"Error parsing command: {e}")
+            return
 
-    if USE_PORTFOLIO_MODE:
-        log.info("Running in Concurrent Portfolio Mode (Sharing Capital)...")
-        all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m", overrides=overrides)
-    else:
-        log.info("Running in Isolated Single-Asset Mode...")
+        # 1. Acquisition of data (Using unified discovery)
+        required_tfs = get_required_timeframes(chain)
+        try:
+            await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
+        except KeyboardInterrupt:
+            log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
+            return
+
+        # 2. Run backtests based on toggle
+        all_results = []
+
+        if USE_PORTFOLIO_MODE:
+            log.info("Running in Concurrent Portfolio Mode (Sharing Capital)...")
+            all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m", overrides=overrides)
+        else:
+            log.info("Running in Isolated Single-Asset Mode...")
+            for asset in assets_to_run:
+                # Only run for the entry timeframe (1m) as requested by user
+                res = await run_backtest(chain, db, client, asset, "1m", overrides=overrides)
+                if res is None:
+                     res = {
+                         "asset": asset,
+                         "no_data": True,
+                         "roi": 0,
+                         "pnl": 0,
+                         "trades": 0,
+                         "side_stats": {
+                             "long": {"wins": 0, "trades": 0, "pnl": 0},
+                             "short": {"wins": 0, "trades": 0, "pnl": 0}
+                         }
+                     }
+                all_results.append(res)
+
+        # Ensure all requested assets are present in the final table (even if they had no data)
+        final_results = []
+        run_assets = [r["asset"] for r in all_results]
         for asset in assets_to_run:
-            # Only run for the entry timeframe (1m) as requested by user
-            res = await run_backtest(chain, db, client, asset, "1m", overrides=overrides)
-            if res is None:
-                 res = {
+            if asset in run_assets:
+                for r in all_results:
+                    if r["asset"] == asset:
+                        final_results.append(r)
+                        break
+            else:
+                 final_results.append({
                      "asset": asset,
                      "no_data": True,
                      "roi": 0,
@@ -1518,55 +1525,43 @@ async def main():
                          "long": {"wins": 0, "trades": 0, "pnl": 0},
                          "short": {"wins": 0, "trades": 0, "pnl": 0}
                      }
-                 }
-            all_results.append(res)
+                 })
 
-    # Ensure all requested assets are present in the final table (even if they had no data)
-    final_results = []
-    run_assets = [r["asset"] for r in all_results]
-    for asset in assets_to_run:
-        if asset in run_assets:
-            for r in all_results:
-                if r["asset"] == asset:
-                    final_results.append(r)
-                    break
-        else:
-             final_results.append({
-                 "asset": asset,
-                 "no_data": True,
-                 "roi": 0,
-                 "pnl": 0,
-                 "trades": 0,
-                 "side_stats": {
-                     "long": {"wins": 0, "trades": 0, "pnl": 0},
-                     "short": {"wins": 0, "trades": 0, "pnl": 0}
-                 }
-             })
+        # Print Milestone Reports
+        for asset in assets_to_run:
+            found_report = False
+            for segment in chain.segments:
+                for wrapper in segment:
+                    if hasattr(wrapper.instance, "get_milestone_report"):
+                        report = wrapper.instance.get_milestone_report()
+                        if report:
+                            if not found_report:
+                                print(f"\n[Milestone Report: {asset}]")
+                                found_report = True
+                            print(report)
 
-    # Print Milestone Reports
-    for asset in assets_to_run:
-        found_report = False
-        for segment in chain.segments:
-            for wrapper in segment:
-                if hasattr(wrapper.instance, "get_milestone_report"):
-                    report = wrapper.instance.get_milestone_report()
-                    if report:
-                        if not found_report:
-                            print(f"\n[Milestone Report: {asset}]")
-                            found_report = True
-                        print(report)
+        # 3. Output Table
+        print_results(final_results)
 
-    # 3. Output Table
-    print_results(final_results)
+    finally:
+        if client:
+            try:
+                await client.close()
+            except Exception as ce:
+                log.error(f"Error closing client: {ce}")
+        try:
+            db.stop()
+        except Exception as de:
+            log.error(f"Error stopping database: {de}")
 
-    await client.close()
-    db.stop()
-
-    # Restore original streams and close file
-    sys.stdout = stdout_tee.original_stream
-    sys.stderr = stderr_tee.original_stream
-    stdout_tee.close()
-    stderr_tee.close()
+        # Restore original streams and close file
+        try:
+            sys.stdout = stdout_tee.original_stream
+            sys.stderr = stderr_tee.original_stream
+            stdout_tee.close()
+            stderr_tee.close()
+        except Exception as te:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())
