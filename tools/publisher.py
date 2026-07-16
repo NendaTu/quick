@@ -7,8 +7,7 @@ timeframes, and strategies.
 """
 
 import logging
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
 
 log = logging.getLogger("scalper.publisher")
 
@@ -19,7 +18,7 @@ class ConsolePublisher:
     """
     @staticmethod
     def publish_heartbeat(virtual_time_s: float, equity: float, trades: int, win_rate: float, profit_ratio: float, open_positions_count: int, signals_fired: int = 0):
-        dt_str = datetime.fromtimestamp(virtual_time_s, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+        dt_str = datetime.fromtimestamp(virtual_time_s, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         pr_str = f"{profit_ratio:.2f}" if profit_ratio != float('inf') else "inf"
         msg = f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {equity:.2f} | Trades: {trades} | Win%: {win_rate:.1f}% | PR: {pr_str} | Open: {open_positions_count} | Signals Fired: {signals_fired}"
         log.info(msg)

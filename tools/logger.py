@@ -1,8 +1,7 @@
 import logging
 import sys
 import os
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
 
 # VIRTUAL_TIME: Tracked globally during backtests and simulation to prefix console logs with virtual dates.
 VIRTUAL_TIME = None
@@ -16,7 +15,7 @@ class VirtualTimeFormatter(logging.Formatter):
         global VIRTUAL_TIME
         if VIRTUAL_TIME is not None:
             # Convert virtual timestamp to readable UTC date-time
-            dt_str = datetime.fromtimestamp(VIRTUAL_TIME, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            dt_str = datetime.fromtimestamp(VIRTUAL_TIME, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             orig_asctime = self.formatTime(record, self.datefmt)
             prefix = f"{orig_asctime} [{dt_str}]"
             formatted_msg = super().format(record)
