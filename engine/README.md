@@ -43,3 +43,9 @@ To prevent state divergence during server restarts or network disconnects:
 - Every mode transition or initialization must call `_sync_exchange_state()`.
 - Local open positions and active orders are reconciled directly from the exchange's private endpoints.
 - Closed positions must be verified via the Mix Position History endpoints rather than simple local matching.
+
+### Signal Output and Console Logging Standard
+To prevent console flooding and ensure consistent output formatting, all strategies must follow these logging guidelines:
+- **Setup Discoveries, Setup Steps, and Phase Changes**: These must be logged at `debug` level (e.g. `self.logger.debug`).
+- **Signal Details (Entry, SL, TPs, Qty)**: When a setup is discovered, the strategy should log the details at `debug` level, or check the global `LOG_SIGNALS` configuration setting before logging at `info` level.
+- **Entries, Fills, and Exits**: These are handled automatically by the matching simulator (`simulator.py`) or exchange layers and printed uniformly via the central `ConsolePublisher` class at `info` level. This guarantees that only signals resulting in actual, successfully routed trades are printed directly to the console.

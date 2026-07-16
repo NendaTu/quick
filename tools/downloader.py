@@ -13,8 +13,7 @@ import os
 import time
 import math
 import random
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime, timedelta, timezone
 
 # Ensure project root is in path
 sys.path.append(os.getcwd())
