@@ -17,8 +17,7 @@ import time
 import importlib
 import importlib.util
 import inspect
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 # Ensure project root is in path
@@ -44,8 +43,8 @@ DEFAULT_ASSETS = [] # for quick tests, use all or some of: "ETHUSDT", "HBARUSDT"
 DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
 
 # Default to Dec 2025 - June 2026 as requested by user
-DEFAULT_START_DATE = datetime(2026, 3, 1, tzinfo=pytz.UTC)
-DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
+DEFAULT_START_DATE = datetime(2026, 3, 1, tzinfo=timezone.utc)
+DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 START_DATE = DEFAULT_START_DATE
 END_DATE = DEFAULT_END_DATE
@@ -144,7 +143,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     dl_start_ts = START_DATE.timestamp()
     if requires_warmup:
         dl_start_ts -= (86400 * 14) # 14 days warm-up
-        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=pytz.UTC)}. Elapsed: {int(time.time() - session_start)}s")
+        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=timezone.utc)}. Elapsed: {int(time.time() - session_start)}s")
 
     # 1. First Pass: Identify all gaps to build a global progress bar
     all_gaps = []
@@ -1426,9 +1425,9 @@ async def main():
             query_parts.append(arg)
 
     if len(dates_found) >= 1:
-        START_DATE = datetime.strptime(dates_found[0], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
+        START_DATE = datetime.strptime(dates_found[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
     if len(dates_found) >= 2:
-        END_DATE = datetime.strptime(dates_found[1], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
+        END_DATE = datetime.strptime(dates_found[1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     if not query_parts:
         print("Error: No strategy segments provided.")
