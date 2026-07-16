@@ -4,7 +4,7 @@
 ## Overview
 This strategy identifies "Order Blocks" (OBs) across multiple timeframes (1m, 3m, 5m, and 15m) using
 our optimized and repaired pure technical OB detection module in `ta/patterns/ob.py`.
-It confirms OBs strictly on closed candles, placing limit orders exactly at the close of
+It confirms OBs strictly on closed candles, placing limit or market orders exactly at the close of
 the solidification (impulse) candle on the respective timeframe, aiming to capture
 high-probability institutional price reversals.
 
@@ -20,7 +20,7 @@ high-probability institutional price reversals.
 ## The Intended Flow
 1. **Discovery**: For each timeframe in ['1m', '3m', '5m', '15m'], call `detect_order_blocks()` on the closed candles history.
 2. **Solidification Check**: Verify if a fresh Bearish or Bullish OB has just solidified (formed) at the most recently completed closed candle on that timeframe.
-3. **Execution**: Trigger a Limit entry exactly at the solidifying candle close.
+3. **Execution**: Trigger a Market or Limit entry exactly at the solidifying candle close.
 4. **SL Placement**: Set stop-loss 1 tick below the OB valley (if bullish) or 1 tick above the OB peak (if bearish).
 5. **TP Splits**: Place three limit exits:
    - TP1 at 1:1 + fees and slippage (33% of position size)
@@ -72,7 +72,8 @@ class LevelFinderStrategy(JBaseStrategy):
         self.params = {
             "timeframes": ["1m", "3m", "5m", "15m"],
             "ob_period": 14,
-            "impulse_mult": 1.5
+            "impulse_mult": 1.5,
+            "entry_order_type": "market" # Market orders ensure 100% instant fills on OB solidification candle close
         }
 
         # Warm-up history requirements for all timeframes
@@ -137,7 +138,8 @@ class LevelFinderStrategy(JBaseStrategy):
 
             # Leverage & TP targets
             leverage = int(self.simulator.leverage_limits.get(symbol, 20) if self.simulator else 20)
-            entry_maker = (config.ENTRY_ORDER_TYPE == "limit")
+            entry_order_type = self.params["entry_order_type"]
+            entry_maker = (entry_order_type == "limit")
             tp_maker = (config.TP_ORDER_TYPE == "limit")
 
             # TP1: 1:1 + fees and slippage
@@ -223,6 +225,7 @@ class LevelFinderStrategy(JBaseStrategy):
                 "tp3_qty": tp3_qty,
                 "qty": qty,
                 "range_candle_type": "bullish" if target_ob["type"] == "bullish" else "bearish",
+                "entry_order_type": entry_order_type,
                 "metadata": {"timeframe": tf, "ob_index": target_ob["index"]}
             }
 

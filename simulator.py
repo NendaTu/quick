@@ -797,8 +797,9 @@ class Simulator(DataAcquisitionManager):
         required_margin = (qty * entry_price) / max_lev
 
         # Enforce "Net Profit vs. Fee" Filter to prevent narrow fee traps [REPAIR]
+        entry_order_type = kwargs.get("entry_order_type") or self.config.ENTRY_ORDER_TYPE
         if tp_price and tp_price > 0:
-            entry_fee_rate = self.config.MAKER_FEE if self.config.ENTRY_ORDER_TYPE == "limit" else self.config.TAKER_FEE
+            entry_fee_rate = self.config.MAKER_FEE if entry_order_type == "limit" else self.config.TAKER_FEE
             exit_fee_rate = self.config.MAKER_FEE if self.config.TP_ORDER_TYPE == "limit" else self.config.TAKER_FEE
 
             entry_fee = qty * entry_price * entry_fee_rate
@@ -815,7 +816,7 @@ class Simulator(DataAcquisitionManager):
                 log.info(f"REJECTED NARROW FEE TRAP: {symbol} {side.upper()} projected net profit {projected_net_pnl:.4f} is less than required threshold {min_required_profit:.4f} ({min_profit_pct*100:.2f}% of margin) | Gross TP Profit: {gross_pnl_at_tp:.4f}, Total Fees: {total_expected_fees:.4f}")
                 return {"code": "4", "msg": "net tp profit below minimum required threshold"}
 
-        estimated_fee = qty * entry_price * (self.config.MAKER_FEE if self.config.ENTRY_ORDER_TYPE == "limit" else self.config.TAKER_FEE)
+        estimated_fee = qty * entry_price * (self.config.MAKER_FEE if entry_order_type == "limit" else self.config.TAKER_FEE)
 
         available_balance = self.equity - self.used_margin
         if available_balance < (required_margin + estimated_fee):
@@ -826,7 +827,7 @@ class Simulator(DataAcquisitionManager):
                 log.debug(rej_msg)
             return {"code": "1", "msg": "insufficient balance"}
 
-        if self.config.ENTRY_ORDER_TYPE == "market":
+        if entry_order_type == "market":
             fill_price = self._calculate_fill_price(symbol, side, qty)
 
             slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
@@ -838,7 +839,7 @@ class Simulator(DataAcquisitionManager):
                     log.debug(rej_msg)
                 return {"code": "2", "msg": "high slippage"}
 
-            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian, features=features, strategy_id=kwargs.get("strategy_id"))
+            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, entry_order_type, original_side, is_contrarian, features=features, strategy_id=kwargs.get("strategy_id"))
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
