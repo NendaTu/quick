@@ -68,6 +68,7 @@ class LevelFinderStrategy(JBaseStrategy):
 
         # Warm-up history requirements for all timeframes
         self.required_history = {tf: self.params["ob_period"] + 100 for tf in self.params["timeframes"]}
+        self.last_analyzed_ts = {}
 
         if config_overrides:
             for k in self.params:
@@ -76,12 +77,20 @@ class LevelFinderStrategy(JBaseStrategy):
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         symbol = market_data["symbol"]
+        if symbol not in self.last_analyzed_ts:
+            self.last_analyzed_ts[symbol] = {}
 
         # Loop through each timeframe to discover solidified order blocks
         for tf in self.params["timeframes"]:
             ohlcv = self._get_ohlcv(symbol, tf)
             if not ohlcv or len(ohlcv) < self.required_history[tf]:
                 continue
+
+            solidify_ts = ohlcv[-2]["ts"]
+            if self.last_analyzed_ts[symbol].get(tf) == solidify_ts:
+                continue
+
+            self.last_analyzed_ts[symbol][tf] = solidify_ts
 
             # 1. Detect order blocks using stateless module
             res = detect_order_blocks(ohlcv, period=self.params["ob_period"], impulse_mult=self.params["impulse_mult"])
