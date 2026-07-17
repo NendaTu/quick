@@ -7,14 +7,27 @@ session and killzone alignment.
 """
 
 import math
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
 from typing import List, Dict
 import functools
 
 # --- Configuration ---
 TIMEZONE = "America/Toronto"
-_local_tz = pytz.timezone(TIMEZONE)
+
+try:
+    import pytz
+    _local_tz = pytz.timezone(TIMEZONE)
+    _utc_tz = pytz.UTC
+except ImportError:
+    try:
+        import zoneinfo
+        _local_tz = zoneinfo.ZoneInfo(TIMEZONE)
+    except ImportError:
+        # Fallback if zoneinfo is not supported/missing DB (like old Python / stripped environments)
+        # America/Toronto is UTC-5 (or UTC-4 in daylight savings). Fall back to simple UTC-5 offset.
+        from datetime import timedelta, timezone as dt_timezone
+        _local_tz = dt_timezone(timedelta(hours=-5))
+    _utc_tz = timezone.utc
 
 @functools.lru_cache(maxsize=10000)
 def convert_to_local(timestamp_s: float) -> datetime:
@@ -22,7 +35,7 @@ def convert_to_local(timestamp_s: float) -> datetime:
     Converts a Unix timestamp to a localized datetime object.
     [PERF] Cached to avoid expensive pytz/datetime operations on repetitive timestamps.
     """
-    utc_dt = datetime.fromtimestamp(timestamp_s, tz=pytz.UTC)
+    utc_dt = datetime.fromtimestamp(timestamp_s, tz=_utc_tz)
     return utc_dt.astimezone(_local_tz)
 
 def is_within_time_window(timestamp_s: float, start_hm: str, end_hm: str) -> bool:

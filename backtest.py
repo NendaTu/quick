@@ -6,40 +6,8 @@ try:
 except Exception:
     pass
 
-# Initialize console output redirector Tee to capture all stdout/stderr to docs/temp/console-log.txt
-console_log_path = "docs/temp/console-log.txt"
-os.makedirs(os.path.dirname(console_log_path), exist_ok=True)
-with open(console_log_path, "w", encoding="utf-8") as f:
-    pass
-
-class Tee:
-    def __init__(self, original_stream, filepath):
-        self.original_stream = original_stream
-        self.filepath = filepath
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        # Use append mode "a" to allow stdout and stderr streams to write concurrently without clobbering each other.
-        self.file = open(filepath, "a", encoding="utf-8", buffering=1)
-
-    def write(self, data):
-        self.original_stream.write(data)
-        # Skip carriage returns and progress bar updates in the file log to prevent bloating
-        if "\r" not in data:
-            self.file.write(data)
-
-    def flush(self):
-        self.original_stream.flush()
-        self.file.flush()
-
-    def close(self):
-        try:
-            self.file.close()
-        except:
-            pass
-
-stdout_tee = Tee(sys.stdout, console_log_path)
-stderr_tee = Tee(sys.stderr, console_log_path)
-sys.stdout = stdout_tee
-sys.stderr = stderr_tee
+from tools.logger import setup_console_tee, Tee
+stdout_tee, stderr_tee = setup_console_tee()
 
 import asyncio
 import math
@@ -49,8 +17,7 @@ import time
 import importlib
 import importlib.util
 import inspect
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 # Ensure project root is in path
@@ -76,8 +43,8 @@ DEFAULT_ASSETS = [] # for quick tests, use all or some of: "ETHUSDT", "HBARUSDT"
 DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
 
 # Default to Dec 2025 - June 2026 as requested by user
-DEFAULT_START_DATE = datetime(2026, 3, 1, tzinfo=pytz.UTC)
-DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
+DEFAULT_START_DATE = datetime(2026, 3, 1, tzinfo=timezone.utc)
+DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 START_DATE = DEFAULT_START_DATE
 END_DATE = DEFAULT_END_DATE
@@ -176,7 +143,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
     dl_start_ts = START_DATE.timestamp()
     if requires_warmup:
         dl_start_ts -= (86400 * 14) # 14 days warm-up
-        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=pytz.UTC)}. Elapsed: {int(time.time() - session_start)}s")
+        log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=timezone.utc)}. Elapsed: {int(time.time() - session_start)}s")
 
     # 1. First Pass: Identify all gaps to build a global progress bar
     all_gaps = []
@@ -646,6 +613,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     # Discovery of relevant timeframes from the strategy chain
     relevant_tfs = get_required_timeframes(chain)
+    if tf not in relevant_tfs:
+        relevant_tfs.append(tf)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in [asset, BTC_SYMBOL]:
@@ -700,6 +669,20 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     log.info(f"Engine initialized with {len(engine.strategies)} strategies.")
 
+    for s in engine.strategies:
+        sid = getattr(s, "strategy_id", getattr(s, "name", "unknown"))
+        if sid not in engine.strategy_stats:
+            engine.strategy_stats[sid] = {
+                "pnl": 0.0,
+                "total_trades": 0,
+                "buy_wins": 0,
+                "buy_losses": 0,
+                "sell_wins": 0,
+                "sell_losses": 0,
+                "tp_wins": 0,
+                "be_wins": 0
+            }
+
     # Track pointers into history for each timeframe/symbol to avoid re-scanning
     pointers = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
     # Advance pointers to where we pre-populated
@@ -711,6 +694,10 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
+    overrides_dict = overrides or {}
+    hb_interval = overrides_dict.get("heartbeat_interval", 30)
+    last_hb_time = 0
+
     try:
         # Simulation Loop using unified engine
         for i in range(start_idx, len(full_history)):
@@ -718,13 +705,14 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
             import tools.logger
             tools.logger.VIRTUAL_TIME = c['ts']
 
-            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
-            if (i - start_idx) % 1440 == 0:
-                dt_str = datetime.fromtimestamp(c['ts'], tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            # Periodic Heartbeat in Backtest Console Output based on real elapsed time
+            now_real = time.time()
+            if now_real - last_hb_time >= hb_interval:
+                from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
+                ConsolePublisher.publish_heartbeat(c['ts'], engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions), engine.session_signals)
+                last_hb_time = now_real
 
             o, h, l, cl = c['o'], c['h'], c['l'], c['c']
 
@@ -804,12 +792,14 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                             sig = strat.get_entry_signal(market_data)
                             if sig:
+                                engine.session_signals += 1
                                 sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
                                 active_signals.append(sig)
                 else:
                     # Legacy Confluence Chain
                     signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
                     if signal:
+                        engine.session_signals += 1
                         signal["strategy_id"] = "chain"
                         active_signals.append(signal)
 
@@ -827,8 +817,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                         scoring_result = se.evaluate(feat, side=signal["side"], config_context=config, dynamic_weights=engine.model.weights)
                     else:
                         scoring_result = se.evaluate(feat, side=signal["side"], config_context=config)
-                        # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
-                        engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
+
+                    # Always write to the complete signals log file
+                    engine._write_signals_log(asset, signal["side"], strategy_id, scoring_result)
 
                     if scoring_result["decision"] == "REJECTED":
                         continue
@@ -849,6 +840,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                         strategy_id=signal.get("strategy_id"),
                         **kwargs
                     )
+
+                    if res and res.get("code") == "00000":
+                        engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
 
             # Enforce protective safety limit checks (Drawdown, ROI, Max Trades, Duration)
             if sim.equity > peak_equity:
@@ -1012,6 +1006,8 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
     # Discovery of relevant timeframes from the strategy chain
     relevant_tfs = get_required_timeframes(chain)
+    if tf not in relevant_tfs:
+        relevant_tfs.append(tf)
     log.info(f"Backtest using timeframes: {relevant_tfs}")
 
     for sym in assets + [BTC_SYMBOL]:
@@ -1055,6 +1051,20 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
     log.info(f"Engine initialized with {len(engine.strategies)} strategies.")
 
+    for s in engine.strategies:
+        sid = getattr(s, "strategy_id", getattr(s, "name", "unknown"))
+        if sid not in engine.strategy_stats:
+            engine.strategy_stats[sid] = {
+                "pnl": 0.0,
+                "total_trades": 0,
+                "buy_wins": 0,
+                "buy_losses": 0,
+                "sell_wins": 0,
+                "sell_losses": 0,
+                "tp_wins": 0,
+                "be_wins": 0
+            }
+
     # Track pointers into history for each timeframe/symbol to avoid re-scanning
     pointers = {sym: {t: 0 for t in relevant_tfs} for sym in assets + [BTC_SYMBOL]}
     # Advance pointers to where we pre-populated
@@ -1069,19 +1079,24 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     # Remove artificial latency for backtests
     sim.latency_simulation = False
 
+    overrides_dict = overrides or {}
+    hb_interval = overrides_dict.get("heartbeat_interval", 30)
+    last_hb_time = 0
+
     try:
         # Master timeline loop
         for step_idx, current_ts in enumerate(timeline):
             import tools.logger
             tools.logger.VIRTUAL_TIME = current_ts
 
-            # Periodic Heartbeat in Backtest Console Output (every 1440 steps / 1 day)
-            if step_idx % 1440 == 0:
-                dt_str = datetime.fromtimestamp(current_ts, tz=pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            # Periodic Heartbeat in Backtest Console Output based on real elapsed time
+            now_real = time.time()
+            if now_real - last_hb_time >= hb_interval:
+                from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                pr_str = f"{pr_val:.2f}" if pr_val != float('inf') else "inf"
-                log.info(f"HEARTBEAT | Virtual Time: {dt_str} | Equity: {engine.equity:.2f} | Trades: {engine.total_trades} | Win%: {wr:.1f}% | PR: {pr_str} | Open: {len(engine.open_positions)}")
+                ConsolePublisher.publish_heartbeat(current_ts, engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions), engine.session_signals)
+                last_hb_time = now_real
 
             # Step A: Update prices and simulate price action for all active assets
             for asset in assets:
@@ -1171,6 +1186,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                                     strat.model.simulator = sim
                                 sig = strat.get_entry_signal(market_data)
                                 if sig:
+                                    engine.session_signals += 1
                                     sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
                                     active_signals.append(sig)
 
@@ -1188,8 +1204,9 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                             scoring_result = se.evaluate(feat, side=signal["side"], config_context=config, dynamic_weights=engine.model.weights)
                         else:
                             scoring_result = se.evaluate(feat, side=signal["side"], config_context=config)
-                            # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
-                            engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
+
+                        # Always write to the complete signals log file
+                        engine._write_signals_log(asset, signal["side"], strategy_id, scoring_result)
 
                         if scoring_result["decision"] == "REJECTED":
                             continue
@@ -1202,13 +1219,16 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                         for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
                             kwargs.pop(key, None)
 
-                        sim.place_trade_oco(
+                        res = sim.place_trade_oco(
                             asset, signal["side"], signal.get("qty", 0),
                             signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
                             features=feat,
                             strategy_id=signal.get("strategy_id"),
                             **kwargs
                         )
+
+                        if res and res.get("code") == "00000":
+                            engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
 
             # Enforce protective safety limit checks (Drawdown, ROI, Max Trades, Duration)
             if sim.equity > peak_equity:
@@ -1444,9 +1464,9 @@ async def main():
             query_parts.append(arg)
 
     if len(dates_found) >= 1:
-        START_DATE = datetime.strptime(dates_found[0], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
+        START_DATE = datetime.strptime(dates_found[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
     if len(dates_found) >= 2:
-        END_DATE = datetime.strptime(dates_found[1], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
+        END_DATE = datetime.strptime(dates_found[1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     if not query_parts:
         print("Error: No strategy segments provided.")
@@ -1460,55 +1480,80 @@ async def main():
         query_cmd = " -> ".join(query_parts)
 
     db = Database()
-
-    # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
-    from engine.exchanges.bitget import BitgetExchange
-    limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
-    client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, rate_limiter=limiter)
-
-    # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
-    if not assets_to_run:
-        assets_to_run = await discover_assets(client)
+    client = None
 
     try:
-        # Apply global overrides to config module if specified
-        for k, v in overrides.items():
-            if hasattr(config, k):
-                setattr(config, k, v)
-                log.info(f"Overriding config.{k} = {v}")
+        # [REPAIR-20260708] Proactive Rate Limiting (98% safety cap)
+        from engine.exchanges.bitget import BitgetExchange
+        limiter = RateLimiter(rps=BitgetExchange.DEFAULT_RPS, safety_factor=0.98)
+        client = BitGetClient(config.BITGET_API_KEY, config.BITGET_SECRET_KEY, config.BITGET_PASSPHRASE, rate_limiter=limiter)
 
-        chain = parse_confluence_command(query_cmd)
-        # Apply overrides to wrappers in the chain
-        for segment in chain.segments:
-            for wrapper in segment:
-                wrapper.overrides = overrides
-                # Re-load instance with overrides
-                wrapper.instance = wrapper._load_strategy(wrapper.path)
-    except Exception as e:
-        print(f"Error parsing command: {e}")
-        return
+        # Asset Discovery if DEFAULT_ASSETS is empty and no assets CLI argument
+        if not assets_to_run:
+            assets_to_run = await discover_assets(client)
 
-    # 1. Acquisition of data (Using unified discovery)
-    required_tfs = get_required_timeframes(chain)
-    try:
-        await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
-    except KeyboardInterrupt:
-        log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
-        return
+        try:
+            # Apply global overrides to config module if specified
+            for k, v in overrides.items():
+                if hasattr(config, k):
+                    setattr(config, k, v)
+                    log.info(f"Overriding config.{k} = {v}")
 
-    # 2. Run backtests based on toggle
-    all_results = []
+            chain = parse_confluence_command(query_cmd)
+            # Apply overrides to wrappers in the chain
+            for segment in chain.segments:
+                for wrapper in segment:
+                    wrapper.overrides = overrides
+                    # Re-load instance with overrides
+                    wrapper.instance = wrapper._load_strategy(wrapper.path)
+        except Exception as e:
+            print(f"Error parsing command: {e}")
+            return
 
-    if USE_PORTFOLIO_MODE:
-        log.info("Running in Concurrent Portfolio Mode (Sharing Capital)...")
-        all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m", overrides=overrides)
-    else:
-        log.info("Running in Isolated Single-Asset Mode...")
+        # 1. Acquisition of data (Using unified discovery)
+        required_tfs = get_required_timeframes(chain)
+        try:
+            await download_historical_data(client, db, assets_to_run, required_tfs, chain=chain)
+        except KeyboardInterrupt:
+            log.warning("\n[CTRL+C] Data acquisition interrupted by user. Exiting.")
+            return
+
+        # 2. Run backtests based on toggle
+        all_results = []
+
+        if USE_PORTFOLIO_MODE:
+            log.info("Running in Concurrent Portfolio Mode (Sharing Capital)...")
+            all_results = await run_backtest_portfolio(chain, db, client, assets_to_run, "1m", overrides=overrides)
+        else:
+            log.info("Running in Isolated Single-Asset Mode...")
+            for asset in assets_to_run:
+                # Only run for the entry timeframe (1m) as requested by user
+                res = await run_backtest(chain, db, client, asset, "1m", overrides=overrides)
+                if res is None:
+                     res = {
+                         "asset": asset,
+                         "no_data": True,
+                         "roi": 0,
+                         "pnl": 0,
+                         "trades": 0,
+                         "side_stats": {
+                             "long": {"wins": 0, "trades": 0, "pnl": 0},
+                             "short": {"wins": 0, "trades": 0, "pnl": 0}
+                         }
+                     }
+                all_results.append(res)
+
+        # Ensure all requested assets are present in the final table (even if they had no data)
+        final_results = []
+        run_assets = [r["asset"] for r in all_results]
         for asset in assets_to_run:
-            # Only run for the entry timeframe (1m) as requested by user
-            res = await run_backtest(chain, db, client, asset, "1m", overrides=overrides)
-            if res is None:
-                 res = {
+            if asset in run_assets:
+                for r in all_results:
+                    if r["asset"] == asset:
+                        final_results.append(r)
+                        break
+            else:
+                 final_results.append({
                      "asset": asset,
                      "no_data": True,
                      "roi": 0,
@@ -1518,55 +1563,43 @@ async def main():
                          "long": {"wins": 0, "trades": 0, "pnl": 0},
                          "short": {"wins": 0, "trades": 0, "pnl": 0}
                      }
-                 }
-            all_results.append(res)
+                 })
 
-    # Ensure all requested assets are present in the final table (even if they had no data)
-    final_results = []
-    run_assets = [r["asset"] for r in all_results]
-    for asset in assets_to_run:
-        if asset in run_assets:
-            for r in all_results:
-                if r["asset"] == asset:
-                    final_results.append(r)
-                    break
-        else:
-             final_results.append({
-                 "asset": asset,
-                 "no_data": True,
-                 "roi": 0,
-                 "pnl": 0,
-                 "trades": 0,
-                 "side_stats": {
-                     "long": {"wins": 0, "trades": 0, "pnl": 0},
-                     "short": {"wins": 0, "trades": 0, "pnl": 0}
-                 }
-             })
+        # Print Milestone Reports
+        for asset in assets_to_run:
+            found_report = False
+            for segment in chain.segments:
+                for wrapper in segment:
+                    if hasattr(wrapper.instance, "get_milestone_report"):
+                        report = wrapper.instance.get_milestone_report()
+                        if report:
+                            if not found_report:
+                                print(f"\n[Milestone Report: {asset}]")
+                                found_report = True
+                            print(report)
 
-    # Print Milestone Reports
-    for asset in assets_to_run:
-        found_report = False
-        for segment in chain.segments:
-            for wrapper in segment:
-                if hasattr(wrapper.instance, "get_milestone_report"):
-                    report = wrapper.instance.get_milestone_report()
-                    if report:
-                        if not found_report:
-                            print(f"\n[Milestone Report: {asset}]")
-                            found_report = True
-                        print(report)
+        # 3. Output Table
+        print_results(final_results)
 
-    # 3. Output Table
-    print_results(final_results)
+    finally:
+        if client:
+            try:
+                await client.close()
+            except Exception as ce:
+                log.error(f"Error closing client: {ce}")
+        try:
+            db.stop()
+        except Exception as de:
+            log.error(f"Error stopping database: {de}")
 
-    await client.close()
-    db.stop()
-
-    # Restore original streams and close file
-    sys.stdout = stdout_tee.original_stream
-    sys.stderr = stderr_tee.original_stream
-    stdout_tee.close()
-    stderr_tee.close()
+        # Restore original streams and close file
+        try:
+            sys.stdout = stdout_tee.original_stream
+            sys.stderr = stderr_tee.original_stream
+            stdout_tee.close()
+            stderr_tee.close()
+        except Exception as te:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())

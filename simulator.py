@@ -688,9 +688,26 @@ class Simulator(DataAcquisitionManager):
 
                 sid = self.order_id_counter; self.order_id_counter += 1
                 tp_orders = []
+                use_tp3 = (o.get("tp3_price") is not None)
                 use_tp_split = (self.config.EXIT_STRATEGY == "BE+TP1+TP2" or o.get("tp1_price") is not None)
 
-                if use_tp_split and o.get("tp1_price"):
+                if use_tp3:
+                    tid1 = self.order_id_counter; self.order_id_counter += 1
+                    tid2 = self.order_id_counter; self.order_id_counter += 1
+                    tid3 = self.order_id_counter; self.order_id_counter += 1
+                    tp1_price = o["tp1_price"]
+                    tp2_price = o["tp2_price"]
+                    tp3_price = o["tp3_price"]
+                    tp1_qty = o["tp1_qty"]
+                    tp2_qty = o["tp2_qty"]
+                    tp3_qty = o["qty"] - tp1_qty - tp2_qty
+
+                    tp_orders.extend([
+                        {"id": tid1, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp1_price, "qty": tp1_qty, "is_tp1": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                        {"id": tid2, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                        {"id": tid3, "symbol": o["symbol"], "pos_side": o["pos_side"], "type": "tp", "price": tp3_price, "qty": tp3_qty, "is_tp3": True, "original_side": o.get("original_side"), "is_contrarian": o.get("is_contrarian", False)},
+                    ])
+                elif use_tp_split and o.get("tp1_price"):
                     tid1 = self.order_id_counter; self.order_id_counter += 1
                     tid2 = self.order_id_counter; self.order_id_counter += 1
                     tp2_price = o.get("tp2_price") or o.get("exit_price") or o.get("tp_price")
@@ -780,8 +797,9 @@ class Simulator(DataAcquisitionManager):
         required_margin = (qty * entry_price) / max_lev
 
         # Enforce "Net Profit vs. Fee" Filter to prevent narrow fee traps [REPAIR]
+        entry_order_type = kwargs.get("entry_order_type") or self.config.ENTRY_ORDER_TYPE
         if tp_price and tp_price > 0:
-            entry_fee_rate = self.config.MAKER_FEE if self.config.ENTRY_ORDER_TYPE == "limit" else self.config.TAKER_FEE
+            entry_fee_rate = self.config.MAKER_FEE if entry_order_type == "limit" else self.config.TAKER_FEE
             exit_fee_rate = self.config.MAKER_FEE if self.config.TP_ORDER_TYPE == "limit" else self.config.TAKER_FEE
 
             entry_fee = qty * entry_price * entry_fee_rate
@@ -798,7 +816,7 @@ class Simulator(DataAcquisitionManager):
                 log.info(f"REJECTED NARROW FEE TRAP: {symbol} {side.upper()} projected net profit {projected_net_pnl:.4f} is less than required threshold {min_required_profit:.4f} ({min_profit_pct*100:.2f}% of margin) | Gross TP Profit: {gross_pnl_at_tp:.4f}, Total Fees: {total_expected_fees:.4f}")
                 return {"code": "4", "msg": "net tp profit below minimum required threshold"}
 
-        estimated_fee = qty * entry_price * (self.config.MAKER_FEE if self.config.ENTRY_ORDER_TYPE == "limit" else self.config.TAKER_FEE)
+        estimated_fee = qty * entry_price * (self.config.MAKER_FEE if entry_order_type == "limit" else self.config.TAKER_FEE)
 
         available_balance = self.equity - self.used_margin
         if available_balance < (required_margin + estimated_fee):
@@ -809,7 +827,7 @@ class Simulator(DataAcquisitionManager):
                 log.debug(rej_msg)
             return {"code": "1", "msg": "insufficient balance"}
 
-        if self.config.ENTRY_ORDER_TYPE == "market":
+        if entry_order_type == "market":
             fill_price = self._calculate_fill_price(symbol, side, qty)
 
             slippage = (fill_price / entry_price - 1) if side == "buy" else (entry_price / fill_price - 1)
@@ -821,13 +839,30 @@ class Simulator(DataAcquisitionManager):
                     log.debug(rej_msg)
                 return {"code": "2", "msg": "high slippage"}
 
-            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, "market", original_side, is_contrarian, features=features, strategy_id=kwargs.get("strategy_id"))
+            self._execute_entry_direct(symbol, side, qty, fill_price, btc_conf, drt, entry_order_type, original_side, is_contrarian, features=features, strategy_id=kwargs.get("strategy_id"))
 
             sid = self.order_id_counter; self.order_id_counter += 1
             tp_orders = []
+            use_tp3 = (kwargs.get("tp3_price") is not None)
             use_tp_split = (self.config.EXIT_STRATEGY == "BE+TP1+TP2" or kwargs.get("tp1_price") is not None)
 
-            if use_tp_split and kwargs.get("tp1_price"):
+            if use_tp3:
+                tid1 = self.order_id_counter; self.order_id_counter += 1
+                tid2 = self.order_id_counter; self.order_id_counter += 1
+                tid3 = self.order_id_counter; self.order_id_counter += 1
+                tp1_price = kwargs["tp1_price"]
+                tp2_price = kwargs["tp2_price"]
+                tp3_price = kwargs["tp3_price"]
+                tp1_qty = kwargs["tp1_qty"]
+                tp2_qty = kwargs["tp2_qty"]
+                tp3_qty = qty - tp1_qty - tp2_qty
+
+                tp_orders.extend([
+                    {"id": tid1, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp1_price, "qty": tp1_qty, "is_tp1": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                    {"id": tid2, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp2_price, "qty": tp2_qty, "is_tp2": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                    {"id": tid3, "symbol": symbol, "pos_side": side, "type": "tp", "price": tp3_price, "qty": tp3_qty, "is_tp3": True, "original_side": original_side, "is_contrarian": is_contrarian},
+                ])
+            elif use_tp_split and kwargs.get("tp1_price"):
                 tid1 = self.order_id_counter; self.order_id_counter += 1
                 tid2 = self.order_id_counter; self.order_id_counter += 1
                 tp2_price = kwargs.get("tp2_price") or tp_price or kwargs.get("exit_price")
@@ -955,6 +990,19 @@ class Simulator(DataAcquisitionManager):
                         o["is_breakeven"] = True
 
                         log.info(f"TP1 HIT: SL for {sym} {side.upper()} moved to {o['triggerPrice']:.8f} (Halfway Entry/TP1)")
+                        break
+            elif order.get("is_tp2"):
+                for o in self.pending_orders:
+                    if o["symbol"] == sym and o["pos_side"] == side and o["type"] == "stop":
+                        o["qty"] = pos["qty"]
+
+                        entry_price = pos["entry_price"]
+                        spec = self.contract_specs.get(sym, {})
+                        price_place = int(spec.get('pricePlace', 2))
+                        o["triggerPrice"] = round(entry_price, price_place)
+                        o["is_breakeven"] = True
+
+                        log.info(f"TP2 HIT: SL for {sym} {side.upper()} moved to break-even {o['triggerPrice']:.8f}")
                         break
         else:
             del self.positions[(sym, side)]

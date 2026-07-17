@@ -1,6 +1,5 @@
 import os
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -104,11 +103,11 @@ BTC_SYMBOL = "BTCUSDT"
 # --- Acquisition & Timeframes ---
 # MAX_START_DATE: Sets the earliest date boundary for downloading historical backtest candles.
 # Expect historical data queries to start fetching candles starting exactly from this date.
-MAX_START_DATE = datetime(2022, 6, 1, tzinfo=pytz.UTC)
+MAX_START_DATE = datetime(2022, 6, 1, tzinfo=timezone.utc)
 
 # MAX_END_DATE: Sets the latest date boundary for downloading historical backtest candles.
 # Expect backtests and data downloads to stop fetching candles once this date is reached.
-MAX_END_DATE = datetime(2026, 6, 1, tzinfo=pytz.UTC)
+MAX_END_DATE = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 # ACTIVE_TIMEFRAME: Defines the primary timeframe used for candle execution and entry signals.
 # Expect strategy loops and indicator updates to synchronize on this candle timeframe (e.g. 1m).
@@ -360,7 +359,7 @@ LOG_REJECTIONS = False
 
 # LOG_SIGNALS: Toggles printing strategy entry signals to the console output.
 # Expect clear entry logs in console when enabled, while debug logs record them otherwise.
-LOG_SIGNALS = True
+LOG_SIGNALS = False
 
 # SHOW_PERIODIC_SUMMARY: Enables logging periodic performance summaries in the console.
 # Expect clear equity, ROI, and trades summaries in console at regular intervals when enabled.

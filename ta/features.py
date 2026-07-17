@@ -162,6 +162,8 @@ def extract_features(
         "drt": drt,
         "drt_slow": drt_slow,
         "drt_fast": drt_fast,
+        "supertrend_dir": supertrend_dir,
+        "supertrend": float(supertrend_dir) * 100.0,
         **fvg_data,
         **liq_data,
         **sweep_data,
