@@ -1,4 +1,8 @@
 import asyncio, logging, argparse, importlib.util, os, sys
+
+from tools.logger import setup_console_tee
+stdout_tee, stderr_tee = setup_console_tee()
+
 from engine.core import Engine
 from engine.entry import SignalRouter
 from config import MODE, RISK_PER_TRADE

@@ -118,8 +118,8 @@ class LearningModel:
         sell_res = se.evaluate(features, side="sell", config_context=cfg, dynamic_weights=self.weights)
 
         if hasattr(self.simulator, "engine") and self.simulator.engine:
-            self.simulator.engine._write_metrics_log(symbol, "buy", "model", buy_res)
-            self.simulator.engine._write_metrics_log(symbol, "sell", "model", sell_res)
+            self.simulator.engine._write_signals_log(symbol, "buy", "model", buy_res)
+            self.simulator.engine._write_signals_log(symbol, "sell", "model", sell_res)
 
         direction = None
         scoring_result = None

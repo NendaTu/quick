@@ -801,8 +801,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                         scoring_result = se.evaluate(feat, side=signal["side"], config_context=config, dynamic_weights=engine.model.weights)
                     else:
                         scoring_result = se.evaluate(feat, side=signal["side"], config_context=config)
-                        # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
-                        engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
+
+                    # Always write to the complete signals log file
+                    engine._write_signals_log(asset, signal["side"], strategy_id, scoring_result)
 
                     if scoring_result["decision"] == "REJECTED":
                         continue
@@ -823,6 +824,9 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                         strategy_id=signal.get("strategy_id"),
                         **kwargs
                     )
+
+                    if res and res.get("code") == "00000":
+                        engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
 
             # Enforce protective safety limit checks (Drawdown, ROI, Max Trades, Duration)
             if sim.equity > peak_equity:
@@ -1169,8 +1173,9 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                             scoring_result = se.evaluate(feat, side=signal["side"], config_context=config, dynamic_weights=engine.model.weights)
                         else:
                             scoring_result = se.evaluate(feat, side=signal["side"], config_context=config)
-                            # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
-                            engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
+
+                        # Always write to the complete signals log file
+                        engine._write_signals_log(asset, signal["side"], strategy_id, scoring_result)
 
                         if scoring_result["decision"] == "REJECTED":
                             continue
@@ -1183,13 +1188,16 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                         for key in ["symbol", "side", "qty", "entry_price", "stop_price", "exit_price", "tp_price", "strategy_id"]:
                             kwargs.pop(key, None)
 
-                        sim.place_trade_oco(
+                        res = sim.place_trade_oco(
                             asset, signal["side"], signal.get("qty", 0),
                             signal["entry_price"], signal["stop_price"], signal.get("exit_price") or signal.get("tp_price"),
                             features=feat,
                             strategy_id=signal.get("strategy_id"),
                             **kwargs
                         )
+
+                        if res and res.get("code") == "00000":
+                            engine._write_metrics_log(asset, signal["side"], strategy_id, scoring_result)
 
             # Enforce protective safety limit checks (Drawdown, ROI, Max Trades, Duration)
             if sim.equity > peak_equity:

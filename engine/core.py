@@ -255,6 +255,10 @@ class Engine:
         from tools.logger import setup_metrics_logging
         setup_metrics_logging(self.start_time, symbol, side, strategy_id, scoring_result)
 
+    def _write_signals_log(self, symbol: str, side: str, strategy_id: str, scoring_result: dict):
+        from tools.logger import setup_signals_logging
+        setup_signals_logging(self.start_time, symbol, side, strategy_id, scoring_result)
+
     def _report_entry(self, symbol: str, side: str, qty: float, entry: float, orig_side: str = None, is_contr: bool = False, ts: float = None, strategy_id: str = None, features: dict = None):
         pos_key = f"{symbol}_{side}"
         if orig_side is None: orig_side = side
@@ -729,8 +733,9 @@ class Engine:
                                 scoring_result = se.evaluate(feat_to_score, side=side, config_context=self.config, dynamic_weights=self.model.weights)
                             else:
                                 scoring_result = se.evaluate(feat_to_score, side=side, config_context=self.config)
-                                # Fix the Zeroed-Out Metrics Log bug: write the actual evaluated scoring_result
-                                self._write_metrics_log(sym, side, strategy_id, scoring_result)
+
+                            # Always write to complete signals log file
+                            self._write_signals_log(sym, side, strategy_id, scoring_result)
 
                             if scoring_result["decision"] == "REJECTED":
                                 log.debug(f"Strategy {strategy_id} signal rejected by ScoringEngine: {scoring_result['reason']}")
@@ -796,8 +801,11 @@ class Engine:
 
                             self.session_signals += 1
                             resp = await self.router.route_signal(signal)
-                            if resp.get("code") == "00000" and not self.config.LOG_SIGNALS:
-                                log.info(f"Entry Triggered | {signal_msg}")
+                            if resp.get("code") == "00000":
+                                if not self.config.LOG_SIGNALS:
+                                    log.info(f"Entry Triggered | {signal_msg}")
+                                # Write to metrics log only for signals resulting in entries
+                                self._write_metrics_log(sym, side, strategy_id, scoring_result)
 
                             if resp.get("code") != "00000":
                                 if pos_key in self.open_positions: del self.open_positions[pos_key]
