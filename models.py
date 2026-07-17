@@ -163,6 +163,7 @@ class LearningModel:
         elif direction == "sell" and rsi > rsi_ind.SHORT_CEILING and adx > STRONG_TREND_THRESHOLD:
             is_momentum_rider = True
 
+        original_direction = direction
         contrarian_global = getattr(cfg, 'CONTRARIAN_GLOBAL', False)
         if contrarian_global:
             direction = "sell" if original_direction == "buy" else "buy"
@@ -196,7 +197,7 @@ class LearningModel:
         sl_move = max(sl_move, sl_floor)
 
         net_sl_cost = sl_move + entry_fee_rate + sl_exit_fee_rate
-        target_roe = 0.20
+        target_roe = getattr(cfg, "TARGET_NET_ROE", 0.20)
         tp_move_from_roe = (target_roe / max_lev) + entry_fee_rate + tp_exit_fee_rate + getattr(cfg, 'EXPECTED_SLIPPAGE', 0.001)
         tp_move = max(tp_move_from_roe, (net_sl_cost * 2) + entry_fee_rate + tp_exit_fee_rate + getattr(cfg, 'EXPECTED_SLIPPAGE', 0.001))
 
@@ -234,6 +235,7 @@ class LearningModel:
             exit_price = entry * (1 - tp_move)
             stop_price = entry * (1 + sl_move)
 
+        confidence = features.get("confidence", 0.5) if features.get("confidence") is not None else 0.5
         expected_wr = 0.35 + (confidence - 0.5) * 0.2
         expected_r = (net_tp_win / (net_sl_cost + 1e-9))
 

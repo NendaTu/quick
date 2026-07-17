@@ -194,28 +194,28 @@ class ScoringEngine:
         raw_scores["confidence"] = side_sign * qp_conf
 
         # ----------------- 3. WEIGHT MULTIPLICATION & AGGREGATION -----------------
+        # Separate directional and non-directional keys to avoid denominator dilution [REPAIR]
+        directional_keys = ["rsi", "rsi_ceiling", "imbalance", "macd", "trend_15m", "asset_conf", "supertrend", "drt", "sanity", "btc_mom", "btc_conf", "htf_bias", "structure"]
+        non_directional_keys = ["vol_influx", "atr", "spread", "vol_pct", "confidence"]
+
         total_weighted_score = 0.0
         total_weight = 0.0
 
-        for key, raw_val in raw_scores.items():
-            # 1. Static config weight lookup
+        # 3.1 Calculate directional indicator average
+        for key in directional_keys:
+            raw_val = raw_scores.get(key, 0.0)
             static_weight_key = f"WEIGHT_{key.upper()}"
             static_weight = getattr(config_context, static_weight_key, 1.0)
 
-            # 2. Strategy / Custom override check
             if overrides and key in overrides:
                 if "weight" in overrides[key]:
                     static_weight = overrides[key]["weight"]
 
-            # 3. Dynamic learning weight factor lookup
             dynamic_factor = 1.0
             if dynamic_weights and key in dynamic_weights:
                 dynamic_factor = dynamic_weights[key]
 
-            # Final multiplicative weight [Option A]
             final_weight = static_weight * dynamic_factor
-
-            # Calculate weighted score contribution
             weighted_val = raw_val * final_weight
             weighted_scores[key] = weighted_val
 
@@ -224,6 +224,30 @@ class ScoringEngine:
                 total_weight += final_weight
 
         aggregated_score = total_weighted_score / total_weight if total_weight > 0.0 else 0.0
+
+        # 3.2 Calculate and apply non-directional quality penalties directly to avoid denominator dilution
+        penalty_sum = 0.0
+        for key in non_directional_keys:
+            raw_val = raw_scores.get(key, 0.0)
+            static_weight_key = f"WEIGHT_{key.upper()}"
+            static_weight = getattr(config_context, static_weight_key, 1.0)
+
+            if overrides and key in overrides:
+                if "weight" in overrides[key]:
+                    static_weight = overrides[key]["weight"]
+
+            dynamic_factor = 1.0
+            if dynamic_weights and key in dynamic_weights:
+                dynamic_factor = dynamic_weights[key]
+
+            final_weight = static_weight * dynamic_factor
+            weighted_val = raw_val * final_weight
+            weighted_scores[key] = weighted_val
+
+            if final_weight > 0.0:
+                penalty_sum += weighted_val
+
+        aggregated_score += penalty_sum
 
         # Determine decision & reason
         entry_threshold = getattr(config_context, 'ENTRY_SCORE_THRESHOLD', 30.0)
