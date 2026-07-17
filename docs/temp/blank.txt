@@ -1,1 +1,13 @@
+# contract_specs_cache.json Technical Explanation
 
+The file `contract_specs_cache.json` is a persistent local JSON cache designed to store contract specifications retrieved from the Bitget V2 API.
+
+## Purpose & Goals:
+1. **Reduce API Latency & Network Overhead**: Retreiving contract specifications (e.g., price place/precision, quantity place/precision, minimum trade USDT limits, and max leverage) for up to 250 assets requires heavy REST payloads. Storing these specs locally avoids querying the external exchange on every session startup.
+2. **Prevent API Rate Limiting (HTTP 429)**: Consecutive, rapid start-ups (such as during backtest optimization sweeps or concurrent multi-variant runs) can quickly exhaust Bitget's API rate limits. The local specs cache guarantees that the bot can start up safely without hitting rate limits.
+3. **Avoid Freeze / Hang on Startup**: If the exchange API experiences temporary latency or downtime, retrieving contract specifications over the network can block initialization or cause the application to hang. The cache acts as an immediate local fallback to ensure 100% responsive, instant start-ups.
+
+## Architecture & Integration:
+- On startup, the simulator (`simulator.py`) or backtesting engine (`backtest.py`) first checks if the local cache file `docs/temp/contract_specs_cache.json` exists.
+- If present, it loads the specifications in less than 5 milliseconds with zero network requests.
+- If absent, it queries the Bitget API via `BitGetClient.get_symbols()`, populates the matching engine fields, and automatically serializes and writes the response to the cache file so all subsequent sessions benefit immediately.

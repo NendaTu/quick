@@ -67,7 +67,7 @@ import logging
 import math
 from typing import Dict, Optional, Any, List
 from strategies.base_strategy import JBaseStrategy
-from tools.trading_utils import calculate_position_size
+from tools.trading_utils import calculate_position_size, format_order_quantity, get_price_precision
 from ta.patterns.sessions import identify_core_range
 from ta.patterns.structure import identify_structure
 from ta.patterns.liquidity import identify_liquidity
@@ -318,10 +318,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                 entry_price = m1[-1]['c']
 
                 # Precision
-                price_place = 2
-                if self.simulator and symbol in self.simulator.contract_specs:
-                    price_place = int(self.simulator.contract_specs[symbol].get('pricePlace', 2))
-                tick_size = 1 / (10**price_place)
+                price_place, tick_size = get_price_precision(symbol, self.simulator.contract_specs if self.simulator else None)
 
                 # SL: 1 tick past FVG extreme
                 fvg_data = detect_fvgs(m1, depth=self.params["fvg_depth"])
@@ -374,17 +371,17 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
 
                 qty = calculate_position_size(riskable_equity, config.RISK_PER_TRADE, entry_price, stop_price)
 
-                qty_place = 3
-                if self.simulator and symbol in self.simulator.contract_specs:
-                    spec = self.simulator.contract_specs[symbol]
-                    qty_place = int(spec.get('quantityPlace', 3))
-                    qty = math.floor(qty * (10**qty_place)) / (10**qty_place)
-
-                    min_qty = float(spec.get('minTradeUSDT', 5.0)) / entry_price
-                    if qty < min_qty:
-                        qty = math.ceil(min_qty * (10**qty_place)) / (10**qty_place)
-                        if (qty * entry_price) / float(spec.get('maxLever', 20)) > equity * 0.95:
-                            return None
+                # Round quantity based on asset specs
+                qty, qty_place = format_order_quantity(
+                    qty,
+                    entry_price,
+                    equity,
+                    self.simulator.contract_specs if self.simulator else None,
+                    symbol,
+                    logger=self.logger
+                )
+                if qty is None:
+                    return None
 
                 if self.record_milestone(f"Phase 7: {exec_tf} BOS2 (Entry Trigger)", m1[-1]['ts'], exec_tf):
                     self.logger.info(f"[{symbol}] {sweep_side.upper()} Triggered! Target: Day Liquidity. Hub: {hub}")

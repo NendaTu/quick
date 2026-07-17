@@ -167,7 +167,8 @@ def identify_overnight_range(ohlcv: List[dict], now_ts: float) -> Dict:
         'overnight_low': ov_low,
         'hub': target_hub,
         'open': first_c['o'] if first_c else None,
-        'close': last_c['c'] if last_c else None
+        'close': last_c['c'] if last_c else None,
+        'ts': first_c['ts'] if first_c else None
     }
 
     if len(_ov_range_cache) > 500: _ov_range_cache.clear()
@@ -234,7 +235,8 @@ def identify_core_range(ohlcv: List[dict], now_ts: float) -> Dict:
         'core_low': core_low,
         'hub': target_hub,
         'open': first_c['o'] if first_c else None,
-        'close': last_c['c'] if last_c else None
+        'close': last_c['c'] if last_c else None,
+        'ts': first_c['ts'] if first_c else None
     }
 
     if len(_core_range_cache) > 500: _core_range_cache.clear()
