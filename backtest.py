@@ -669,6 +669,20 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     log.info(f"Engine initialized with {len(engine.strategies)} strategies.")
 
+    for s in engine.strategies:
+        sid = getattr(s, "strategy_id", getattr(s, "name", "unknown"))
+        if sid not in engine.strategy_stats:
+            engine.strategy_stats[sid] = {
+                "pnl": 0.0,
+                "total_trades": 0,
+                "buy_wins": 0,
+                "buy_losses": 0,
+                "sell_wins": 0,
+                "sell_losses": 0,
+                "tp_wins": 0,
+                "be_wins": 0
+            }
+
     # Track pointers into history for each timeframe/symbol to avoid re-scanning
     pointers = {sym: {t: 0 for t in relevant_tfs} for sym in [asset, BTC_SYMBOL]}
     # Advance pointers to where we pre-populated
@@ -697,7 +711,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
                 from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                ConsolePublisher.publish_heartbeat(c['ts'], engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
+                ConsolePublisher.publish_heartbeat(c['ts'], engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions), engine.session_signals)
                 last_hb_time = now_real
 
             o, h, l, cl = c['o'], c['h'], c['l'], c['c']
@@ -778,12 +792,14 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
                             sig = strat.get_entry_signal(market_data)
                             if sig:
+                                engine.session_signals += 1
                                 sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
                                 active_signals.append(sig)
                 else:
                     # Legacy Confluence Chain
                     signal = chain.check(sim.ohlcv[asset][tf], tf, symbol=asset)
                     if signal:
+                        engine.session_signals += 1
                         signal["strategy_id"] = "chain"
                         active_signals.append(signal)
 
@@ -1035,6 +1051,20 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
     log.info(f"Engine initialized with {len(engine.strategies)} strategies.")
 
+    for s in engine.strategies:
+        sid = getattr(s, "strategy_id", getattr(s, "name", "unknown"))
+        if sid not in engine.strategy_stats:
+            engine.strategy_stats[sid] = {
+                "pnl": 0.0,
+                "total_trades": 0,
+                "buy_wins": 0,
+                "buy_losses": 0,
+                "sell_wins": 0,
+                "sell_losses": 0,
+                "tp_wins": 0,
+                "be_wins": 0
+            }
+
     # Track pointers into history for each timeframe/symbol to avoid re-scanning
     pointers = {sym: {t: 0 for t in relevant_tfs} for sym in assets + [BTC_SYMBOL]}
     # Advance pointers to where we pre-populated
@@ -1065,7 +1095,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                 from tools.publisher import ConsolePublisher
                 wr = (engine.winning_trades / engine.total_trades * 100) if engine.total_trades > 0 else 0
                 pr_val = engine.profit_ratio
-                ConsolePublisher.publish_heartbeat(current_ts, engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions))
+                ConsolePublisher.publish_heartbeat(current_ts, engine.equity, engine.total_trades, wr, pr_val, len(engine.open_positions), engine.session_signals)
                 last_hb_time = now_real
 
             # Step A: Update prices and simulate price action for all active assets
@@ -1156,6 +1186,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
                                     strat.model.simulator = sim
                                 sig = strat.get_entry_signal(market_data)
                                 if sig:
+                                    engine.session_signals += 1
                                     sig["strategy_id"] = sig.get("strategy_id") or getattr(strat, "strategy_id", getattr(strat, "name", "unknown"))
                                     active_signals.append(sig)
 
