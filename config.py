@@ -359,7 +359,7 @@ LOG_REJECTIONS = False
 
 # LOG_SIGNALS: Toggles printing strategy entry signals to the console output.
 # Expect clear entry logs in console when enabled, while debug logs record them otherwise.
-LOG_SIGNALS = True
+LOG_SIGNALS = False
 
 # SHOW_PERIODIC_SUMMARY: Enables logging periodic performance summaries in the console.
 # Expect clear equity, ROI, and trades summaries in console at regular intervals when enabled.

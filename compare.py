@@ -7,6 +7,10 @@ try:
     signal.signal(signal.SIGINT, signal.default_int_handler)
 except Exception:
     pass
+
+from tools.logger import setup_console_tee
+stdout_tee, stderr_tee = setup_console_tee()
+
 import multiprocessing
 import importlib
 import time
