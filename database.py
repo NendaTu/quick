@@ -1,3 +1,5 @@
+# database.py
+
 import sqlite3
 import time
 import logging
@@ -335,10 +337,17 @@ class Database:
             s = stats_cache[symbol][timeframe]
             is_exhausted = s.get('is_exhausted', False)
 
-            # End must be covered (within 1 hour)
+            # NOTE: "* 60" below means "60 candles' worth of time" -- that's
+            # 1 hour of tolerance for a 1m timeframe, but scales up for
+            # coarser ones (e.g. ~60 days for 1D). Left as-is here since
+            # changing the actual tolerance is a judgment call about intended
+            # behavior, not a straightforward bug fix -- flagging it for a
+            # deliberate decision rather than changing it silently.
+
+            # End must be covered (60 candles' worth of tolerance, see note above)
             if s['max'] < end_ts - step * 60: return True
 
-            # If not exhausted, start must be covered (within 1 hour)
+            # If not exhausted, start must be covered (60 candles' worth of tolerance, see note above)
             if not is_exhausted and s['min'] > start_ts + step * 60: return True
 
             # Check internal continuity based on what WE HAVE
@@ -381,16 +390,46 @@ class Database:
 
         return False
 
-    def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10) -> list:
+    def get_data_gaps(self, symbol: str, timeframe: str, start_ts: float, end_ts: float, merge_threshold: int = 10, stats_cache: dict = None) -> list:
         """
         [REPAIR-20260708] Improved Gap Detection.
         Identifies actual missing segments by comparing consecutive timestamps.
+
+        [FIX] Listing-Awareness: mirrors the same check has_data_gaps() already
+        does. If we've already confirmed (via mark_exhausted) that this
+        symbol/timeframe's history doesn't reach back to start_ts -- e.g. a
+        coin that was only listed after our configured start date -- we stop
+        reporting that unreachable span as a gap. Without this, callers would
+        be told, forever, that data is "missing" for a time range that will
+        never have any data, simply because it's earlier than the asset
+        existed.
+
+        In plain terms: this answers "which specific time ranges are we
+        missing candles for, between start_ts and end_ts?" -- returned as a
+        list of (gap_start, gap_end) pairs, already merged where they're
+        close enough together (within `merge_threshold` candles) that it's
+        not worth treating them as separate download requests.
+
+        `stats_cache`, if provided (see get_all_candle_stats), is used to look
+        up the exhausted flag without an extra query -- pass it when the
+        caller already has it.
         """
         tf_seconds = {
             "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
             "1H": 3600, "4H": 14400, "1D": 86400
         }
         step = tf_seconds.get(timeframe, 60)
+
+        # Have we already confirmed the true beginning of this symbol's history?
+        if stats_cache and symbol in stats_cache and timeframe in stats_cache[symbol]:
+            is_exhausted = stats_cache[symbol][timeframe].get('is_exhausted', False)
+        else:
+            cursor = self.connection.execute(
+                "SELECT is_exhausted FROM asset_metadata WHERE symbol=? AND timeframe=?",
+                (symbol, timeframe)
+            )
+            row = cursor.fetchone()
+            is_exhausted = bool(row[0]) if row else False
 
         # 1. Get all timestamps in range
         cursor = self.connection.execute("""
@@ -401,16 +440,23 @@ class Database:
         rows = cursor.fetchall()
 
         if not rows:
+            # No candles at all in range. If we've already confirmed this
+            # symbol's history is exhausted (there's genuinely nothing to
+            # find), that's a complete state, not a gap.
+            if is_exhausted:
+                return []
             return [(start_ts, end_ts)]
 
         timestamps = [row[0] for row in rows] # Flatten
         gaps = []
 
-        # Check Leading Gap
-        if timestamps[0] > start_ts + step:
+        # Check Leading Gap -- skip if we've already confirmed this range is
+        # unreachable (the asset didn't exist yet), so we don't keep asking for it.
+        if not is_exhausted and timestamps[0] > start_ts + step:
             gaps.append((start_ts, timestamps[0] - step))
 
-        # Check Internal Gaps
+        # Check Internal Gaps (always real/fillable -- exhaustion only ever
+        # describes the very beginning of an asset's history, never the middle)
         for i in range(len(timestamps) - 1):
             curr_ts = timestamps[i]
             next_ts = timestamps[i+1]
@@ -427,7 +473,10 @@ class Database:
         merged = [gaps[0]]
         for curr in gaps[1:]:
             prev = merged[-1]
-            if curr[0] <= prev[1] + step * 10:
+            # [FIX] This used to be a hardcoded "* 10" regardless of what
+            # merge_threshold the caller passed in -- the parameter existed
+            # but was never actually used. Now it is.
+            if curr[0] <= prev[1] + step * merge_threshold:
                 merged[-1] = (prev[0], max(prev[1], curr[1]))
             else:
                 merged.append(curr)
