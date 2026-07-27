@@ -1,7 +1,7 @@
 """
-Order Book Imbalance Delta (OBID)
-
-Tracks the rate of change in order book pressure.
+1. Summary: Order book quantity volume imbalance delta calculator.
+2. Description: Calculates volume imbalances between the top bids and asks inside the active order book.
+3. Context: Used by scoring and feature extraction components to gauge short-term micro liquidity pressure.
 """
 from typing import List
 

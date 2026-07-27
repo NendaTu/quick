@@ -1,3 +1,8 @@
+"""
+1. Summary: Houses centralized calculations for order rounding, price precision, and net profit subtraction.
+2. Description: Provides precision handlers ensuring order sizes and prices conform to exchange limits.
+3. Context: Imported by simulators and engines to standardise rounding operations.
+"""
 import config
 import math
 

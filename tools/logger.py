@@ -1,3 +1,8 @@
+"""
+1. Summary: Implements dual console/file logging pipelines with timezone and virtual timestamp prefixes.
+2. Description: Provides a Tee class to capture console stdout and writes detailed metrics/signals to temp directories.
+3. Context: Crucial logging module supporting dual real-time and backtest virtual-time logging.
+"""
 import logging
 import sys
 import os

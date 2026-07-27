@@ -1,3 +1,8 @@
+"""
+1. Summary: Tests and debugs ATR-based volatility expansion capping.
+2. Description: Simulates hyper-extended moves and tracks strategy rejection behavior.
+3. Context: Validates that ATR volatility ceilings function correctly.
+"""
 import sqlite3
 from ta.indicators.atr import is_expansion_candle
 import sys

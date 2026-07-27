@@ -1,3 +1,8 @@
+"""
+1. Summary: Persistent SQLite database storage interface for logs, candles, and positions.
+2. Description: Handles initialization of the market_data.db database and coordinates saving/retrieving historical candlestick data, trade logs, and execution parameters. Implements clean multi-threaded execution and safe asynchronous shutdowns.
+3. Context: Relies on standard library sqlite3. Utilized by backtest.py, simulator.py, and bitget_client.py.
+"""
 # database.py
 
 import sqlite3

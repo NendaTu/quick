@@ -1,16 +1,8 @@
 """
-Engulfing Body Strategy
-
-How it works:
-1. This strategy looks for a "Bullish" or "Bearish" engulfing pattern where only the 'body'
-   (the rectangle part between Open and Close) is considered.
-2. A Bullish signal occurs when a green candle's body completely covers the previous red candle's body.
-3. A Bearish signal occurs when a red candle's body completely covers the previous green candle's body.
-4. The strategy calculates a Take Profit (TP) target to net a specific profit (default +1% ROE)
-   after paying all exchange fees and accounting for slippage.
-5. The Stop Loss (SL) is placed slightly outside the extreme of the engulfing candle to protect capital.
+1. Summary: Stateless pattern recognizer for body-only engulfing candles.
+2. Description: Identifies engulfing candlestick signals where only the body overlaps the previous bar body. Disregards candle wicks for a conservative entry signal.
+3. Context: Utilized by candle patterns analysis and indicators features pipeline.
 """
-
 from typing import List, Dict, Optional
 from tools.trading_utils import calculate_tp_for_roe
 import config

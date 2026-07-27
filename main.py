@@ -1,3 +1,8 @@
+"""
+1. Summary: Main entry point for starting the live or demo trading robot.
+2. Description: Resolves CLI arguments and loads a single strategy or recursively discovers and loads a strategy family. Instantiates the execution engine in the requested mode (paper, demo, live) and launches the core async loop.
+3. Context: Relies on engine/core.py, engine/entry.py, config.py, and tools/logger.py.
+"""
 import asyncio, logging, argparse, importlib.util, os, sys
 
 from tools.logger import setup_console_tee

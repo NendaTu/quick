@@ -1,19 +1,8 @@
 """
-Exponential Moving Average (EMA) Strategy (Filter)
-
-How it works:
-1. This is a "Trend Filter" strategy. It ensures that trades are only taken
-   when the short-term momentum is aligned with the long-term trend.
-2. It compares two EMAs:
-   - Short EMA (Default 20): Represents fast, recent price action.
-   - Long EMA (Default 50): Represents the intermediate trend.
-3. Signal Logic:
-   - Bullish (Buy): Returns "buy" if the Short EMA is ABOVE the Long EMA.
-   - Bearish (Sell): Returns "sell" if the Short EMA is BELOW the Long EMA.
-4. Backtesting command: `python backtest.py "ema [short] [long] + [trigger]"`
-   - Example: `"ema 20 50 + engulfing"`
+1. Summary: Exponential Moving Average (EMA) mathematical indicator.
+2. Description: Calculates standard fast and slow EMAs to verify trend directions and moving crossovers.
+3. Context: Used as a core trend filter across many SMC and sweep strategies.
 """
-
 from typing import List, Dict, Optional
 import config
 

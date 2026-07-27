@@ -1,3 +1,8 @@
+"""
+1. Summary: Technical support and resistance horizontal price level locator.
+2. Description: Locates local swing peak and trough extremes with tie-breakers, clusters them based on range budget spreads, and checks chronological candle closes to identify level breakout states.
+3. Context: Utilized by support/resistance trading strategies and point-of-interest filters.
+"""
 import logging
 from typing import List, Dict, Any, Optional
 

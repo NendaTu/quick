@@ -1,3 +1,8 @@
+"""
+1. Summary: Abstract Base Classes defining execution standards for exchange drivers and trading strategies.
+2. Description: Establishes strict contracts for query methods (tickers, positions, orders) and transaction execution methods (orders, scaling). Establishes contracts for strategy modules to ingest market data and manage active trades.
+3. Context: Inherited by BaseExchange drivers in engine/exchanges/ and BaseStrategy classes in strategies/.
+"""
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any
 

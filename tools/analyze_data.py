@@ -1,3 +1,8 @@
+"""
+1. Summary: Visualizes and logs metrics of historical candles.
+2. Description: Reads SQLite candle records and renders trend indicators.
+3. Context: Diagnostic telemetry script for qualitative testing.
+"""
 import sqlite3
 import re
 import statistics

@@ -1,3 +1,8 @@
+"""
+1. Summary: Verifies Bitget API asset discovery and caching features.
+2. Description: Performs async calls to check market specifications and local contract listings caching.
+3. Context: Guarantees that symbol caches function without network latency.
+"""
 import asyncio
 import os
 from bitget_client import BitGetClient

@@ -1,7 +1,7 @@
 """
-Statistical Arbitrage (Spread Divergence) Detection
-
-Identifies tradeable divergences between highly correlated asset pairs.
+1. Summary: Statistical Arbitrage (Spread Divergence) detector.
+2. Description: Measures relative divergences between highly correlated asset pairs.
+3. Context: Provides override signals enabling stat-arb trades during correlation blocks.
 """
 from typing import List, Dict, Optional
 import logging

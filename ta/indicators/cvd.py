@@ -1,15 +1,8 @@
 """
-Cumulative Volume Delta (CVD) Indicator Module
-
-How it works:
-1. Cumulative Volume Delta takes the Volume Delta of every candlestick
-   and adds them together continuously over time.
-2. It creates a cumulative line series that tracks net aggressive buying or selling pressure
-   since the beginning of the provided historical window.
-3. Formula: CVD[i] = CVD[i-1] + (Candle_Buy_Volume[i] - Candle_Sell_Volume[i])
-4. This file provides stateless, clean, and robust calculations for Cumulative Volume Delta.
+1. Summary: Cumulative Volume Delta (CVD) rolling series calculator.
+2. Description: Tracks aggressive buying and selling volume deltas accumulated over a rolling time window.
+3. Context: Used by feature extraction and scoring modules to measure institutional order flow direction.
 """
-
 from typing import List, Dict, Any
 import math
 

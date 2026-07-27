@@ -1,51 +1,8 @@
 """
-# Level Finder Strategy v1.agt
-
-## Overview
-This strategy identifies "Order Blocks" (OBs) across multiple timeframes (1m, 3m, 5m, and 15m) using
-our optimized and repaired pure technical OB detection module in `ta/patterns/ob.py`.
-It confirms OBs strictly on closed candles, placing limit or market orders exactly at the close of
-the solidification (impulse) candle on the respective timeframe, aiming to capture
-high-probability institutional price reversals.
-
-## Goals
-- Target Net ROE: 1:1, 1:2, and 1:3 net RRR targets per trade (compounding aware).
-- Frequency: ~5-15 trades per asset per week depending on market volatility.
-- Rationale: Multi-target compounding with early break-even stop moves to protect and secure equity.
-
-## Modules Used
-- `ta/patterns/ob.py`: Performs stateless rolling Wilder's smoothed ATR-based Order Block detection.
-- `tools/trading_utils.py`: Provides fee-and-slippage aware position sizing and target RRR exit prices.
-
-## The Intended Flow
-1. **Discovery**: For each timeframe in ['1m', '3m', '5m', '15m'], call `detect_order_blocks()` on the closed candles history.
-2. **Solidification Check**: Verify if a fresh Bearish or Bullish OB has just solidified (formed) at the most recently completed closed candle on that timeframe.
-3. **Execution**: Trigger a Market or Limit entry exactly at the solidifying candle close.
-4. **SL Placement**: Set stop-loss 1 tick below the OB valley (if bullish) or 1 tick above the OB peak (if bearish).
-5. **TP Splits**: Place three limit exits:
-   - TP1 at 1:1 + fees and slippage (33% of position size)
-   - TP2 at 1:2 + fees and slippage (33% of position size)
-   - TP3 at 1:3 + fees and slippage (34% of position size)
-6. **Trailing stops**: When TP2 is hit, the matching engine automatically moves the SL order to the original entry price (break-even).
-
-## Limitations & Assumptions
-- Assumes standard market liquidity; extreme slippage on illiquid alts can widen stops.
-- May underperform during flat markets where OB boundaries are heavily chopped before confirmation.
-
-## Backtest Results & Heartbeats
-```
-=====================================================================================================================================================================
-BACKTEST RESULTS (Multi-Timeframe 1m, 3m, 5m, 15m)
----------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Date Range             | Asset      | TF    |   Win% (L/S) |       PnL (L/S) |     ROE% |        PnL |    ROI% |   Trades |       Equity
----------------------------------------------------------------------------------------------------------------------------------------------------------------------
-2026-03-01 to 2026-03-02 | SOLUSDT    | 1m    |       0%/67% |         0.0/0.4 |     21.1% |       0.37 |     0.9% |        3 |        40.37
----------------------------------------------------------------------------------------------------------------------------------------------------------------------
-OVERALL                | ALL        | MIX   |       0%/67% |         0.0/0.4 |      N/A |       0.37 |     0.9% |        3 |          N/A
-=====================================================================================================================================================================
-```
+1. Summary: Multi-timeframe order block level finder and trade executor.
+2. Description: Identifies institutional order blocks on 1m, 3m, 5m, and 15m intervals. Takes entries on solidified candle closures, with a three-way split take profit target model.
+3. Context: Relies on ta/patterns/ob.py for pattern identification. Extensively backtested in multi-variant portfolios.
 """
-
 import logging
 from typing import Dict, Optional, Any, List
 from strategies.base_strategy import JBaseStrategy

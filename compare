@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# 1. Summary: Executable shell launcher for the multi-variant strategy comparison system.
+# 2. Description: Ignores parent wrapper SIGINT signals so the child comparison/A/B testing process can handle key interrupts gracefully, print final comparison tables, and exit cleanly. Runs compare.py with all CLI arguments passed.
+# 3. Context: Dependent on compare.py. Uses subprocess and sys.executable to run.
 import sys, subprocess, os, signal
 if __name__ == "__main__":
     # Ignore SIGINT in the parent wrapper so that the child python process

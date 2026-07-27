@@ -1,19 +1,8 @@
 """
-Supertrend Strategy
-
-How it works:
-1. This is a "Trailing" trend-following strategy that uses Average True Range (ATR)
-   to account for market volatility.
-2. It plots a line (the "Supertrend") above or below the price.
-3. Signal Logic:
-   - Buy: Triggered the moment the trend flips from Bearish to Bullish (Price closes above the top line).
-   - Sell: Triggered the moment the trend flips from Bullish to Bearish (Price closes below the bottom line).
-4. Stop Loss (SL): Placed at the next local swing point (valley for Longs, peak for Shorts)
-   to provide a safe buffer beyond the immediate trend line.
-5. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-6. Backtesting command: `python backtest.py supertrend [period] [multiplier] [rrr_override]`
+1. Summary: Average True Range (ATR) based trailing Supertrend calculator.
+2. Description: Computes upper and lower bands to output active trend directions and stop placement levels.
+3. Context: Injected as a key trend feature evaluated by the ScoringEngine.
 """
-
 from typing import List, Tuple, Dict, Optional
 from ta.indicators.atr import compute_atr
 from ta.patterns.swings import detect_swings

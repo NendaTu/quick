@@ -1,3 +1,8 @@
+"""
+1. Summary: Validates that ScoringEngine score distributions align with weights and thresholds.
+2. Description: Tests penalty offsets, directional multipliers, and entry decisions.
+3. Context: Guarantees correct operation of the continuous scoring pipeline.
+"""
 import os
 import shutil
 import pytest

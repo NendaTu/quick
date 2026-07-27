@@ -1,23 +1,8 @@
 """
-Support and Resistance (S/R) Strategy
-
-How it works:
-1. This strategy identifies horizontal "Floors" (Support) and "Ceilings" (Resistance)
-   where the price has bounced multiple times in the past.
-2. It operates in two modes:
-   - **Bounce (Default)**: A Mean Reversion approach. Buy when price touches a floor;
-     Sell when price touches a ceiling.
-   - **Breakout**: A Momentum approach. Buy when price closes ABOVE a ceiling;
-     Sell when price closes BELOW a floor.
-3. Signal Logic:
-   - Bounce: Triggered when the current candle range overlaps an S/R level.
-   - Breakout: Triggered when the current candle close crosses an S/R level.
-4. Stop Loss (SL): Placed 1 tick beyond the S/R level being traded.
-5. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-6. Backtesting command: `python backtest.py sr [mode] [rrr_override]`
-   - [mode]: 'bounce' or 'breakout'.
+1. Summary: Horizontal Support and Resistance locator.
+2. Description: Detects horizontal floors and ceilings based on historical candle touch frequencies.
+3. Context: Provides baseline zones for breakout and bounce strategies.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr

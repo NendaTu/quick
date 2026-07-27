@@ -1,20 +1,8 @@
 """
-Trend and Bias Recognition Strategy
-
-How it works:
-1. This strategy identifies the "Main Trend" of the market by combining two methods:
-   - Moving Averages: Comparing where the price is relative to the 50 and 200 Moving Averages.
-   - Price Action Swings: Checking if the market is creating Higher Highs or Lower Lows.
-2. A Bullish signal occurs when the price is above the 200 MA, the 50 MA is above the 200 MA,
-   and recent swings are pointing upwards.
-3. A Bearish signal occurs when the price is below the 200 MA, the 50 MA is below the 200 MA,
-   and recent swings are pointing downwards.
-4. Stop Loss (SL): Placed at the most recent "valley" (for Longs) or "peak" (for Shorts)
-   to give the trade room to breathe while protecting the account.
-5. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-6. Backtesting command: `python backtest.py trend [fast_ma] [slow_ma] [rrr_override]`
+1. Summary: Trend direction and market bias recognition system.
+2. Description: Synthesizes multiple indicators to determine overall trend bias.
+3. Context: Provides macro bias features evaluated with high weight by the ScoringEngine.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 from ta.indicators.ema import compute_ema

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# 1. Summary: Executable shell launcher for the live/demo trading bot execution engine.
+# 2. Description: Passes all CLI arguments and runs main.py using the current active Python interpreter.
+# 3. Context: Dependent on main.py. Uses subprocess and sys.executable to run.
 import sys, subprocess, os
 if __name__ == "__main__":
     cmd = [sys.executable, "main.py"] + sys.argv[1:]

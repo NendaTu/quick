@@ -1,23 +1,8 @@
 """
-SMC Inducement (IDM) Detection Module
-
-Under Smart Money Concepts (SMC):
-1. Market Structure mapping is tracked via Swing Highs and Swing Lows.
-2. A Break of Structure (BOS) confirms the active trend direction:
-   - Bullish BOS: Price closes above the most recent Swing High.
-   - Bearish BOS: Price closes below the most recent Swing Low.
-3. Once a BOS occurs, the market establishes an Inducement (IDM) level:
-   - Bullish Trend: The IDM level is the lowest low of the most recent valid minor pullback
-     before the new high was created. To be valid (not an inside bar), the candle
-     forming that pullback low must have its high successfully taken out by a subsequent candle.
-   - Bearish Trend: The IDM level is the highest high of the most recent valid minor pullback
-     before the new low was created. To be valid, the candle forming that pullback high
-     must have its low successfully taken out by a subsequent candle.
-4. An Inducement Sweep occurs when:
-   - Bullish: Current candle wicks below the Bullish IDM level but closes back above it.
-   - Bearish: Current candle wicks above the Bearish IDM level but closes back below it.
+1. Summary: Smart Money Concept Inducement (IDM) stateless recognizer.
+2. Description: Identifies inducement wicks that trigger premature retail entries before institutional market moves.
+3. Context: Used by SMC strategies to bypass fake breakout traps.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr

@@ -1,19 +1,8 @@
 """
-Breaker Block (Breaker) Identification Module
-
-How it works:
-1. This module identifies "Breaker Blocks"—which are failed Order Blocks
-   that have flipped polarity.
-2. A Bullish Breaker is a failed bearish Order Block. When price closes
-   above the top of a Bearish OB, that block flips polarity to become
-   a source of future demand (Bullish Breaker).
-3. A Bearish Breaker is a failed bullish Order Block. When price closes
-   below the bottom of a Bullish OB, that block flips polarity to become
-   a source of future supply (Bearish Breaker).
-4. Retests / Mitigation: Once a breaker forms, it can be mitigated/filled
-   if subsequent candles wick into its range.
+1. Summary: Failed Order Block (Breaker Block) stateless pattern recognizer.
+2. Description: Identifies order blocks whose polarity has failed and flipped due to strong counter-trend breakout closes exceeding invalidation margins.
+3. Context: Provides stateless pattern data used by SMC features extraction.
 """
-
 from typing import List, Dict, Optional, Any
 import math
 from ta.patterns.ob import compute_atr_series

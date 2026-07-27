@@ -1,3 +1,8 @@
+"""
+1. Summary: Unified trading loop manager and execution system coordinator.
+2. Description: Manages the core asynchronous loops for periodic heartbeats, compounding equity monitoring, and strategy evaluations. Connects signals to the router, maintains active positions, logs performance stats, and performs startup legacy synchronization with exchanges.
+3. Context: Instantiated by main.py and compare.py. Relies on SignalRouter and SimulationEngine/BitgetExchange to function.
+"""
 import asyncio, time, logging, math
 from typing import Dict, Set, List
 import config

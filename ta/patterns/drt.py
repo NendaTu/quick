@@ -1,22 +1,8 @@
 """
-Directional Trend (DRT) Strategy
-
-How it works:
-1. This is a "Sophisticated Trend" strategy. It uses Linear Regression to find
-   the slope of price movement over time.
-2. The slope is then passed through a "Sigmoid" math function to squash it into
-    a value between 0.0 and 1.0.
-   - 0.5 is perfectly neutral (Flat).
-   - Above 0.5 means a Bullish trend is forming.
-   - Below 0.5 means a Bearish trend is forming.
-3. Signal Logic (Threshold based):
-   - Buy: Triggered when DRT rises above a threshold (Default 0.6).
-   - Sell: Triggered when DRT falls below a threshold (Default 0.4).
-4. Stop Loss (SL): Placed at the recent local valley (for Longs) or peak (for Shorts).
-5. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-6. Backtesting command: `python backtest.py drt [threshold] [period] [rrr_override]`
+1. Summary: Directional Trend (DRT) linear regression slope calculator.
+2. Description: Performs linear regression on candle closes to calculate price velocity and acceleration curves.
+3. Context: Extremely strong predictor evaluated with high weight by the ScoringEngine.
 """
-
 import math
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings

@@ -1,11 +1,8 @@
 """
-TA Utility Module
-
-Provides shared math functions and timezone conversion utilities for technical analysis.
-All time-based patterns convert exchange UTC timestamps to 'America/Toronto' for
-session and killzone alignment.
+1. Summary: General math, rolling window, and localized timezone converters.
+2. Description: Provides SMA, EMA, and timezone helper tools. Translates exchange UTC timestamps to America/Toronto for accurate session mapping.
+3. Context: Imported by almost all indicators and session detection modules.
 """
-
 import math
 from datetime import datetime, timezone
 from typing import List, Dict

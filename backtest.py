@@ -1,3 +1,8 @@
+"""
+1. Summary: Backtesting execution coordinator with multi-variant and timeline support.
+2. Description: Runs historical backtests for a list of strategies or strategy families sharing capital in a single loop. Handles date boundaries, database warmups, asset discovery, stream logging redirection, contract specs caching, and graceful finalizations.
+3. Context: Relies on config.py, database.py, simulator.py, tools/logger.py, and tools/publisher.py.
+"""
 import sys
 import os
 import signal

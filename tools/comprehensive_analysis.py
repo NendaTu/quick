@@ -1,3 +1,8 @@
+"""
+1. Summary: Consolidated trade history log metrics analyzer.
+2. Description: Aggregates CSV/text telemetry output files to calculate win rates and drawdowns.
+3. Context: Used for offline quant research and performance validation.
+"""
 import sqlite3
 import re
 import statistics

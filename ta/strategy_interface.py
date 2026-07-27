@@ -1,10 +1,8 @@
 """
-TA Strategy Specification
-
-This file defines the interface for 'backtestable' strategy files in the ta/ directory.
-Files should implement the get_signal() function.
+1. Summary: Abstract specification interface for simple technical strategies.
+2. Description: Defines expected signature for get_signal() on historical candles data.
+3. Context: Provides contract definitions for lightweight modular signal detectors.
 """
-
 from typing import List, Dict, Optional, Tuple
 
 def get_signal(ohlcv, timeframe, params=None, **kwargs) -> Optional[Dict]:

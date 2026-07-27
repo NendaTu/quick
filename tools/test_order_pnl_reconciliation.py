@@ -1,3 +1,8 @@
+"""
+1. Summary: Reconciles math behind gross wins, transaction fees, and net profits.
+2. Description: Checks Simulator OCO limit arithmetic and maker/taker calculations.
+3. Context: Ensures PnL reports accurately account for all transaction costs.
+"""
 import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch

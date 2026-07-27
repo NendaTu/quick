@@ -1,3 +1,8 @@
+"""
+1. Summary: Summarizes trading stats and order logs from the most recent run.
+2. Description: Reads local log files and prints trade performance tables.
+3. Context: Helper script for quick post-run telemetry evaluation.
+"""
 import sqlite3
 import re
 import statistics

@@ -1,12 +1,8 @@
 """
-Trading Sessions and Market Open Strategy (Filter)
-
-Features:
-- Tracks Core and Overnight sessions for major global hubs (US, UK/EU, Japan, Hong Kong).
-- All times are handled in 'America/Toronto' (EST/EDT) for consistency.
-- Handles extended weekend overnight sessions (Friday close to Monday open).
+1. Summary: Trading session boundaries and horizontal extreme tracker.
+2. Description: Computes London, New York, and Tokyo trading ranges with anchor timestamps.
+3. Context: Relied upon by Killzone and session-sweep strategies.
 """
-
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, time, timedelta
 from ta.utils import convert_to_local

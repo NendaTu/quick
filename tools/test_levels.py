@@ -1,13 +1,7 @@
 """
-Regression tests for ta/levels.py.
-
-Written as plain `assert`-based `test_*` functions so this file works with
-`pytest` (if the project has it) *and* standalone via:
-
-    python3 test_levels.py
-
-Place this at tests/test_levels.py (sibling to the `ta/` package) so the
-import below resolves.
+1. Summary: Regression tests for horizontal support/resistance level clustering.
+2. Description: Runs assertions against swing points, clustering spread budgets, and breakout logic.
+3. Context: Verifies the stability of ta/levels.py.
 """
 from ta.levels import identify_levels, _find_swing_points, _cluster_points, _is_level_broken
 

@@ -1,13 +1,8 @@
 """
-Swing High/Low Detection Module
-
-Identifies local peaks and troughs in price action, which serve as the foundation
-for Market Structure (BOS, MSS), Support/Resistance, and Liquidity patterns.
-
-A Swing Low is a trough where Low[t] < Low[t-1] and Low[t] < Low[t+1].
-A Swing High is a peak where High[t] > High[t-1] and High[t] > High[t+1].
+1. Summary: Local Swing High and Swing Low peak extreme detector.
+2. Description: Performs peak/trough local extreme search with tie-breakers to find clean swing points.
+3. Context: Foundation module for mapping market structure, liquidity, and support/resistance zones.
 """
-
 from typing import List, Dict, Optional
 
 _swing_cache = {}

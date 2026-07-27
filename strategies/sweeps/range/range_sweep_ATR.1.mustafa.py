@@ -1,67 +1,8 @@
 """
-# Range Sweep ATR Strategy v1.mustafa
-
-## Overview
-The Range Sweep ATR strategy uses volatility expansion to define trading ranges rather than
-fixed time-based sessions. It identifies "Expansion Candles" on a higher timeframe (default 4H)
-where the price range exceeds a significant multiplier of the preceding ATR (Average True Range).
-The extremes of this expansion candle act as institutional liquidity anchors. The strategy
-then waits for a sweep of these extremes on the 15m timeframe, confirmed by a precise 1m
-reversal sequence.
-
-## Goals & Rationale
-- **Compounding Target**: Targets a net ROI of 2-5% per trade. Progressive capital growth
-  is achieved by entering at the "inflection points" created by volatility extremes.
-- **Frequency**: Low (1-5 setups per asset per month). This strategy is a "Sniper"
-  module meant to run alongside higher-frequency session strategies to catch major
-  market turns.
-- **Selectivity**: Extremely high. By requiring a 5x ATR expansion, it filters out
-  all "noise" and only activates when the market is in an overextended state.
-- **Dynamic Anchoring**: Ranges are defined by the market's own volatility profile (ATR),
-  making it adaptive. On ETH, a range might be $50, while on a lower-priced altcoin,
-  it might be $0.05, but the *relative* expansion is the same.
-- **Risk Management**: 0.5% risk-per-trade with fee-aware position sizing. Employs
-  Aggressive Break-Even (moving SL to 50% profit point) upon TP1 to capitalize on the
-  expected high-momentum reversal and remove risk from "blow-off" trades.
-
-## Modules Used
-- `ta/indicators/atr.py`: Detects expansion candles using the `is_expansion_candle`
-  helper with a configurable multiplier (e.g., 5x ATR).
-- `ta/patterns/structure.py`: Establishes 1H bias and 1m execution triggers (BOS).
-- `ta/patterns/liquidity.py`: Identifies 15m targets formed after the expansion anchor.
-- `ta/patterns/fvg.py`: Defines entry zones and SL levels on the 1m timeframe.
-- `tools/trading_utils.py`: Fee-aware position sizing.
-
-## The Intended Flow
-1. **Expansion Detection (4H)**: Strategy monitors the 4H timeframe for a candle
-   whose range (High-Low) is > 5x the preceding 14-period ATR.
-2. **Historical Catch-up (Fast-Forward)**: On startup, scans up to 8 hours of history for setup
-   milestones (Sweeps, BOS) related to the current ATR anchor. Jumps to the ready state if found.
-3. **Anchor Range**: The High and Low of this expansion candle become the active "Range".
-4. **Sequence Reset**: If a new 4H candle closes without being an expansion candle
-   AND the sequence has not yet reached the "Sweep" phase (Phase 3), the range is discarded.
-5. **Bias (1H)**: Establish trend bias from 1H market structure.
-6. **Liquidity Sweep (15m)**: Wait for a wick sweep of the anchor range extreme
-   opposite to the bias.
-7. **Reversal Sequence (1m)**:
-   - **BOS1**: Internal shift back toward bias.
-   - **FVG**: Imbalance creation.
-   - **Retest**: Validation of institutional interest.
-   - **BOS2**: Final entry trigger.
-8. **Execution**:
-   - **SL**: 1 tick beyond the FVG extreme.
-   - **TP1 (50%)**: 15m liquidity levels formed since the expansion (1:1.5+ RRR).
-   - **TP2**: Next 15m level (1:2.5+ RRR).
-9. **Cooldown & Reset**: Enters a 1-hour cooldown after any trade event to allow for
-   potential secondary setups on the same expansion anchor.
-
-## Limitations & Assumptions
-- **Wick Parity**: Relies on REST-Patching to ensure expansion high/low and sweeps match backtest.
-- **Patience Requirement**: Expansion candles (5x ATR) are rare; the strategy may go days without a signal.
-- **History Requirement**: Needs 40 4H candles for ATR baseline and 300 1m candles for trajectory catch-up.
-- **Trend Exhaustion**: Assumes expansion candles at extremes represent exhaustion.
+1. Summary: Volatility-adjusted range sweep strategy.
+2. Description: Tracks price consolidation using rolling ATR volatility bands rather than time-based sessions. Enters positions on sweep-reversals of dynamically calculated ATR boundaries, filtering out over-extended parabolic moves.
+3. Context: Relies on ta/patterns/sweep.py and ATR indicators.
 """
-
 import logging
 import math
 from typing import Dict, Optional, Any, List

@@ -1,3 +1,8 @@
+"""
+1. Summary: Verifies exchange connectivity and API REST credentials.
+2. Description: Signs and dispatches standard REST queries to check API permissions.
+3. Context: Crucial debugging helper used during live connection setups.
+"""
 import asyncio
 import os
 from bitget_client import BitGetClient
