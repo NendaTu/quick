@@ -1,6 +1,6 @@
-# Bitget USDT-M Futures Trading Bot
+# USDT-M Futures Trading Bot
 
-A high-performance algorithmic trading system for Bitget USDT-M Futures, featuring multi-timeframe technical analysis, institutional-grade pattern recognition, unified scoring confluence gates, and a robust A/B testing suite.
+A high-performance algorithmic trading system for USDT-M Futures, featuring multi-timeframe technical analysis, institutional-grade pattern recognition, unified scoring confluence gates, and a robust A/B testing suite.
 
 ## Installation
 
