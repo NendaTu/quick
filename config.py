@@ -1,3 +1,8 @@
+"""
+1. Summary: Global application configuration context, risk definitions, and technical parameters.
+2. Description: Declares centralized keys for environments, account limits, execution styles, strategy rules, scoring multipliers, and logging thresholds. Encapsulates an immutable ConfigContext class to isolate parameters cleanly in multi-threaded/A/B test variants.
+3. Context: Imported and read by almost every component in the repository to parameterize operations.
+"""
 import os
 from datetime import datetime, timezone
 from dotenv import load_dotenv

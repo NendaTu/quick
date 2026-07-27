@@ -1,3 +1,8 @@
+"""
+1. Summary: Double-checks compounding equity calculations after fee deductions.
+2. Description: Validates reinvestment percentages and risk margins on a simulated account.
+3. Context: Used to test capital growth models.
+"""
 import math
 
 def calculate_trade_simulation(

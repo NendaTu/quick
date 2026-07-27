@@ -1,3 +1,8 @@
+"""
+1. Summary: Wrapper class integrating the mock trading simulator into the unified exchange interface.
+2. Description: Adopts the standard BaseExchange abstract methods to execute and track orders in paper-mode. Proxies ticker snapshots and historical candles to database backfills and feeds real-time ticks into Simulator's order loops.
+3. Context: Inherits from Simulator and BaseExchange. Instantiated by Engine when running in paper mode.
+"""
 import logging
 import asyncio
 import time

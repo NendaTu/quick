@@ -1,3 +1,8 @@
+"""
+1. Summary: Confirms risk-to-reward ratio targets and break-even stop moves function under slippage.
+2. Description: Simulates stop movements and exit targets to verify risk compliance.
+3. Context: Verifies correct operation of partial-take profit splits.
+"""
 import math
 
 MAKER_FEE = 0.0002

@@ -1,3 +1,8 @@
+"""
+1. Summary: Runs parameter grid-searches to identify optimal Bitcoin momentum threshold parameters.
+2. Description: Sweeps BTC momentum targets and evaluates trade outcomes over history.
+3. Context: Used by quant analysts to tune trend filters.
+"""
 import sqlite3
 import re
 import statistics

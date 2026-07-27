@@ -1,9 +1,8 @@
 """
-Momentum and Volume Influx Patterns
-
-Detects surges in trading activity and shifts in price delivery.
+1. Summary: Short-term volume surges and delivery speed shifts detector.
+2. Description: Spots momentum thrusts and aggressive institutional candle sizes.
+3. Context: Used by the feature layer to flag high-liquidity breakouts.
 """
-
 import math
 from typing import List, Dict, Optional
 from ta.utils import calculate_sma

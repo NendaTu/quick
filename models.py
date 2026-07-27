@@ -1,3 +1,8 @@
+"""
+1. Summary: Reinforcement learning trading models and feature-based prediction engines.
+2. Description: Manages Q-Learning weight maps, feature normalizations, and action determinations. Integrates strict boundary safeguards to prevent NameErrors and index crashes during real-time updates and predictions.
+3. Context: Relies on config.py and ta/features.py. Used by strategies to obtain predictive entry recommendations.
+"""
 import math
 import logging
 import config

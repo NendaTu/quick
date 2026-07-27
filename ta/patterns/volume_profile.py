@@ -1,7 +1,7 @@
 """
-Intraday Volume Profiling
-
-Identifies High Volume Nodes (HVN) and the Point of Control (POC).
+1. Summary: Intraday volume profiling and POC finder.
+2. Description: Identifies High Volume Nodes and the Point of Control across historical cycles.
+3. Context: Used to verify price areas of heavy interest and horizontal support.
 """
 from typing import List, Dict
 

@@ -1,3 +1,8 @@
+"""
+1. Summary: Memory-efficient order book mirror and simulated order book generator.
+2. Description: Defines OrderBook to maintain a real-time copy of bid/ask levels for spread/imbalance calculation. Defines SimulatedOrderBook to generate realistic dummy books until actual exchange data streams arrive.
+3. Context: Used by engine/core.py and simulator.py to calculate spread and book metrics.
+"""
 import math, random
 from typing import List, Tuple
 

@@ -1,3 +1,8 @@
+"""
+1. Summary: Secondary data visualizer for technical indicator telemetry.
+2. Description: Constructs plots of EMA, MACD, and volume deltas over historical candles.
+3. Context: Diagnostic script for optimizing technical criteria.
+"""
 import sqlite3
 import re
 import statistics

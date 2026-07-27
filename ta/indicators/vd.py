@@ -1,15 +1,8 @@
 """
-Volume Delta (VD) Indicator Module
-
-How it works:
-1. Volume Delta measures the difference between buying and selling volume executed
-   via market orders at the ask and bid prices.
-2. Formula: Delta = Market Buys (Aggressive Buyers) – Market Sells (Aggressive Sellers)
-3. Aggressive buyers execute buy orders at the ask, driving the price upward.
-4. Aggressive sellers execute sell orders at the bid, driving the price downward.
-5. This file provides stateless, clean, and robust calculations for Volume Delta.
+1. Summary: Volume Delta single-period buyer/seller velocity calculator.
+2. Description: Measures difference between aggressive buying volume and aggressive selling volume for individual periods.
+3. Context: Provides base data series utilized by the Cumulative Volume Delta indicator.
 """
-
 from typing import List, Dict, Any, Union
 import math
 

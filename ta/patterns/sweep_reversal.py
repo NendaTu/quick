@@ -1,21 +1,8 @@
 """
-Session Sweep Reversal (formerly IDM Reversal Strategy)
-
-How it works:
-1. This is a highly effective "ICT-style" strategy. It predicts that once price "sweeps"
-   session liquidity on one side, it will reverse and be "delivered" to the opposite side's liquidity pool.
-2. Timing is Critical: This model only triggers when sweeps happen within high-probability
-   ICT time windows (London Open, NY AM, NY PM killzones) or immediately preceding them.
-3. Signal Logic:
-   - Buy: Triggered when a "Sell Side Sweep" (price wicks below a low) occurs
-     during or preceding a killzone. The target is the nearest major High.
-   - Sell: Triggered when a "Buy Side Sweep" (price wicks above a high) occurs
-     during or preceding a killzone. The target is the nearest major Low.
-4. Stop Loss (SL): Placed 1 tick beyond the sweep wick to ensure the reversal holds.
-5. Take Profit (TP): Targets the opposite liquidity pool, resulting in favorable Reward-to-Risk ratios.
-6. Execution: `python backtest.py sweep_reversal [rrr_override]`
+1. Summary: Session Sweep Reversal signal calculator.
+2. Description: Computes entry triggers once a session sweep completes and a low-timeframe market structure shift confirms.
+3. Context: Provides signal logic for advanced session-based strategies.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.sessions import is_in_killzone
 from ta.patterns.sweep import detect_sweeps

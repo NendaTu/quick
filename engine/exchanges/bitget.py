@@ -1,3 +1,8 @@
+"""
+1. Summary: Production-ready Bitget V2 API exchange integration driver.
+2. Description: Inherits from DataAcquisitionManager and coordinates real-time REST trading orders and public WebSocket feeds. Standardizes positions, order statuses, contract symbols, margins, and fills into the application's unified schema.
+3. Context: Inherits from BaseExchange and DataAcquisitionManager. Instantiated by Engine for live and demo execution modes.
+"""
 # engine/exchanges/bitget.py
 
 import logging, asyncio, time

@@ -1,3 +1,8 @@
+"""
+1. Summary: High-fidelity paper trading simulation engine with multi-timeframe order matching.
+2. Description: Mimics live contract endpoints by tracking virtual margins, calculating transaction fees, and validating OCO limit orders against ticks. Supports 3-way take-profit splits and trailing stops with zero-slippage execution.
+3. Context: Relies on config.py, database.py, orderbook.py, and tools/publisher.py. Serves as the exchange interface in paper simulation.
+"""
 import asyncio, time, logging, math, random
 from typing import Dict, List, Set, Tuple, Optional, Any
 import config

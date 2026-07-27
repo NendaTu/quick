@@ -1,3 +1,8 @@
+"""
+1. Summary: Checks Volume Delta and Cumulative Volume Delta numerical boundaries.
+2. Description: Verifies that CVD computations are robust against missing values and NaN extremes.
+3. Context: Validates correct execution of aggression indicators.
+"""
 import pytest
 import math
 from ta.indicators.vd import compute_volume_delta

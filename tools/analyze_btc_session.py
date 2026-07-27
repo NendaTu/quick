@@ -1,3 +1,8 @@
+"""
+1. Summary: Analyzes Bitcoin price correlation with session-specific trading volumes.
+2. Description: Queries and visualizes Bitcoin price movements during global market session overlaps.
+3. Context: Helper diagnostic tool for optimizing BTC-related trend configurations.
+"""
 import sqlite3
 import re
 import statistics

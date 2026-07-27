@@ -1,3 +1,8 @@
+"""
+1. Summary: Secondary tester validating backtest OCO fill arithmetic.
+2. Description: Validates simulation execution edge cases.
+3. Context: Diagnostic validation script.
+"""
 import math
 
 MAKER_FEE = 0.0002

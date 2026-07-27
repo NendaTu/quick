@@ -1,3 +1,8 @@
+"""
+1. Summary: Unified Scoring Engine evaluating and weighting technical metrics.
+2. Description: Gathers all the technical indicators and evaluates them into normalized directional/non-directional scores. Resolves denominator dilution by separating directional scores from quality penalties.
+3. Context: Imported by Engine. Crucial gatekeeper determining whether to enter buy or sell positions.
+"""
 import math
 import logging
 

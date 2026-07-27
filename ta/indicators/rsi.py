@@ -1,20 +1,8 @@
 """
-Relative Strength Index (RSI) Strategy
-
-How it works:
-1. This is a "Mean Reversion" strategy. It identifies when the market has moved too far, too fast,
-   and is likely to "snap back" to a normal range.
-2. It uses two thresholds:
-   - Oversold (Default 30): Price is very low.
-   - Overbought (Default 70): Price is very high.
-3. Signal Logic:
-   - Buy: Triggered when the RSI was below the Oversold level but has now closed back above it.
-   - Sell: Triggered when the RSI was above the Overbought level but has now closed back below it.
-4. Stop Loss (SL): Placed at the recent local valley (for Longs) or peak (for Shorts).
-5. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-6. Backtesting command: `python backtest.py rsi [oversold] [overbought] [rrr_override]`
+1. Summary: Relative Strength Index (RSI) momentum oscillator.
+2. Description: Measures speed and change of price movements to identify overbought and oversold conditions.
+3. Context: Used by mean-reversion strategies and momentum filters.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr

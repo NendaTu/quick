@@ -1,3 +1,8 @@
+"""
+1. Summary: Tertiary validator ensuring simulator PnL calculations match live ledger results.
+2. Description: Validates fee-deducted gross-to-net equations against realistic account ledgers.
+3. Context: Verifies math accuracy.
+"""
 import math
 
 MAKER_FEE = 0.0002

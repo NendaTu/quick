@@ -1,23 +1,8 @@
 """
-Market Structure Strategy: BOS, MSS, and CHOCH
-
-How it works:
-1. This strategy tracks "Market Structure" by identifying when the price breaks
-   through previous Higher Highs or Lower Lows.
-2. Break of Structure (BOS): Occurs when price continues the current trend
-   (e.g., breaking a previous ceiling in an uptrend).
-3. Market Structure Shift (MSS): Occurs when price impulsively breaks the opposite
-   side of the trend, signaling a potential reversal.
-4. Signals:
-   - Bullish: When a candle closes above a confirmed Swing High.
-   - Bearish: When a candle closes below a confirmed Swing Low.
-5. Stop Loss (SL): Placed 1 tick beyond the level that was just broken, ensuring
-   capital is protected if the breakout fails.
-6. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-7. Backtesting command: `python backtest.py structure [type] [rrr_override]`
-   - [type]: 'bos', 'mss', or 'all' (Default).
+1. Summary: Market Structure breaks (BOS, MSS, CHOCH) tracker.
+2. Description: Monitors local swings to identify breaks of structures, confirming trend reversals.
+3. Context: Highly useful for validating structural alignments before entries.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 from ta.indicators.atr import compute_atr

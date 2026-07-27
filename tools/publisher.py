@@ -1,11 +1,8 @@
 """
-Console Publisher Module for Uniform Application Outputs
-
-Ensures all application outputs, heartbeats, placements, fills, and exits are
-formatted in a structured, consistent, and beautiful layout across all engines,
-timeframes, and strategies.
+1. Summary: Console Publisher for uniform application outputs.
+2. Description: Formats and prints standard heartbeats, order placements, fills, and position closures.
+3. Context: Provides beautiful, standardized terminal output across all simulator and backtest modes.
 """
-
 import logging
 from datetime import datetime, timezone
 

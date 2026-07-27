@@ -1,3 +1,8 @@
+"""
+1. Summary: REST and WebSocket API client wrappers for the Bitget exchange interface.
+2. Description: Encapsulates V2 private signature creation, API rate limiting with strict safety margins, connection pooling, and multi-threaded WebSocket subscriptions. Fetches market symbols, order book snapshots, historical tickers, and handles demo vs. live API routing.
+3. Context: Relies on aiohttp and pytz. Used by engine/exchanges/bitget.py and compare.py.
+"""
 import hmac
 import hashlib
 import time

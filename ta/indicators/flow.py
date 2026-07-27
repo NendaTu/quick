@@ -1,5 +1,7 @@
 """
-Order Flow / Trade Delta Indicator
+1. Summary: Order Flow and aggressive trade pressure analyzer.
+2. Description: Monitors trade streams to compute aggregated buy and sell volume velocity changes.
+3. Context: Used to identify active institutional interest blocks and volume surges.
 """
 from typing import List, Dict
 

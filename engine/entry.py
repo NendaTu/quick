@@ -1,3 +1,8 @@
+"""
+1. Summary: Unified Signal Router executing orders across paper and live exchange interfaces.
+2. Description: Parses standardized signal dictionaries emitted by strategies and directs execution handlers. Maps simulated OCO limit targets to the paper engine and maps live limit orders to REST API endpoints.
+3. Context: Instantiated by Engine. Relies on BitgetExchange and SimulationEngine wrappers to place trades.
+"""
 import logging
 from typing import Dict, Any, Optional
 from engine.base import BaseExchange, BaseStrategy

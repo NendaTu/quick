@@ -1,17 +1,8 @@
 """
-Average True Range (ATR) Strategy (Filter)
-
-How it works:
-1. This is a "Volatility Filter" strategy. It ensures that trades are only taken
-   when the market has enough "life" (movement) to hit targets.
-2. It calculates the ATR as a percentage of the current price.
-3. Signal Logic:
-   - Returns "both" (allowing any direction) if the ATR % is above the threshold.
-   - Blocks signals if the market is too quiet (ATR below threshold).
-4. Backtesting command: `python backtest.py "atr [threshold_pct] + [trigger]"`
-   - Example: `"atr 0.2 + engulfing"` (Requires 0.2% minimum volatility).
+1. Summary: Average True Range (ATR) volatility series calculator.
+2. Description: Measures market volatility using rolling ATR calculations to dynamically determine protective stop and profit targets.
+3. Context: Imported by strategies and features layers to scale risk and exits.
 """
-
 from typing import List, Dict, Optional
 import config
 

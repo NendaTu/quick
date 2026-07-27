@@ -1,17 +1,8 @@
 """
-Order Block (OB) Identification Module
-
-How it works:
-1. This module identifies "Order Blocks"—price zones where institutional
-   buying or selling occurred before a strong, fast move.
-2. A Bullish OB is a bearish candle followed by a rapid upward "impulse"
-   that breaks its high.
-3. A Bearish OB is a bullish candle followed by a rapid downward "impulse"
-   that breaks its low.
-4. This file is stateless, strictly focused on technical analysis discovery,
-   and does not contain entries, exits, stops, or signal triggers.
+1. Summary: Stateless Order Block (OB) identification module.
+2. Description: Locates institutional buying/selling block areas with ATR-based warmup and mitigation checks.
+3. Context: Crucial stateless pattern-discovery module used by Agt levelFinder strategies.
 """
-
 from typing import List, Dict, Optional, Any
 import math
 

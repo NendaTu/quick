@@ -1,11 +1,8 @@
 """
-Stateless Technical Analysis Feature Extraction Module
-
-This module isolates all technical analysis calculations from the Simulator and Engine classes,
-allowing any components (Live Exchange, Simulator, Backtest) to compute standard metrics
-from raw OHLCV series, order book state, and trade history without inheriting execution state.
+1. Summary: Stateless feature extraction module.
+2. Description: Pulls indicators and SMC patterns into a unified feature matrix dictionary representing active market conditions.
+3. Context: Invoked statelessly by engine simulators or real exchange modules before score calculations.
 """
-
 import math
 import logging
 from typing import Dict, List, Optional

@@ -1,19 +1,8 @@
 """
-Average Directional Index (ADX) Strategy (Filter)
-
-How it works:
-1. This is a "Trend Strength" filter. It doesn't tell you the direction (Up or Down),
-   but it tells you how *strongly* the market is moving in that direction.
-2. ADX values range from 0 to 100:
-   - Below 25: The market is "Ranging" or "Flat" (No clear trend).
-   - Above 25: The market is "Trending" (Strong move in progress).
-3. Signal Logic:
-   - Returns "both" (allowing any direction) if the ADX is above the threshold.
-   - Blocks signals if the market is flat (ADX below threshold).
-4. Backtesting command: `python backtest.py "adx [threshold] + [trigger]"`
-   - Example: `"adx 25 + supertrend"`
+1. Summary: Average Directional Index (ADX) trend strength calculator.
+2. Description: Computes ADX and directional indicators (+DI, -DI) over rolling periods to measure macro trend strength.
+3. Context: Imported by feature extraction modules to filter out weak-trending configurations.
 """
-
 from typing import List, Tuple, Dict, Optional
 from ta.indicators.atr import compute_atr
 

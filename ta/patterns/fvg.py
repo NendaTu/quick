@@ -1,19 +1,8 @@
 """
-Fair Value Gap (FVG) Recognition Module
-
-How it works:
-1. A Fair Value Gap (FVG) is a three-candle sequence where price moves so quickly that a "gap"
-   is left between the first candle's wick and the third candle's wick.
-2. [HARDENING] Rule: The middle candle (C2) must be strictly contained within the expansion frame.
-   - Bullish: C2 High < C3 High AND C2 Low > C1 Low.
-   - Bearish: C2 Low > C3 Low AND C2 High < C1 High.
-3. This module provides both real-time detection and a backtesting strategy.
-4. FVG Backtesting Strategy (`python backtest.py fvg [dir_count] [gap_pct] [rrr_override]`):
-   - [dir_count]: How many of the 3 candles must match the FVG's direction (1, 2, or 3). Default is 3.
-   - [gap_pct]: Minimum percentage of the 2nd candle's range that the gap must cover (e.g., 30%).
-   - [rrr_override]: Optional Reward-to-Risk Ratio (e.g., 1.5). If not provided, targets a net +1% ROE.
+1. Summary: Fair Value Gap (FVG) stateless recognition module.
+2. Description: Spots imbalances across 3-candle structures where price delivered too rapidly, leaving a gap between wicks.
+3. Context: Used to map liquidity vacuums and draw-on-liquidity zones.
 """
-
 from typing import List, Dict, Optional
 from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr
 import config

@@ -1,69 +1,8 @@
 """
-# Killzone Sweep Strategy v1.mustafa
-
-## Overview
-The Killzone Sweep strategy is designed to capitalize on "Institutional Liquidity Raids" that typically
-occur during the opening volatility of major global financial hubs. It assumes that retail stop-losses
-reside just beyond the highs and lows of the "Overnight Session" (the period between core exchange hours).
-When the market opens (the "Killzone"), institutions often drive price into these liquidity pools to
-fill large orders before reversing direction. This strategy identifies that reversal sequence with
-high precision across three timeframes.
-
-## Hubs and Hours (All times EST)
-- **US**: Core 9:30-16:00 | Overnight 16:00-9:30
-- **UK/EU**: Core 3:00-11:30 | Overnight 11:30-3:00
-- **JAPAN**: Core 19:00-1:00 | Overnight 1:00-19:00
-- **HK**: Core 20:30-4:00 | Overnight 4:00-20:30
-
-## Goals & Rationale
-- **Compounding Target**: Targets a net ROI of 1-5% per trade. While the system's "north star" is 5%, this strategy balances that with realistic institutional liquidity targets to maintain a high win rate (>65%).
-- **Frequency**: Aims for 1-3 high-quality setups per asset per day. By monitoring 250 assets, the global frequency supports the rapid compounding goal.
-- **Selectivity**: Prioritize setup quality over raw frequency. It avoids "choppy" mid-range price action, focusing exclusively on extremes where institutional "smart money" is forced to reveal its hand.
-- **Risk Management**: Employs a strict 0.5% risk-per-trade model with fee-aware position sizing. Uses an "Aggressive Break-Even" (moving SL to 50% profit point) upon TP1 to eliminate tail risk early.
-
-## Modules Used
-- `ta/patterns/sessions.py`: Orchestrates the awareness of which global hub is active and calculates
-  the preceding "Overnight Range" (including Friday close to Monday open logic).
-- `ta/patterns/structure.py`: Detects Break of Structure (BOS) and Market Structure Shifts (MSS) to
-  confirm trend transitions on 1H (Bias) and 1m (Execution).
-- `ta/patterns/liquidity.py`: Identifies Buy-Side Liquidity (BSL) and Sell-Side Liquidity (SSL) pools
-  on the 15m timeframe to use as Take-Profit targets.
-- `ta/patterns/fvg.py`: Locates Fair Value Gaps on the 1m timeframe to define high-confidence
-  entry zones and protective Stop-Loss levels.
-- `tools/trading_utils.py`: Calculates fee-aware position sizing to ensure exactly 0.5% risk (or user-defined).
-
-## The Intended Flow
-1. **Hub Detection**: The strategy identifies the current active Hub (US, UK, etc.) and determines
-   if it is within the 2-hour "Killzone" of the Core Session start.
-2. **Historical Catch-up (Fast-Forward)**: On startup, scans up to 8 hours of history to see if a
-   liquidity sweep and reversal sequence are already in progress. If found, jumps to the advanced state.
-3. **Overnight Range (1H)**: Scans back to find the High and Low established during the hub's preceding
-   overnight session.
-4. **Bias (1H)**: Establishes directional bias (Bullish/Bearish) based on 1H Market Structure.
-5. **Liquidity Sweep (15m)**: Waits for price to "sweep" (wick beyond) the overnight extreme *opposite*
-   to the bias. (e.g., Bullish Bias -> Sweep of Overnight Low).
-6. **Reversal Sequence (1m)**:
-   - **BOS1**: Confirms the first shift in internal structure back toward the bias.
-   - **FVG**: Identifies an imbalance created during the impulsive BOS1 move.
-   - **Retest**: Waits for price to re-enter the FVG zone, confirming institutional interest.
-   - **BOS2**: Final trigger—a second break of structure following the retest, signaling
-     continuation of the reversal.
-7. **Execution**: Entry at the close of the BOS2 candle.
-   - **SL**: Placed 1 tick beyond the 1m FVG.
-   - **TP1 (50%)**: Targeted at the first 15m liquidity level providing at least 1:1.5 RRR.
-   - **TP2**: Targeted at the next 15m liquidity level at/beyond 1:2.5 RRR.
-8. **Cooldown & Reset**: After a successful signal or abandonment, the strategy enters a 1-hour
-   cooldown before resetting to `IDLE` to allow multiple setups per session.
-
-## Limitations & Assumptions
-- **Volume Dependence**: Expects standard exchange hours for liquidity; may underperform during bank holidays.
-- **Wick Parity**: Relies on the Engine's REST-Patching mechanism to ensure 100% wick alignment between live and backtest.
-- **Latency Sensitivity**: Requires low-latency execution as 1m BOS2 triggers can move significantly within seconds.
-- **History Requirement**: Needs 120 1H candles for bias and 300 1m candles for trajectory catch-up.
-- **Market Conditions**: Highly effective in Trending or Range-Expansion markets.
-- **Asset Universe**: Designed for high-volume USDT-M futures on Bitget.
+1. Summary: Killzone session liquidity sweep reversal strategy.
+2. Description: Monitors specific London and New York session killzones to identify institutional liquidity sweeps. Captures rapid trend reversals when prices wick past local session extremes and close back inside the range.
+3. Context: Relies on ta/patterns/sessions.py and ta/patterns/sweep.py.
 """
-
 import logging
 import math
 from typing import Dict, Optional, Any, List

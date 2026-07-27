@@ -1,68 +1,8 @@
 """
-# Killzone Sweep Overnight Strategy v1.mustafa
-
-## Overview
-The Killzone Sweep Overnight strategy is the inverse of the standard Killzone strategy.
-While the standard strategy uses the "Overnight Range" to trade the Core session's volatility,
-this strategy uses the preceding "Core Session Range" (the main trading day) to identify
-liquidity sweeps during the quieter overnight hours. It assumes that major day highs and
-lows act as magnets for price during the overnight session as institutional algos
-clear out remaining retail orders before the next day's open.
-
-## Hubs and Hours (All times EST)
-- **US**: Core 9:30-16:00 | Overnight 16:00-9:30
-- **UK/EU**: Core 3:00-11:30 | Overnight 11:30-3:00
-- **JAPAN**: Core 19:00-1:00 | Overnight 1:00-19:00
-- **HK**: Core 20:30-4:00 | Overnight 4:00-20:30
-
-## Goals & Rationale
-- **Compounding Target**: Targets a net ROI of 1-3% per trade. Overnight sessions typically
-  have lower volatility, so profit targets are adjusted to be more realistic for these conditions.
-- **Frequency**: 1-2 high-probability setups per asset during the overnight period.
-- **Selectivity**: Focuses on "Mean Reversion to the Day Range". It looks for fake-outs
-  beyond the day's extremes.
-- **Risk Management**: 0.5% risk-per-trade. Uses Aggressive Break-Even (moving SL to 50%
-  profit point) upon TP1 to lock in gains during potentially lower-volume periods.
-
-## Modules Used
-- `ta/patterns/sessions.py`: Identifies the current active Overnight session and
-  retrieves the range of the immediately preceding Core Session (Day Range).
-- `ta/patterns/structure.py`: Detects BOS/MSS on 1H (Bias) and 1m (Execution).
-- `ta/patterns/liquidity.py`: Identifies liquidity pools established during the day
-  to use as targets.
-- `ta/patterns/fvg.py`: Defines entry zones and SL placement on the 1m timeframe.
-- `tools/trading_utils.py`: Fee-aware position sizing.
-
-## The Intended Flow
-1. **Overnight Hub Detection**: Strategy identifies if it is currently in an Overnight
-   session for a major hub.
-2. **Historical Catch-up (Fast-Forward)**: On startup, scans up to 8 hours of history to identify
-   day-extreme sweeps already in progress. Jumps to the appropriate reversal state if found.
-3. **Day Range (1H)**: Retrieves the High and Low established during that same hub's
-   immediately preceding main trading day (Core Session).
-4. **Bias (1H)**: Directional bias (Bullish/Bearish) from 1H structure.
-5. **Liquidity Sweep (15m)**: Waits for price to "sweep" a Day Range extreme during
-   the overnight session. (e.g., Bearish Bias -> Sweep of Day High).
-6. **Reversal Sequence (1m)**:
-   - **BOS1**: Internal structure shift back toward the bias.
-   - **FVG**: Imbalance creation.
-   - **Retest**: Validation of the imbalance.
-   - **BOS2**: Final execution trigger.
-7. **Execution**: Entry at BOS2 close.
-   - **SL**: 1 tick beyond the FVG extreme.
-   - **TP1 (50%)**: First 15m liquidity level from the day session (1:1.2+ RRR).
-   - **TP2**: Next 15m liquidity level (1:2.0+ RRR).
-8. **Cooldown & Reset**: Enters a 1-hour cooldown after any signal event or abandonment
-   to enable multiple overnight setups on the same asset.
-
-## Limitations & Assumptions
-- **Wick Parity**: Utilizes REST-Patching to ensure live wicks match historical backtest wicks exactly.
-- **Volume Sensitivity**: Overnight markets can be thin; requires assets with high 24/7 liquidity.
-- **Weekend Persistence**: On Friday nights and through the weekend, the Friday Day Range is used as the anchor.
-- **History Requirement**: Needs 120 1H candles for range/bias and 300 1m candles for trajectory catch-up.
-- **Lower Volatility**: Expectations for follow-through are lower than during the main day session.
+1. Summary: Overnight session liquidity sweep reversal strategy.
+2. Description: Identifies and monitors overnight session horizontal support/resistance boundaries. Places reversal trades when high volume surges wick outside these overnight levels and recover on low-timeframe structure breaks.
+3. Context: Relies on ta/patterns/sessions.py and ta/patterns/sweep.py.
 """
-
 import logging
 import math
 from typing import Dict, Optional, Any, List

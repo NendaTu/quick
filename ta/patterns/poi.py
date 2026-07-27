@@ -1,15 +1,8 @@
 """
-HTF POI Delivery and Confluence Module
-
-Union of multiple validated zones (OB, FVG, Liquidity, SessionHL) to
-identify high-probability Points of Interest (POI).
-
-Identification:
-- Registry: UNION(OBs, FVGs, Liquidity levels, SessionHL).
-- Confluence: Points where multiple types overlap (within ATR tolerance).
-- Reaction: Delivery confirmed on touch + LTF reaction (MSS, Engulfing).
+1. Summary: High-probability Point of Interest (POI) confluence engine.
+2. Description: Unites overlapping Order Blocks, FVGs, and Liquidity Pools into unified POI zones.
+3. Context: Used by institutional strategies to locate optimal entry zones.
 """
-
 from typing import List, Dict, Optional
 from ta.indicators.atr import compute_atr
 

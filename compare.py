@@ -1,3 +1,8 @@
+"""
+1. Summary: Multi-variant orchestrator and live stream coordinator for real-time A/B testing of configurations.
+2. Description: Spins up multiple parallel worker subprocesses (Variants) running the live simulation loop concurrently on shared memory. Includes a data coordinator that handles a single websocket feed and pushes trade signals/ticker updates to variant-specific queues to prevent API rate limiting.
+3. Context: Relies on config.py, engine/core.py, bitget_client.py, and tools/logger.py.
+"""
 import sys
 import os
 import asyncio

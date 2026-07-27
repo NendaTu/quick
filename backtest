@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# 1. Summary: Executable shell launcher for the python backtesting system.
+# 2. Description: Ignores parent wrapper SIGINT signals so the child backtest process can handle key interrupts gracefully, print final reports, and exit without corruption. Runs backtest.py with all CLI arguments passed.
+# 3. Context: Dependent on backtest.py. Uses subprocess and sys.executable to run.
 import sys, subprocess, os, signal
 if __name__ == "__main__":
     # Ignore SIGINT in the parent wrapper so that the child python process

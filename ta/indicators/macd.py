@@ -1,20 +1,8 @@
 """
-Moving Average Convergence Divergence (MACD) Strategy
-
-How it works:
-1. This is a "Momentum" strategy. It measures the relationship between two moving averages
-   of a security’s price.
-2. It consists of the MACD Line, a Signal Line, and a Histogram (the difference between them).
-3. Signal Logic (Histogram Zero-Cross):
-   - Bullish (Buy): When the MACD line crosses ABOVE the Signal line (Histogram turns Positive).
-   - Bearish (Sell): When the MACD line crosses BELOW the Signal line (Histogram turns Negative).
-4. This "Zero-Cross" method is widely considered by elite traders to be more reliable for
-   catching the meat of a move than simple line crossovers.
-5. Stop Loss (SL): Placed at the recent local valley (for Longs) or peak (for Shorts).
-6. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-7. Backtesting command: `python backtest.py macd [fast] [slow] [signal] [rrr_override]`
+1. Summary: Moving Average Convergence Divergence (MACD) oscillator.
+2. Description: Computes MACD lines, signal curves, and hist slopes to spot momentum shifts and reversals.
+3. Context: Used by the ScoringEngine as a heavy-weighted indicator of price momentum.
 """
-
 from typing import List, Tuple, Dict, Optional
 from ta.patterns.swings import detect_swings
 from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr

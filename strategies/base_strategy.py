@@ -1,3 +1,8 @@
+"""
+1. Summary: Abstract framework class for authoring backtestable multi-timeframe strategies.
+2. Description: Implements common boilerplate for loading configuration contexts, validating historical warmups, checking reentry cooldowns, and executing ATR-based stop or target calculations.
+3. Context: Base class for all strategies in strategies/built/ and strategies/sweeps/. Inherits from BaseStrategy interface.
+"""
 import logging
 from typing import Dict, Optional, Any
 from engine.base import BaseStrategy

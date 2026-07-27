@@ -1,3 +1,8 @@
+"""
+1. Summary: Tests stateless pattern-discovery for order blocks and breaker blocks.
+2. Description: Verifies ATR warmups, relative doji caps, and chronological validations.
+3. Context: Guarantees that OB and breaker block detections are free of look-ahead bias.
+"""
 import pytest
 import math
 from ta.patterns.ob import detect_order_blocks, compute_atr_series

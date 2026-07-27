@@ -1,15 +1,8 @@
 """
-Market Phase Recognition: Accumulation, Manipulation, Distribution
-
-Identifies consolidation and expansion phases based on volatility, volume,
-and structural divergences.
-
-Identification:
-- Accumulation: Low volatility (<30% ATR), high volume (>1.2x SMA), tight range.
-- Manipulation: Post-accumulation sweep with sharp reversal.
-- Distribution: Elevated volatility, high volume, failing to make new highs/lows.
+1. Summary: Market consolidation and expansion phases recognizer.
+2. Description: Classifies market cycles into Accumulation, Manipulation, and Distribution states.
+3. Context: Provides macro context for timing reversal vs breakout setups.
 """
-
 from typing import List, Dict, Optional
 from ta.indicators.atr import compute_atr
 from ta.utils import calculate_sma

@@ -1,22 +1,8 @@
 """
-Liquidity Sweep Strategy (Institutional Reversal)
-
-How it works:
-1. This is an "Institutional" reversal strategy. It identifies "Stop Hunts" where
-   price briefly pokes through a major high or low to grab liquidity before reversing.
-2. Buy Side Sweep: Price wicks above a major High (Buy Side Liquidity) by at least
-   SWEEP_MARGIN_PCT, then closes back below it with a bearish candle.
-3. Sell Side Sweep: Price wicks below a major Low (Sell Side Liquidity) by at least
-   SWEEP_MARGIN_PCT, then closes back above it with a bullish candle.
-4. Signal Logic:
-   - Triggered immediately on the close of the reversal candle.
-5. Stop Loss (SL): Placed a small buffer (SL_BUFFER_PCT) beyond the "Sweep Wick"
-   (the extreme point of the reversal candle). This buffer is a percentage of
-   price, NOT a real exchange tick size -- see the SL_BUFFER_PCT note below.
-6. Take Profit (TP): Targets a specific net profit (default +1% ROE).
-7. Backtesting command: `python backtest.py sweep [rrr_override]`
+1. Summary: Liquidity sweep and wick stop-hunt detector.
+2. Description: Identifies candle wicks that pierce past local extremes but close back inside the range, signifying a stop hunt.
+3. Context: The underlying technical foundation of all sweep strategies.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.liquidity import identify_liquidity
 from tools.trading_utils import calculate_tp_for_roe, calculate_target_roe_for_rrr

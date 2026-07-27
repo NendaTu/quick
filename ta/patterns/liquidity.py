@@ -1,10 +1,8 @@
 """
-Buy-Side Liquidity (BSL) and Sell-Side Liquidity (SSL) Recognition
-
-Identifies clusters of pending orders located above recent swing highs (BSL)
-or below recent swing lows (SSL).
+1. Summary: Buy-Side (BSL) and Sell-Side (SSL) liquidity pool mapper.
+2. Description: Identifies price levels containing clustered stop-losses located above swing highs and below swing lows.
+3. Context: Utilized by sweep strategies to target logical take-profit locations.
 """
-
 from typing import List, Dict, Optional
 from ta.patterns.swings import detect_swings
 from ta.patterns.sessions import is_core_session

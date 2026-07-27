@@ -1,66 +1,9 @@
+"""
+1. Summary: Historical OHLCV data downloader from Bitget REST endpoints.
+2. Description: Retrieves multi-timeframe candles and populates the local SQLite database.
+3. Context: Core acquisition tool ensuring offline backtests have rich historical data.
+"""
 #!/usr/bin/env python3
-"""
-[TECH-001] Standalone Historical Data Downloader
-=================================================
-
-WHAT THIS SCRIPT DOES (plain-language summary):
-------------------------------------------------
-This script fills in historical price data ("candles" -- the open / high /
-low / close / volume bars used for charting, backtesting, and strategy
-research) for our tracked crypto assets, covering the date range configured
-in config.py (MAX_START_DATE to MAX_END_DATE) across every timeframe we care
-about (config.AVAILABLE_TIMEFRAMES, e.g. 1-minute, 1-hour, 1-day, ...).
-
-Step by step, it:
-  1. Asks Bitget which assets are currently trading the most volume, and
-     picks the top N (config.ASSETS_COUNT).
-  2. Checks our local database to see what data we already have for each of
-     those assets, at every timeframe.
-  3. Downloads ONLY what's missing. It never re-downloads data it already
-     has, so it is always safe -- and usually fast -- to run again.
-  4. Prints a short coverage report and a live progress bar while it works.
-
-IS IT SAFE TO STOP AND RE-RUN? Yes. If you press Ctrl+C, the process gets
-killed, or your connection drops, just run the script again. It resumes
-exactly where it left off: nothing gets re-downloaded, and any asset/
-timeframe we've already confirmed is "as complete as it can possibly be"
-(for example, a coin that only started trading a year ago, so it will never
-have data going back further than that) is remembered and skipped for good.
-
-HOW LONG DOES THIS TAKE? For a full run starting from an empty database,
-across every configured asset and timeframe, this can take DAYS, not
-minutes -- we deliberately throttle ourselves well under Bitget's rate
-limits so we don't get temporarily blocked. Watch the progress bar for a
-live estimate once the download phase begins. Re-runs (once most of the
-data already exists) are much faster, since there's little left to fetch.
-
-If a run finishes with a warning about "chunks that hit an API error", that
-is NOT data loss -- it just means a small number of requests failed even
-after BitGetClient's own retries (rare, but can happen). Simply run the
-script again and gap-detection will pick those pieces back up automatically.
-
-NOTES FOR DEVELOPERS:
-------------------------------------------------
-- Rate limiting happens in exactly ONE place: inside BitGetClient itself,
-  via the RateLimiter instance we hand it at construction time (see
-  `shared_rate_limiter` below). This script does not run a second,
-  independent limiter -- an earlier version did, and it turned out to be a
-  harmless-but-fragile leftover from before BitGetClient gained its own
-  internal rate limiting. Don't reintroduce a second one; it will either do
-  nothing (if it happens to match) or fight with the client's own limiter
-  (if it doesn't).
-- "Missing data" is determined by Database.get_data_gaps() /
-  has_data_gaps(), both of which are "listing-aware": once we've confirmed
-  (via Database.mark_exhausted) that an asset's history doesn't reach back
-  to MAX_START_DATE -- because it wasn't listed yet -- we stop treating that
-  unreachable span as a gap that needs filling.
-- Database.save_candle() is a fast, non-blocking handoff to a background
-  writer thread (see database.py) -- it's safe to call from inside the
-  asyncio event loop without blocking other concurrent workers.
-- Gaps for every asset/timeframe pair are computed ONCE, up front, in
-  main(), and reused both to size the progress bar and as the actual
-  download worklist -- we don't ask the database the same question twice.
-"""
 
 import asyncio
 import logging
