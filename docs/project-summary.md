@@ -1,4 +1,6 @@
-# Project Summary: Bitget Futures Compounding Bot
+# Project Summary: Automated Futures Compounding Engine
+
+!!! This document is a living document and subject to change at any time. Not all concepts and requirements are enclosed here, as brainstorming of the project's full goals is still underway. !!!
 
 The purpose of this project is to build an automated high-frequency trading system designed to rapidly compound capital by identifying and executing hundreds of high-probability trades per day in the Bitget USDT-M Futures market. At its core, the software serves as a sophisticated decision engine that monitors up to 250 different assets simultaneously, looking for "institutional-grade" price patterns and market movements. It is built for a specific compounding goal: turning small initial amounts into substantial capital by maintaining a consistent win rate and disciplined risk-to-reward ratios across a high volume of trades.
 
