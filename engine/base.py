@@ -48,7 +48,9 @@ class BaseExchange(ABC):
         pass
 
 class BaseStrategy(ABC):
-    def __init__(self, config_overrides: Optional[Dict] = None):
+    def __init__(self, simulator=None, model=None, config_overrides: Optional[Dict] = None):
+        self.simulator = simulator
+        self.model = model
         self.config_overrides = config_overrides or {}
 
     @abstractmethod

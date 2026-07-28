@@ -64,7 +64,8 @@ class DataCoordinator:
         spec_map = {s['symbol']: s for s in specs}
 
         from database import Database
-        db = Database()
+        # P2-11: Use transient in-memory database to completely avoid multi-process file lock contention
+        db = Database(db_path=":memory:")
 
         discovered_assets = []
         limit = self.preloaded_data.get("ASSETS_COUNT", ASSETS_COUNT)
@@ -205,7 +206,7 @@ def variant_runner(variant: Variant, preloaded_data: Dict, input_queue: multipro
     # 4.5 Load Strategy if specified
     if variant.strategy:
         from main import load_strategy
-        strategies = load_strategy(variant.strategy, simulator=engine.exchange)
+        strategies = load_strategy(variant.strategy, simulator=engine.exchange, model=engine.model, overrides=variant.overrides)
         if strategies:
             if isinstance(strategies, list):
                 engine.strategies = strategies

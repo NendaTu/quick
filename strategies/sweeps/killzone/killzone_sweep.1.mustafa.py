@@ -17,14 +17,15 @@ from ta.utils import convert_to_local
 import config
 
 class KillzoneSweepStrategy(JBaseStrategy):
-    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
+    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None, model=None):
         super().__init__(
             name="killzone_sweep",
             version="1",
             author="mustafa",
+            simulator=simulator,
+            model=model,
             config_overrides=config_overrides
         )
-        self.simulator = simulator
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
         # --- Strategy-Specific Parameters (with overrides) ---

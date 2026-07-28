@@ -16,14 +16,22 @@ log = logging.getLogger("scalper.database")
 
 class Database:
     def __init__(self, db_path=None):
-        # [TECH-001] Ensure absolute pathing for the database to prevent fragmentation
-        # when running from different script locations.
+        # [P2-11] Mode-aware DB Path with directory auto-creation
         if db_path is None:
-            import os
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            self.db_path = os.path.join(base_dir, "market_data.db")
+            try:
+                import config
+                self.db_path = getattr(config, "DB_PATH", "market_data.db")
+            except Exception:
+                self.db_path = "market_data.db"
         else:
             self.db_path = db_path
+
+        import os
+        # Ensure absolute pathing for the database to prevent fragmentation
+        self.db_path = os.path.abspath(self.db_path)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
         self._conn = None
         self._init_db()

@@ -15,14 +15,15 @@ from ta.patterns.fvg import detect_fvgs
 import config
 
 class KillzoneSweepOvernightStrategy(JBaseStrategy):
-    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
+    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None, model=None):
         super().__init__(
             name="killzone_sweep_overnight",
             version="1",
             author="mustafa",
+            simulator=simulator,
+            model=model,
             config_overrides=config_overrides
         )
-        self.simulator = simulator
         self._cache = {} # [PERF-005] Cache for expensive calculations
 
         # --- Strategy-Specific Parameters ---

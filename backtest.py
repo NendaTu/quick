@@ -325,7 +325,11 @@ class StrategyWrapper:
         if rel_path.endswith(".py"):
              rel_path = rel_path[:-3]
 
-        res = load_strategy(rel_path, simulator=self.simulator, overrides=self.overrides)
+        model = None
+        if self.simulator and hasattr(self.simulator, "engine") and self.simulator.engine:
+            model = self.simulator.engine.model
+
+        res = load_strategy(rel_path, simulator=self.simulator, model=model, overrides=self.overrides)
         if res is not None:
             return res
 
@@ -559,7 +563,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
 
     # USE THE UNIFIED SIMULATION ENGINE FORCED TO PAPER MODE FOR BACKTESTING
     from engine.core import Engine
-    engine = Engine(use_db=False, mode="paper")
+    engine = Engine(use_db=False, mode="paper", config_overrides=overrides)
     engine.start_time = time.time()
     peak_equity = config.INITIAL_EQUITY
 
@@ -960,7 +964,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
 
     # USE THE UNIFIED SIMULATION ENGINE FORCED TO PAPER MODE FOR BACKTESTING
     from engine.core import Engine
-    engine = Engine(use_db=False, mode="paper")
+    engine = Engine(use_db=False, mode="paper", config_overrides=overrides)
     engine.start_time = time.time()
     peak_equity = config.INITIAL_EQUITY
 

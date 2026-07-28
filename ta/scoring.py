@@ -84,9 +84,6 @@ class ScoringEngine:
         asset_15m = features.get("asset_15m", 0.0) if features.get("asset_15m") is not None else 0.0
         raw_scores["trend_15m"] = self._linear_map(asset_15m, -trend_15m_min, trend_15m_min, -100.0, 100.0) * filter_multiplier
 
-        # 1.6 Asset Confluence
-        raw_scores["asset_conf"] = raw_scores["trend_15m"]
-
         # 1.7 Supertrend
         supertrend_dir = features.get("supertrend_dir", 0) if features.get("supertrend_dir") is not None else 0
         raw_scores["supertrend"] = float(supertrend_dir) * 100.0 * filter_multiplier
@@ -200,7 +197,7 @@ class ScoringEngine:
 
         # ----------------- 3. WEIGHT MULTIPLICATION & AGGREGATION -----------------
         # Separate directional and non-directional keys to avoid denominator dilution [REPAIR]
-        directional_keys = ["rsi", "rsi_ceiling", "imbalance", "macd", "trend_15m", "asset_conf", "supertrend", "drt", "sanity", "btc_mom", "btc_conf", "htf_bias", "structure"]
+        directional_keys = ["rsi", "rsi_ceiling", "imbalance", "macd", "trend_15m", "supertrend", "drt", "sanity", "btc_mom", "btc_conf", "htf_bias", "structure"]
         non_directional_keys = ["vol_influx", "atr", "spread", "vol_pct", "confidence"]
 
         total_weighted_score = 0.0

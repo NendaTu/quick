@@ -28,7 +28,7 @@ log = logging.getLogger("scalper")
 
 from tools.logger import setup_logging
 
-def load_strategy(strategy_path: str, simulator=None, overrides=None):
+def load_strategy(strategy_path: str, simulator=None, model=None, overrides=None):
     """
     [TECH-001] Enhanced strategy loader with full recursive directory support.
     Calling a parent directory will now correctly load all strategies in all
@@ -51,7 +51,7 @@ def load_strategy(strategy_path: str, simulator=None, overrides=None):
                 if f.endswith(".py") and not f.startswith("__") and "base_strategy" not in f:
                     # Construct relative path for loader
                     full_f_path = os.path.join(root, f)
-                    res = load_strategy(full_f_path, simulator=simulator, overrides=overrides)
+                    res = load_strategy(full_f_path, simulator=simulator, model=model, overrides=overrides)
                     if res:
                         if isinstance(res, list): strategies.extend(res)
                         else: strategies.append(res)
@@ -85,11 +85,14 @@ def load_strategy(strategy_path: str, simulator=None, overrides=None):
 
         for name, obj in module.__dict__.items():
             if isinstance(obj, type) and name != "JBaseStrategy" and "Strategy" in name:
-                instance = obj(simulator=simulator, config_overrides=overrides)
+                instance = obj(simulator=simulator, model=model, config_overrides=overrides)
                 # [TECH-001] Extract strategy_id from filename (before first dot)
                 base_name = os.path.basename(full_path)
                 strat_id = base_name.split(".")[0]
                 instance.strategy_id = strat_id
+                # Post-construction verification to catch un-wired strategies (P0-7)
+                if hasattr(instance, "required_history") and getattr(instance, "simulator", None) is None:
+                    raise RuntimeError(f"Strategy {name} has required_history but self.simulator is None (not wired correctly).")
                 return instance
     except Exception as e:
         log.error(f"Error loading strategy file {full_path}: {e}")
@@ -117,13 +120,13 @@ async def main():
             except:
                 overrides[k] = v
 
-    engine = Engine(mode=args.mode)
+    engine = Engine(mode=args.mode, config_overrides=overrides)
 
     # 0. Setup Logging with DB support
     setup_logging(db=getattr(engine.exchange, 'db', None))
 
     # Load strategy
-    strategies = load_strategy(strategy_query, simulator=engine.exchange, overrides=overrides)
+    strategies = load_strategy(strategy_query, simulator=engine.exchange, model=engine.model, overrides=overrides)
     if strategies:
         if isinstance(strategies, list):
             log.info(f"Loaded Strategy Family: {strategy_query} ({len(strategies)} members)")

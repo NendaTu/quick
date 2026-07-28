@@ -25,9 +25,14 @@
     "description": "Multi-variant orchestrator and live stream coordinator for real-time A/B testing of configurations."
   },
   {
-    "path": "config.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/config.py",
-    "description": "Global application configuration context, risk definitions, and technical parameters."
+    "path": "config/__init__.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/config/__init__.py",
+    "description": "Global application configuration package entrypoint."
+  },
+  {
+    "path": "config/settings.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/config/settings.py",
+    "description": "Typed, validated settings model for application parameters."
   },
   {
     "path": "database.py",
@@ -47,7 +52,7 @@
   {
     "path": "engine/core.py",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/core.py",
-    "description": "Unified trading loop manager and execution system coordinator."
+    "description": "Unified trading engine core and modular composition manager."
   },
   {
     "path": "engine/entry.py",
@@ -77,7 +82,7 @@
   {
     "path": "engine/exchanges/blofin.py",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/blofin.py",
-    "description": "Placeholder exchange driver class for the BloFin exchange."
+    "description": "Placeholder exchange driver class for the Blofin exchange."
   },
   {
     "path": "engine/exchanges/coinex.py",
@@ -108,6 +113,41 @@
     "path": "engine/exchanges/mexc.py",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/mexc.py",
     "description": "Placeholder exchange driver class for the MEXC exchange."
+  },
+  {
+    "path": "engine/loop.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/loop.py",
+    "description": "Specialized orchestration engine managing active asynchronously running trading routines."
+  },
+  {
+    "path": "engine/positions.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/positions.py",
+    "description": "Single-concern bookkeeping ledger for open and pending positions."
+  },
+  {
+    "path": "engine/reconciliation.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/reconciliation.py",
+    "description": "Production-grade exchange state reconciliation subsystem."
+  },
+  {
+    "path": "engine/regimes.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/regimes.py",
+    "description": "Specialized classifier categorizing assets by volatility regime."
+  },
+  {
+    "path": "engine/reporting.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/reporting.py",
+    "description": "Specialized stats tracking and performance reporting subsystem."
+  },
+  {
+    "path": "engine/risk.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/risk.py",
+    "description": "Specialized risk management and trading eligibility gatekeeper."
+  },
+  {
+    "path": "engine/signal.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/signal.py",
+    "description": "Typed Signal and OrderRequest definitions for execution payload standardization."
   },
   {
     "path": "engine/simulation.py",
@@ -453,6 +493,11 @@
     "path": "tools/test_order_pnl_reconciliation.py",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_order_pnl_reconciliation.py",
     "description": "Reconciles math behind gross wins, transaction fees, and net profits."
+  },
+  {
+    "path": "tools/test_remediation.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_remediation.py",
+    "description": "Unit and regression tests validating the P0 correctness fixes."
   },
   {
     "path": "tools/test_scoring.py",
