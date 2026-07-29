@@ -238,6 +238,8 @@ P4-1 (read-only UI facade) and P4-2 (thin entry-point adapters) remain deferred 
 before — confirmed via search that nothing in this round's work touched them. P4-3
 (placeholder exchange roadmap) remains the repo owner's call.
 
+- **P4-4 — limit-style take-profit via the standalone plan-order endpoint**: Implements a limit-type execution mode for Take Profit by utilizing the standalone plan-order endpoint with an `executePrice`. This requires a separate risk review to assess the gap between entry fill and TP placement where the position is briefly unprotected on that leg.
+
 **Added context, non-blocking:** the repo owner is evaluating a lightweight, non-TUI,
 open-source editor/terminal (leading candidates under consideration: Zed, Lapce — both
 native/GPU-rendered rather than Electron-based) to eventually replace the current dev
@@ -370,3 +372,27 @@ These need the repo owner's input; proceed on the stated defaults, don't block o
   those groups without confirmation.
 - **P2-15's original open question** (roadmap vs. prune timeline for the 9 placeholder
   exchanges) — still the repo owner's product call, still not resolved by code-reading.
+
+---
+
+## 9. Round 2 Clarifications
+
+Preserved decision trail and guidelines established during human-directed clarifying session on 2026-07-29:
+
+### 9.1. R0-1: requirements.txt versions
+Pin exact versions (using `==`, not ranges) of `pydantic`, `pydantic-settings`, `pytest`, and `pytest-asyncio`. These versions must be determined empirically by installing standard packages in a clean environment, running all tests and the bounded smoke test successfully, and then recording the exact passing set.
+
+### 9.2. R0-2: TP/SL order execution and fee estimation
+Stop-loss (SL) must remain hardcoded-to-market by design for risk management to guarantee exit during fast, adverse market conditions. Therefore, both TP and SL execute at market today. The fee estimator must be updated to honestly reflect this (always use taker fees for both TP and SL), fixing the profitability-gate bug. `SL_ORDER_TYPE=limit` must not be wired to change execution. Limit-style take-profit is deferred to a future roadmap item **P4-4** to allow for a dedicated risk review regarding the gap between entry fill and TP placement.
+
+### 9.3. R0-4: backtest.py model wiring
+Refactor all loading paths in `backtest.py` to use direct constructor/thread injection of the shared learning model. Do not retain the back-reference (`self.simulator.engine.model`) anywhere. For confluence chaining, apply the same default (one model per backtest run, injected explicitly, never fished off a back-reference) and document any chaining nuances in `PROGRESS.md`.
+
+### 9.4. R1-2: env-loading for the 7 settings groups
+The 7 non-environment settings groups (Risk, Assets, Execution, Strategy, Scoring Weights, Logging, Simulator) must remain as plain `BaseModel` classes, with CLI overrides as their primary/only modification mechanism. This keeps deployment-level configuration separate from runtime execution tuning. A one-line comment must be added in `config/settings.py` stating this is intentional.
+
+### 9.5. R1-1: TradeReporter / PositionLedger signatures
+- `TradeReporter`'s `record_entry`/`record_exit` methods must accept plain data parameters (symbol, side, prices, qty, pnl, fees, strategy_id, timestamps, exit reason, etc.) without referencing cross-module objects (no `Engine` reference).
+- Database persistence must be decoupled from `TradeReporter` (keep the `db.save_trade` calls in the `Engine` or loop layers, while `TradeReporter` handles stats tracking only).
+- `PositionLedger`'s `is_pending` and `is_open` methods must use the same key format (`SYMBOL_side`) as `add_position`/`remove_position`.
+- Decouple `OrderRequest` from this item (order requests are outgoing intents; trade records are settled facts).

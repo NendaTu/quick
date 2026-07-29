@@ -50,6 +50,22 @@ class ConfigContext:
     across threads or concurrent backtest variants, preventing global variable pollution.
     """
     def __init__(self, **kwargs):
+        # Validate overrides against their respective Settings group schemas (R1-2)
+        if kwargs:
+            for group_name in ["env", "risk", "assets", "execution", "strategy", "scoring", "logging_ui", "simulator"]:
+                group_model = Settings.model_fields[group_name].annotation
+                group_fields = group_model.model_fields
+                group_overrides = {}
+                for k, v in kwargs.items():
+                    if k in group_fields:
+                        group_overrides[k] = v
+                if group_overrides:
+                    existing_group = getattr(_settings, group_name)
+                    merged_data = existing_group.model_dump()
+                    merged_data.update(group_overrides)
+                    # Trigger Pydantic validation
+                    group_model(**merged_data)
+
         # Automatically capture all package-level parameters as instance defaults
         g = globals()
         for k, v in g.items():

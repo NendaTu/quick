@@ -118,6 +118,7 @@ class SimulationEngine(BaseExchange, Simulator):
             # Paper mode usually needs a real-time feed if running in main.py
             symbols = list(set(self.discovered_assets + [config.BTC_SYMBOL]))
             ws_client = BitGetWSClient(symbols, self._ws_callback)
+            self.ws_client = ws_client
             asyncio.create_task(ws_client.run())
         else:
             asyncio.create_task(self._external_feed_loop(external_feed))
@@ -145,3 +146,10 @@ class SimulationEngine(BaseExchange, Simulator):
             except Exception as e:
                 log.error(f"SimulationEngine loop error: {e}")
                 await asyncio.sleep(1)
+
+    async def close(self):
+        """Unified async teardown interface (R2-2)."""
+        if hasattr(self, "ws_client") and self.ws_client:
+            self.ws_client.stop()
+        if self.client:
+            await self.client.close()

@@ -405,6 +405,51 @@
     "description": "General math, rolling window, and localized timezone converters."
   },
   {
+    "path": "tests/test_exchange_sync.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_exchange_sync.py",
+    "description": "Dedicated unit tests for the ExchangeSync state reconciliation subsystem."
+  },
+  {
+    "path": "tests/test_levels.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_levels.py",
+    "description": "Regression tests for horizontal support/resistance level clustering."
+  },
+  {
+    "path": "tests/test_ob_breaker.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_ob_breaker.py",
+    "description": "Tests stateless pattern-discovery for order blocks and breaker blocks."
+  },
+  {
+    "path": "tests/test_order_pnl_reconciliation.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_order_pnl_reconciliation.py",
+    "description": "Reconciles math behind gross wins, transaction fees, and net profits."
+  },
+  {
+    "path": "tests/test_remediation.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_remediation.py",
+    "description": "Unit and regression tests validating the P0 correctness fixes."
+  },
+  {
+    "path": "tests/test_scoring.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_scoring.py",
+    "description": "Validates that ScoringEngine score distributions align with weights and thresholds."
+  },
+  {
+    "path": "tests/test_smoke_run.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_smoke_run.py",
+    "description": "Codified paper-mode smoke test for the ScalperStrategy."
+  },
+  {
+    "path": "tests/test_symbols.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_symbols.py",
+    "description": "Verifies Bitget API asset discovery and caching features."
+  },
+  {
+    "path": "tests/test_vd_cvd.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_vd_cvd.py",
+    "description": "Checks Volume Delta and Cumulative Volume Delta numerical boundaries."
+  },
+  {
     "path": "tools/add_headers_auto.py",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/add_headers_auto.py",
     "description": "Automated 3-part header comment applier."
@@ -478,41 +523,6 @@
     "path": "tools/publisher.py",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/publisher.py",
     "description": "Console Publisher for uniform application outputs."
-  },
-  {
-    "path": "tools/test_levels.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_levels.py",
-    "description": "Regression tests for horizontal support/resistance level clustering."
-  },
-  {
-    "path": "tools/test_ob_breaker.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_ob_breaker.py",
-    "description": "Tests stateless pattern-discovery for order blocks and breaker blocks."
-  },
-  {
-    "path": "tools/test_order_pnl_reconciliation.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_order_pnl_reconciliation.py",
-    "description": "Reconciles math behind gross wins, transaction fees, and net profits."
-  },
-  {
-    "path": "tools/test_remediation.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_remediation.py",
-    "description": "Unit and regression tests validating the P0 correctness fixes."
-  },
-  {
-    "path": "tools/test_scoring.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_scoring.py",
-    "description": "Validates that ScoringEngine score distributions align with weights and thresholds."
-  },
-  {
-    "path": "tools/test_symbols.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_symbols.py",
-    "description": "Verifies Bitget API asset discovery and caching features."
-  },
-  {
-    "path": "tools/test_vd_cvd.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/test_vd_cvd.py",
-    "description": "Checks Volume Delta and Cumulative Volume Delta numerical boundaries."
   },
   {
     "path": "tools/trading_utils.py",

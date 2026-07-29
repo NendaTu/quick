@@ -274,8 +274,8 @@ class Engine:
             tp1_price = features.get("tp1_price")
             tp1_qty = features.get("tp1_qty")
 
-        if pos_key in self.ledger.open_positions:
-            p = self.ledger.open_positions[pos_key]
+        if self.ledger.is_open(pos_key):
+            p = self.ledger.get_position(pos_key)
             total_qty = p["qty"] + qty
             p["entry"] = (p["entry"] * p["qty"] + entry * qty) / total_qty
             p["qty"] = total_qty
@@ -285,7 +285,7 @@ class Engine:
             if tp1_price: p["tp1_price"] = tp1_price
             if tp1_qty: p["tp1_qty"] = tp1_qty
         else:
-            self.ledger.open_positions[pos_key] = {
+            self.ledger.add_position(pos_key, {
                 "side": side, "qty": qty, "entry": entry,
                 "orig_side": orig_side, "is_contr": is_contr,
                 "margin": margin,
@@ -295,9 +295,11 @@ class Engine:
                 "tp_price": tp_price,
                 "tp1_price": tp1_price,
                 "tp1_qty": tp1_qty
-            }
-        if pos_key in self.ledger.pending_entries:
-            self.ledger.pending_entries.remove(pos_key)
+            })
+        self.ledger.remove_pending(pos_key)
+
+        # Record entry symmetrically in TradeReporter (R1-1)
+        self.reporter.record_entry(symbol, side, qty, entry, margin, strategy_id)
 
         if hasattr(self.exchange, "db"):
             self.exchange.db.save_trade(strategy_id, symbol, side, entry_ts, entry, qty)
@@ -308,35 +310,19 @@ class Engine:
         if not is_partial and features:
             self.model.train_on_trade(symbol, features, round_trip_pnl)
 
-        if self.config.USE_VIRTUAL_BALANCE or self.mode == "paper":
-            self.reporter.equity += round_trip_pnl
-            self.equity = self.reporter.equity # Keep synced
-
-        self.reporter.cumulative_pnl += round_trip_pnl
-
-        if round_trip_pnl > 0:
-            self.reporter.gross_profit += round_trip_pnl
-        else:
-            self.reporter.gross_loss += abs(round_trip_pnl)
-
-        self.reporter.equity_history.append({
-            "ts": time.time(),
-            "equity": self.reporter.equity,
-            "pnl": round_trip_pnl,
-            "symbol": symbol
-        })
+        strategy_id = "model"
+        if self.ledger.is_open(pos_key):
+            strategy_id = self.ledger.get_position(pos_key).get("strategy_id", "model")
 
         if hasattr(self.exchange, "db"):
             entry_ts = 0
             entry_price = 0
             qty = 0
-            strategy_id = "model"
-            if pos_key in self.ledger.open_positions:
-                p = self.ledger.open_positions[pos_key]
+            if self.ledger.is_open(pos_key):
+                p = self.ledger.get_position(pos_key)
                 entry_ts = p["ts"]
                 entry_price = p["entry"]
                 qty = p["qty"]
-                strategy_id = p.get("strategy_id", "model")
 
             self.exchange.db.save_trade(
                 strategy_id, symbol, side, entry_ts, entry_price, qty,
@@ -344,73 +330,31 @@ class Engine:
                 pnl=round_trip_pnl, exit_type=exit_type
             )
 
-        if symbol not in self.reporter.asset_stats:
-            self.reporter.asset_stats[symbol] = {
-                "buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0,
-                "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "buy_pnl": 0.0, "sell_pnl": 0.0,
-                "total_margin": 0.0
-            }
+        # Delegate stats aggregation entirely to TradeReporter (R1-1)
+        use_virtual = self.config.USE_VIRTUAL_BALANCE or self.mode == "paper"
+        total_trade_pnl = self.reporter.record_exit(
+            symbol=symbol,
+            side=side,
+            round_trip_pnl=round_trip_pnl,
+            exit_type=exit_type,
+            is_be=is_be,
+            is_partial=is_partial,
+            margin=margin,
+            strategy_id=strategy_id,
+            use_virtual_balance_or_paper=use_virtual
+        )
 
-        self.reporter.asset_stats[symbol]["total_margin"] += margin
-        self.reporter.asset_stats[symbol]["pnl"] += round_trip_pnl
-        if side == "buy": self.reporter.asset_stats[symbol]["buy_pnl"] += round_trip_pnl
-        else: self.reporter.asset_stats[symbol]["sell_pnl"] += round_trip_pnl
-
-        strategy_id = "model"
-        if pos_key in self.ledger.open_positions:
-            strategy_id = self.ledger.open_positions[pos_key].get("strategy_id", "model")
-
-        if strategy_id not in self.reporter.strategy_stats:
-            self.reporter.strategy_stats[strategy_id] = {
-                "buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0,
-                "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "total_trades": 0
-            }
-
-        self.reporter.strategy_stats[strategy_id]["pnl"] += round_trip_pnl
-        self.reporter.pos_pnl[pos_key] = self.reporter.pos_pnl.get(pos_key, 0.0) + round_trip_pnl
+        if use_virtual:
+            self.equity = self.reporter.equity # Keep synced
 
         if is_partial:
             return
 
-        total_trade_pnl = self.reporter.pos_pnl.pop(pos_key, 0.0)
-        self.reporter.total_trades += 1
-        self.reporter.strategy_stats[strategy_id]["total_trades"] += 1
-
-        if pos_key in self.ledger.open_positions:
-            del self.ledger.open_positions[pos_key]
-
-        if pos_key in self.ledger.pending_entries:
-            self.ledger.pending_entries.remove(pos_key)
+        # Handle position state changes via formal PositionLedger interface
+        self.ledger.remove_position(pos_key)
+        self.ledger.remove_pending(pos_key)
 
         self.risk.last_exit_time[symbol] = self.get_current_time(symbol)
-
-        if total_trade_pnl > 0:
-            self.reporter.winning_trades += 1
-            if exit_type == "tp":
-                self.reporter.tp_wins += 1
-                self.reporter.asset_stats[symbol]["tp_wins"] += 1
-                self.reporter.strategy_stats[strategy_id]["tp_wins"] += 1
-            elif is_be:
-                self.reporter.be_wins += 1
-                self.reporter.asset_stats[symbol]["be_wins"] += 1
-                self.reporter.strategy_stats[strategy_id]["be_wins"] += 1
-
-            if side == "buy":
-                self.reporter.asset_stats[symbol]["buy_wins"] += 1
-                self.reporter.strategy_stats[strategy_id]["buy_wins"] += 1
-            else:
-                self.reporter.asset_stats[symbol]["sell_wins"] += 1
-                self.reporter.strategy_stats[strategy_id]["sell_wins"] += 1
-        else:
-            if exit_type in ["tp", "ttl"]:
-                log.warning(f"GROSS WIN / NET LOSS on {symbol} [{exit_type.upper()}]: PnL={total_trade_pnl:.4f} (fees consumed profit)")
-            self.reporter.losing_trades += 1
-            if side == "buy":
-                self.reporter.asset_stats[symbol]["buy_losses"] += 1
-                self.reporter.strategy_stats[strategy_id]["buy_losses"] += 1
-            else:
-                self.reporter.asset_stats[symbol]["sell_losses"] += 1
-                self.reporter.strategy_stats[strategy_id]["sell_losses"] += 1
 
     def _print_final_stats(self):
         elapsed = time.time() - self.start_time if self.start_time else 0
@@ -424,8 +368,8 @@ class Engine:
             symbol=symbol,
             side=side,
             equity=self.reporter.equity,
-            open_positions=self.ledger.open_positions,
-            pending_entries=self.ledger.pending_entries,
+            open_positions=self.ledger.get_all_positions(),
+            pending_entries=set(self.ledger.get_pending_keys()),
             leverage_limits=self.leverage_limits,
             exchange=self.exchange,
             books=self.books,
@@ -485,7 +429,7 @@ class Engine:
         used_margin = getattr(self.exchange, "used_margin", 0)
         log.info(f"SUMMARY | Equity: {self.equity:.2f} | ROI: {roi:.1f}% | "
                  f"Trades: {self.total_trades} | Win%: {win_rate:.1f} (TP: {tp_win_pct:.1f}%) | "
-                 f"Open: {len(self.open_positions)} | Margin: {used_margin:.2f}")
+                 f"Open: {self.ledger.position_count} | Margin: {used_margin:.2f}")
 
     async def _sync_exchange_state(self):
         await self.sync.sync_exchange_state()
