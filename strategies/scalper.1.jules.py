@@ -10,15 +10,20 @@ from models import LearningModel
 import config
 
 class ScalperStrategy(JBaseStrategy):
-    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
+    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None, model=None):
         super().__init__(
             name="scalper",
             version="1",
             author="jules",
+            simulator=simulator,
+            model=model,
             config_overrides=config_overrides
         )
-        # We'll pass the simulator to the LearningModel
-        self.model = LearningModel(simulator)
+        # P0-2: Use the injected LearningModel to avoid the online-learning split-brain
+        if model is not None:
+            self.model = model
+        else:
+            self.model = LearningModel(simulator)
 
     def get_entry_signal(self, market_data: Dict) -> Optional[Dict]:
         """

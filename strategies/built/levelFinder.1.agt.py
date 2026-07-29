@@ -17,14 +17,15 @@ from tools.trading_utils import (
 import config
 
 class LevelFinderStrategy(JBaseStrategy):
-    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None):
+    def __init__(self, config_overrides: Optional[Dict] = None, simulator=None, model=None):
         super().__init__(
             name="levelFinder",
             version="1",
             author="agt",
+            simulator=simulator,
+            model=model,
             config_overrides=config_overrides
         )
-        self.simulator = simulator
 
         self.params = {
             "timeframes": ["1m", "3m", "5m", "15m"],

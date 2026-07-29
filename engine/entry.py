@@ -12,22 +12,10 @@ from config import MODE, BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, B
 log = logging.getLogger("engine.router")
 
 class SignalRouter:
-    def __init__(self, mode: str = MODE, exchange: Optional[BaseExchange] = None):
+    def __init__(self, mode: str, exchange: BaseExchange):
+        # P1-5: Require pre-constructed exchange, removing dead/duplicate _init_exchange selection path
         self.mode = mode.lower().strip(' "').strip("'")
         self.exchange = exchange
-        if not self.exchange:
-            self._init_exchange()
-
-    def _init_exchange(self):
-        if self.mode == "paper":
-            from engine.simulation import SimulationEngine
-            self.exchange = SimulationEngine()
-        elif self.mode == "demo":
-            self.exchange = BitgetExchange(BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO, is_demo=True)
-        elif self.mode == "live":
-            self.exchange = BitgetExchange(BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE, is_demo=False)
-        else:
-            raise ValueError(f"Unknown mode: {self.mode}")
 
     async def route_signal(self, signal: Dict[str, Any]):
         """
@@ -64,4 +52,13 @@ class SignalRouter:
             kwargs = signal.copy()
             for key in ["symbol", "side", "qty", "price", "entry_price"]:
                 kwargs.pop(key, None)
-            return await self.exchange.place_order(symbol, side, "limit", qty, price, **kwargs)
+
+            # P0-5: Dynamically read ENTRY_ORDER_TYPE from config context
+            order_type = "limit"
+            if self.exchange and hasattr(self.exchange, "config"):
+                order_type = getattr(self.exchange.config, "ENTRY_ORDER_TYPE", "limit")
+            else:
+                import config as global_config
+                order_type = getattr(global_config, "ENTRY_ORDER_TYPE", "limit")
+
+            return await self.exchange.place_order(symbol, side, order_type, qty, price, **kwargs)

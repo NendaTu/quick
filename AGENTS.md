@@ -34,6 +34,11 @@ append-only across rounds: mark items done, don't delete them, and add newly-dis
 items with the same ID scheme (see §2 numbering) so a future audit round can pick up the
 thread.
 
+> **Round 1 update (2026-07-28):** initial clarifying questions on several P0–P2 items
+> have been answered in §8, and the specific bullets below have been updated in place to
+> reflect those decisions. Where §8 and an earlier section could be read as disagreeing,
+> §8 is authoritative — it's this document's latest revision, not a separate opinion.
+
 ---
 
 ## 1. Non-Negotiable Operating Principles
@@ -147,12 +152,16 @@ only. So within a single session: tick-level learning on `Engine.model` never re
 strategy's decision-making model at all, and trade-close learning only reaches it via a DB
 round-trip that the already-running strategy instance never re-reads.
 
-**Fix:** There should be exactly one `LearningModel` instance per running session, shared
-by whatever trains it and whatever predicts with it. Either have the strategy use
-`self.simulator.engine.model` (inject the Engine's instance into the strategy) or have
-`Engine` route entry-signal requests for model-driven strategies through its own model
-instance. Decide deliberately, document the choice inline, and add a test that trains an
-instance and confirms predictions from *that same* instance reflect the update.
+**Fix — decided (Round 1):** Exactly one `LearningModel` instance per running session,
+created by `Engine` and passed into strategy construction via explicit constructor
+injection (`obj(simulator=simulator, model=engine.model, config_overrides=overrides)`),
+mirroring how P0-7 has the base class own `self.simulator`. Rejected: routing through
+`self.simulator.engine.model` — that requires the exchange/simulator layer to hold a
+back-reference to the `Engine` that owns it, a layering inversion that creates a circular
+object graph (`Engine → exchange`, `exchange → Engine`) and works against every other P1
+goal. Don't build support for a strategy-private, unshared model speculatively — there's no
+concrete use case for it in this codebase today; add it later as an explicit, clearly-named
+opt-in only if a genuine multi-model research scenario shows up.
 
 **Verify:** Unit test that calls `train_on_trade` with a strongly-signed synthetic result on
 the model instance a strategy actually uses for `predict()`, then confirms the next
@@ -177,14 +186,23 @@ simply doesn't, given the `signal is None` bypass.
 **Status:** This needs a concrete trace/repro, not just static reading, before you know
 whether it's live. Treat it as P0 until disproven, given the financial stakes.
 
-**Fix (if confirmed):** Reserve `pos_key` atomically the moment the *first* signal for it
-is accepted in a given loop pass, and skip or explicitly conflict-resolve any subsequent
-signal for the same `pos_key` in the same pass.
+**Fix — decided (Round 1):** Reserve `pos_key` atomically the moment the *first* signal for
+it is accepted in a given loop pass; skip any subsequent signal for the same `pos_key` in
+the same pass (first-accepted-wins). Treat this as a simple, deterministic starting policy,
+not a final one — log every skip (symbol, both competing strategy IDs, timestamp) so
+there's real data on how often collisions actually happen. If they turn out to be common,
+that data justifies upgrading to score-based arbitration (compare `ScoringEngine` composite
+scores instead of relying on list order) as a well-motivated follow-up rather than
+speculative complexity now. Before deleting the second, redundant `_asset_is_tradable` call:
+check `git blame` for why it was added — if no distinct purpose surfaces in history, remove
+it once the atomic reservation sits immediately after the first check, since that
+reservation is what the second call appears to have been informally (and unsuccessfully)
+trying to approximate.
 
 **Verify:** Regression test simulating two concurrent strategies both emitting a signal for
 the same symbol+side within one `_trading_loop` iteration; assert exactly one order is
-routed. Also add a test asserting the double `_asset_is_tradable` call is either removed as
-redundant or given a documented, distinct purpose.
+routed and one skip is logged. Also add a test asserting the double `_asset_is_tradable`
+call is either removed as redundant or given a documented, distinct purpose.
 
 ---
 
@@ -199,11 +217,18 @@ every mode, including paper/backtest). There is no cap expressed in terms of agg
 risk-at-once (e.g. sum of `qty * entry / leverage` across open positions, or sum of
 per-trade risk fractions).
 
-**Fix:** Add an explicit aggregate-exposure gate (total open margin as a fraction of
-equity, or sum of per-position risk fractions) as a first-class, config-driven check in the
-tradability gate, independent of the raw position-count cap. Reconsider the default for
-`MAX_CONCURRENT_POSITIONS` itself — flag any change to it explicitly per Principle §1.3,
-since it changes trading behavior.
+**Fix — decided (Round 1):** Add an explicit aggregate-exposure gate (total open margin as
+a fraction of equity) as a first-class, config-driven check in the tradability gate,
+independent of the raw position-count cap. **Default the cap to 10% of equity** —
+systematic strategies commonly run aggregate risk-at-once somewhere in the 5–20% range,
+tightening toward the low end when positions are likely correlated, which a 250-asset
+crypto universe often is during broad moves regardless of what a lagged pairwise
+correlation table says. **Default `MAX_CONCURRENT_POSITIONS` to 15** — comfortably above the
+~10 full-risk positions the 10%/1%-per-trade math implies, leaving room for
+smaller-than-standard entries, and nowhere near the effectively-unlimited 1000 it is today.
+Both are starting engineering defaults, not fixed judgments — they're config values the
+human should retune once real paper-trading data shows how often the aggregate cap binds.
+Flag this change explicitly per Principle §1.3, since it changes trading behavior.
 
 **Verify:** Test that constructs enough uncorrelated synthetic signals to exceed a
 configured aggregate-risk limit and asserts later ones are rejected once the limit is hit,
@@ -297,8 +322,15 @@ instance attributes, manually excluding known non-config names (`os`, `datetime`
 `config.py` that isn't itself a `type` will silently leak into every `ConfigContext`
 instance as a spurious attribute unless someone remembers to extend that exclusion list.
 Replace both the flat namespace and the reflection-based `ConfigContext` with a typed,
-validated settings model (e.g. `pydantic-settings`, or a set of `@dataclass(frozen=True)`
-groups) split along the concerns above. See §3.
+validated settings model. **Decided (Round 1): `pydantic-settings`, not plain
+dataclasses** — the diagnosed problems (P2-4/P2-5: keys silently missing or drifted, no
+validation, hand-rolled env-loading via `get_env_stripped`) are validation and env-loading
+problems specifically, and dataclasses alone would just rebuild the same manual plumbing
+under a different name. Pydantic-settings gets typed env-loading, constraint validation
+(e.g. weights bounded to `[0, 1]`), and fail-fast startup errors for free. Structure it as
+nested settings groups matching the risk/execution/scoring/logging/simulator split above,
+composed under one top-level `Settings` object. Check `requirements.txt` for whether
+pydantic is already a dependency before treating this as fully settled. See §3.
 
 #### P1-3 — Implicit `hasattr`/`getattr` duck-typing substitutes for real interfaces
 `Engine` alone defensively probes for `asset_correlations`, `recalculate_correlations`,
@@ -342,7 +374,7 @@ together.
 |----|-------|-------|--------|
 | P2-1 | `config.py` (`TF_SECONDS`), `strategies/base_strategy.py::get_readiness_eta`, `compare.py::DataCoordinator.warm_up`, `engine/core.py`'s TTL parsing | The timeframe→seconds mapping is hand-duplicated in at least four places with three different literal spellings of the same dict. | Consolidate to one import of `config.TF_SECONDS` everywhere; delete the local copies. |
 | P2-2 | `engine/core.py::Engine.start()` vs `compare.py::DataCoordinator.warm_up()` | Near-identical asset-discovery/filtering logic (sort by volume, filter stablecoins, filter `ASSET_OMITTED`, take top N) is duplicated between the two files. | Extract a single `discover_assets(tickers, omitted, count)` function both call. |
-| P2-3 | `ta/scoring.py::ScoringEngine.evaluate` | `raw_scores["asset_conf"]` is a direct copy of `raw_scores["trend_15m"]`; `WEIGHT_ASSET_CONF` is permanently `0.0` specifically to avoid double-counting. The dimension is dead but still allocated, computed, and iterated every evaluation. | Remove the dimension entirely, or give it a genuinely distinct calculation if that was the original intent — confirm which with the human before deciding. |
+| P2-3 | `ta/scoring.py::ScoringEngine.evaluate` | `raw_scores["asset_conf"]` is a direct copy of `raw_scores["trend_15m"]`; `WEIGHT_ASSET_CONF` is permanently `0.0` specifically to avoid double-counting. The dimension is dead but still allocated, computed, and iterated every evaluation. | **Decided (Round 1), default absent further human input: remove it now.** Original intent is genuinely the human's call and isn't recoverable from the code alone; a dead, zero-weighted, exact-duplicate dimension costs real cycles every evaluation for no effect, and a distinct calculation is cheap to reintroduce later if intent surfaces. Document the removal clearly in `PROGRESS.md` so it's easy to revisit. |
 | P2-4 | `ta/scoring.py` (`MIN_VOLATILITY`, `VOL_PCT_MIN`), `database.py` (tick/candle retention periods) | Config keys are referenced via `getattr(..., default)` in code but are absent from `config.py` entirely — real tunables hidden as magic defaults in unrelated files instead of being centralized where `config.py`'s own docstring says they should live. | Audit every `getattr(config_context, KEY, default)` / hardcoded-default call across the repo; promote genuinely-tunable ones into `config.py` (or its P1-2 successor). |
 | P2-5 | `ta/scoring.py`'s `getattr(..., fallback)` calls | Several fallback defaults don't match `config.py`'s actual configured values (e.g. `ENTRY_SCORE_THRESHOLD` fallback `30.0` vs. configured `15.0`; `BY_DEFAULT_REPORT_ONLY` fallback `True` vs. configured `False`). Currently harmless only because `ConfigContext` always carries the real value — but misleading, and a landmine if that assumption ever changes. | Remove the stale fallback literals or make them match; add a test asserting no drift. |
 | P2-6 | `main.py`, `strategies/base_strategy.py`, `compare.py` (multiple sites) | Systemic bare/broad `except:` clauses swallow everything, including `KeyboardInterrupt`/`SystemExit`. | Narrow to specific exception types; at minimum `except Exception:` with logging. |
@@ -350,11 +382,11 @@ together.
 | P2-8 | `main.py` | `log = logging.getLogger("scalper")` is hardcoded regardless of which strategy or mode is actually running. | Derive the logger name from the loaded strategy/mode. |
 | P2-9 | `main.py::load_strategy` fuzzy-match fallback | Only scans the top level of `strategies/` via `os.listdir` (non-recursive), so partial-name resolution silently can't find strategies under `strategies/built/`, `strategies/sweeps/killzone/`, or `strategies/sweeps/range/`. | Make the fuzzy-match fallback recursive (`os.walk`), matching the directory-based loader's existing behavior. |
 | P2-10 | `engine/entry.py::SignalRouter.route_signal` | Stale scaffolding comment ("In a real implementation, this would call...") sits above code that *is* the real implementation. | Delete/update the comment; audit for similar leftover scaffolding language elsewhere. |
-| P2-11 | `database.py::Database.__init__` | `market_data.db` path is hardcoded relative to `database.py`'s own file location and identical across every mode and script — `main.py` (paper/demo/live), `backtest.py`, and `compare.py`'s `DataCoordinator` all share one physical file, differentiated only by `session_id`/`strategy_id` foreign keys. | Make the DB path mode-aware or explicitly config-driven (e.g. `config.DB_PATH`), so live history can't accidentally commingle with backtest/paper experimentation, and concurrent processes contend less. |
+| P2-11 | `database.py::Database.__init__` | `market_data.db` path is hardcoded relative to `database.py`'s own file location and identical across every mode and script — `main.py` (paper/demo/live), `backtest.py`, and `compare.py`'s `DataCoordinator` all share one physical file, differentiated only by `session_id`/`strategy_id` foreign keys. | **Decided (Round 1):** yes, mode-aware — `config.DB_PATH` defaulting to `data/market_data_{mode}.db`, so live history can't accidentally commingle with backtest/paper experimentation. For `compare.py::DataCoordinator`'s warm-up cache specifically, which is already transient by design (created and torn down within one method call), consider an in-memory SQLite connection instead of a file at all — that sidesteps multi-process file-lock contention for that path entirely rather than just relocating it. |
 | P2-12 | `database.py` | Mixed write paths: `save_tick`/`save_candle`/`save_log`/`save_signal`/`save_trade`/`mark_exhausted` go through the queued, batched writer thread; `save_weight`/`save_strategy_state`/`save_discovered_assets` write directly and synchronously via the lazily-created `connection` property. No `check_same_thread=False` anywhere, so there's an implicit, unenforced "only touch `.connection` from one thread" assumption. | Document the threading contract explicitly, or unify all writes through the queue/worker pattern already used for the high-volume ones (it's well-built — see the note under P3). |
 | P2-13 | `compare.py::parse_args` | Mixes `argparse.parse_known_args()` with a separate raw `sys.argv` scan for `"=" in arg` that doesn't exclude args argparse already claimed — an equals-style flag like `--strategy-a=foo` could be double-counted as a config override with key `"--strategy-a"`. | Scan only `remaining` (argparse's leftover args), not the full `sys.argv`. |
 | P2-14 | `models.py::LearningModel.predict` | Calls `ScoringEngine.evaluate()` twice per prediction (once `side="buy"`, once `side="sell"`), fully recomputing every side-independent raw score both times. | Compute side-independent scores once, apply the sign/`filter_multiplier` flip for each side afterward. Minor cost today; scales with asset count and tick rate. |
-| P2-15 | `engine/exchanges/` | 9 of 10 exchange drivers (bingx, bitunix, blofin, coinex, dydx, hyperliquid, kucoin, margex, mexc) are placeholders against one production driver (bitget). | Confirm with the human whether these are near-term roadmap or speculative scaffolding. If the latter, consider relocating them out of the main package (e.g. `roadmap/exchanges/` or behind a clear stub marker) so `BaseExchange` conformance isn't silently assumed for code that was never finished. |
+| P2-15 | `engine/exchanges/` | 9 of 10 exchange drivers (bingx, bitunix, blofin, coinex, dydx, hyperliquid, kucoin, margex, mexc) are placeholders against one production driver (bitget). | Roadmap-vs-prune is genuinely the human's product call, not the agent's — confirm before acting unilaterally. **Default (Round 1) absent further input:** don't physically relocate the files — that risks breaking anything that discovers exchange drivers by directory listing, the same way `main.py` discovers strategies. Instead mark stub status unambiguously using tooling this repo already has for exactly this (`tools/add_headers_auto.py` / `tools/verify_headers.py`) with a `STATUS: placeholder, not implemented` header, so it's machine-checkable rather than something a future reader has to infer from an empty method body. |
 
 ---
 
@@ -486,7 +518,7 @@ For each iteration:
   e. Run: the new test, the full existing suite from Phase 0, and — for anything touching
      the trading/scoring/risk path — the paper-mode smoke run.
   f. Self-review the diff against §1: scope creep? an unlogged behavior change? new
-     `hasattr` duck-typing introduced instead of removed? a new bare `except`? a newly
+     `hasattr` duck-typing introduced instead of removed? a new bare `except? a newly
      duplicated constant?
   g. Append an entry to `PROGRESS.md`: item ID, what changed, why, how it was verified, and
      any behavior change explicitly called out per Principle §1.3.
@@ -564,3 +596,49 @@ at, what's left, and any P0/P1 items that turned out to need a human decision ra
 an autonomous one (e.g. P2-3's "was `asset_conf` meant to be distinct?", P2-15's placeholder
 exchange fate, or anything from P0-3 if the duplicate-entry race is confirmed real and the
 fix has trading-behavior implications worth a second opinion).
+
+---
+
+## 8. Round 1 Clarifications — Answers to the Coding Agent's Questions (2026-07-28)
+
+Before starting implementation, the coding agent (self-identified as "Jules") reviewed this
+document and raised clarifying questions on several P0–P2 items rather than guessing —
+exactly the behavior Principle §1.6 asks for. The decisions below are now baked directly
+into the relevant items in §2; this section is the dated record of that exchange, kept for
+the audit trail per the "living, append-only" instruction in §0.
+
+**Confirmed as originally proposed, no changes needed:**
+- **P0-1** (config-override ordering) — confirmed, with one addition now reflected inline:
+  `JBaseStrategy.get_config()` must also stop reading the bare `config` module, and the
+  override-application logic must be the same code path for every entry point, not
+  `compare.py`'s independent copy.
+- **P0-5** (order-type wiring) — confirmed; extended to cover `TP_ORDER_TYPE`/
+  `SL_ORDER_TYPE` alongside `ENTRY_ORDER_TYPE` as one change, not entry-only.
+- **P0-6** (state-type parity) — confirmed as proposed: store real objects, not
+  stringified ones, in the in-memory fallback.
+- **P0-7** (simulator constructor contract) — confirmed as proposed; add a
+  post-construction assertion in `load_strategy` as defense-in-depth.
+
+**Decided — full reasoning now inline at the item itself in §2:**
+- **P0-2** (model split-brain) — explicit constructor injection of one shared
+  `LearningModel`; rejected the `self.simulator.engine.model` back-reference path as a
+  layering inversion.
+- **P0-3** (duplicate-entry race) — first-accepted-wins with skip logging as the starting
+  policy; check `git blame` on the redundant second tradability check before removing it.
+- **P0-4** (aggregate exposure cap) — default 10% of equity aggregate cap,
+  `MAX_CONCURRENT_POSITIONS` default dropped to 15. These are starting engineering
+  defaults sized for a solo-operator system, not a personalized risk-tolerance
+  recommendation — retune against real paper-trading data.
+- **P1-2** (settings model) — `pydantic-settings` over plain dataclasses.
+- **P2-3** (`asset_conf`) — default to removing it absent further input; original intent
+  isn't recoverable from the code and is genuinely a call only the repo owner can make.
+- **P2-11** (DB path isolation) — mode-aware `config.DB_PATH`; in-memory SQLite for
+  `compare.py`'s transient warm-up cache specifically.
+- **P2-15** (placeholder exchanges) — mark via existing header tooling rather than
+  relocate; roadmap-vs-prune itself remains the repo owner's product call.
+
+**Genuinely open — flagged, not decided, by design:** P2-3's original intent for
+`asset_conf` and P2-15's roadmap timeline for the placeholder exchanges are product/history
+questions no amount of code-reading resolves. Proceed on the stated defaults; don't block
+the loop waiting on them, but don't treat the defaults as final either — they're logged
+here and in `PROGRESS.md` precisely so they're easy to revisit.

@@ -13,8 +13,8 @@ class JBaseStrategy(BaseStrategy):
     Enhanced Base Strategy for the Jules platform.
     Adds support for config overrides and shared helper methods.
     """
-    def __init__(self, name: str, version: str, author: str, config_overrides: Optional[Dict] = None):
-        super().__init__(config_overrides)
+    def __init__(self, name: str, version: str, author: str, simulator=None, model=None, config_overrides: Optional[Dict] = None):
+        super().__init__(simulator=simulator, model=model, config_overrides=config_overrides)
         self.name = name
         self.version = version
         self.author = author
@@ -24,11 +24,6 @@ class JBaseStrategy(BaseStrategy):
         self._mem_state = {} # In-memory fallback
         self.milestones = {} # Event tracking
         self._last_milestone_ts = {} # Prevent double-counting in the same bar
-
-        # Apply config overrides
-        for key, value in self.config_overrides.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
 
     def log_strategy_info(self):
         print(f"Strategy: {self.name} v{self.version} by {self.author}")
@@ -41,6 +36,10 @@ class JBaseStrategy(BaseStrategy):
         """
         if not hasattr(self, "required_history"):
             return True # Legacy / Simple strategies are always ready
+
+        # P0-7: Raise immediate error if warmup history is required but no simulator is wired.
+        if self.simulator is None:
+            raise RuntimeError(f"Strategy {self.name} has required_history but self.simulator is None (not wired).")
 
         for tf, count in self.required_history.items():
             h = self._get_ohlcv(symbol, tf)
@@ -77,13 +76,18 @@ class JBaseStrategy(BaseStrategy):
         return []
 
     def get_config(self, key: str, default: Any = None) -> Any:
+        # P0-1: Prioritize overrides, then injected ConfigContext, and fall back to the global config module
+        if self.config_overrides and key in self.config_overrides:
+            return self.config_overrides[key]
+        if self.simulator and hasattr(self.simulator, "config"):
+            return getattr(self.simulator.config, key, default)
         return getattr(config, key, default)
 
     def save_state(self, key: str, value: Any, simulator=None):
         if simulator and hasattr(simulator, "db") and simulator.db:
             simulator.db.save_strategy_state(self.strategy_id, key, value)
         else:
-            self._mem_state[key] = str(value)
+            self._mem_state[key] = value
 
     def get_state(self, key: str, simulator=None) -> Optional[str]:
         if simulator and hasattr(simulator, "db") and simulator.db:
@@ -97,7 +101,17 @@ class JBaseStrategy(BaseStrategy):
                     except:
                         return val
             return val
-        return self._mem_state.get(key)
+
+        val = self._mem_state.get(key)
+        if val is not None:
+            # P0-6: Ensure same deserialization attempt for in-memory if a string was stored
+            if isinstance(val, str) and (val.startswith('{') or val.startswith('[')):
+                try:
+                    import ast
+                    return ast.literal_eval(val)
+                except:
+                    return val
+        return val
 
     def record_milestone(self, key: str, timestamp: float = 0, timeframe: str = ""):
         """Records a strategy milestone with its timestamp and timeframe."""
