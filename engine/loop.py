@@ -133,7 +133,6 @@ class TradingLoop:
         await trading_task
 
         log.info("All positions finalized. Bot stopped.")
-        self.engine._print_final_stats()
 
     async def _equity_monitor(self):
         while not self.engine.stop_event.is_set():
@@ -206,7 +205,7 @@ class TradingLoop:
                 engine_indicators_bypassed = True
                 log.info("Engine indicators bypassed by all active strategies.")
 
-        while not self.engine.stop_event.is_set() or self.ledger.open_positions or self.ledger.pending_entries:
+        while not self.engine.stop_event.is_set() or self.ledger.position_count > 0 or self.ledger.pending_count > 0:
             try:
                 all_features = {}
                 now = time.time()
@@ -236,7 +235,7 @@ class TradingLoop:
 
                         self._last_mid[sym] = current_mid
 
-                        has_pos = f"{sym}_buy" in self.ledger.open_positions or f"{sym}_sell" in self.ledger.open_positions
+                        has_pos = self.ledger.is_open(f"{sym}_buy") or self.ledger.is_open(f"{sym}_sell")
                         last_act = self._last_activity.get(sym, 0)
 
                         if sym == self.config.BTC_SYMBOL or has_pos or (now - last_act < 10.0):
@@ -244,8 +243,8 @@ class TradingLoop:
                                 continue
 
                             if sym == self.config.BTC_SYMBOL or self.ledger.position_count < self.config.MAX_CONCURRENT_POSITIONS:
-                                 is_full = (f"{sym}_buy" in self.ledger.open_positions or f"{sym}_buy" in self.ledger.pending_entries) and \
-                                           (f"{sym}_sell" in self.ledger.open_positions or f"{sym}_sell" in self.ledger.pending_entries)
+                                 is_full = (self.ledger.is_open(f"{sym}_buy") or self.ledger.is_pending(f"{sym}_buy")) and \
+                                           (self.ledger.is_open(f"{sym}_sell") or self.ledger.is_pending(f"{sym}_sell"))
                                  if is_full:
                                      continue
 
@@ -260,8 +259,8 @@ class TradingLoop:
 
                 # 2.5 Pluggable Strategy Management
                 if hasattr(self.engine, "strategy") and self.engine.strategy:
-                    for pos_key in list(self.ledger.open_positions.keys()):
-                        pos = self.ledger.open_positions[pos_key]
+                    for pos_key in self.ledger.get_open_keys():
+                        pos = self.ledger.get_position(pos_key)
                         sym = pos_key.split("_")[0]
                         feat = all_features.get(sym)
                         market_data = {"symbol": sym, "book": self.engine.books.get(sym), "equity": self.reporter.equity, "features": feat}
@@ -299,8 +298,8 @@ class TradingLoop:
                         log.info(f"Dynamic TTL initialized: {ttl_limit}s ({getattr(self.config, 'TTL_CANDLE_MULTIPLIER', 15)} candles of {self.config.ACTIVE_TIMEFRAME})")
                         self._ttl_logged = self.config.ACTIVE_TIMEFRAME
 
-                    for pos_key in list(self.ledger.open_positions.keys()):
-                        pos = self.ledger.open_positions[pos_key]
+                    for pos_key in self.ledger.get_open_keys():
+                        pos = self.ledger.get_position(pos_key)
                         if time.time() - pos.get("ts", 0) > ttl_limit:
                             sym = pos_key.split("_")[0]
                             side = pos["side"]
@@ -327,7 +326,7 @@ class TradingLoop:
                         book = self.engine.books.get(sym)
                         if not book or book.best_bid <= 0: continue
 
-                        if f"{sym}_buy" in self.ledger.open_positions and f"{sym}_sell" in self.ledger.open_positions:
+                        if self.ledger.is_open(f"{sym}_buy") and self.ledger.is_open(f"{sym}_sell"):
                             continue
 
                         feat = all_features.get(sym)
@@ -365,10 +364,10 @@ class TradingLoop:
                             pos_key = f"{sym}_{side}"
 
                             # P0-3: Duplicate signal block/logging
-                            if pos_key in self.ledger.open_positions or pos_key in self.ledger.pending_entries:
+                            if self.ledger.is_open(pos_key) or self.ledger.is_pending(pos_key):
                                 comp_strat = "unknown"
-                                if pos_key in self.ledger.open_positions:
-                                    comp_strat = self.ledger.open_positions[pos_key].get("strategy_id", "unknown")
+                                if self.ledger.is_open(pos_key):
+                                    comp_strat = self.ledger.get_position(pos_key).get("strategy_id", "unknown")
                                 else:
                                     comp_strat = "pending"
                                 log.warning(f"DUPLICATE BLOCK | Skipped signal for {sym} {side.upper()} from strategy '{strategy_id}' because a position is already active/pending from strategy '{comp_strat}'.")
@@ -404,8 +403,8 @@ class TradingLoop:
                                 symbol=sym,
                                 side=side,
                                 equity=self.reporter.equity,
-                                open_positions=self.ledger.open_positions,
-                                pending_entries=self.ledger.pending_entries,
+                                open_positions=self.ledger.get_all_positions(),
+                                pending_entries=set(self.ledger.get_pending_keys()),
                                 leverage_limits=self.engine.leverage_limits,
                                 exchange=self.exchange,
                                 books=self.engine.books,
@@ -474,8 +473,8 @@ class TradingLoop:
                                 self.engine._write_metrics_log(sym, side, strategy_id, scoring_result)
 
                             if resp.get("code") != "00000":
-                                if pos_key in self.ledger.open_positions: del self.ledger.open_positions[pos_key]
-                                if pos_key in self.ledger.pending_entries: self.ledger.pending_entries.remove(pos_key)
+                                self.ledger.remove_position(pos_key)
+                                self.ledger.remove_pending(pos_key)
 
                 await asyncio.sleep(0.1)
             except Exception as e:

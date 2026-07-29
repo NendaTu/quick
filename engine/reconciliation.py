@@ -39,22 +39,22 @@ class ExchangeSync:
                 if qty > 0:
                     pos_key = f"{sym}_{side}"
                     current_pos_keys.add(pos_key)
-                    if pos_key not in self.ledger.open_positions:
-                        self.ledger.open_positions[pos_key] = {
+                    if not self.ledger.is_open(pos_key):
+                        self.ledger.add_position(pos_key, {
                             "side": side, "qty": qty, "entry": entry,
                             "orig_side": side, "is_contr": False,
                             "margin": (qty * entry) / float(p.get('leverage', 20)),
                             "ts": time.time(),
                             "strategy_id": "legacy_sync"
-                        }
+                        })
                         log.info(f"Synced Position: {pos_key} | Qty: {qty} @ {entry}")
                     else:
-                        self.ledger.open_positions[pos_key].update({"qty": qty, "entry": entry})
+                        self.ledger.get_position(pos_key).update({"qty": qty, "entry": entry})
 
             # Check for positions that disappeared from exchange (meaning they exited)
-            for pos_key in list(self.ledger.open_positions.keys()):
+            for pos_key in self.ledger.get_open_keys():
                 if pos_key not in current_pos_keys:
-                    p = self.ledger.open_positions[pos_key]
+                    p = self.ledger.get_position(pos_key)
                     if p.get("strategy_id") != "legacy_sync":
                         log.info(f"Position {pos_key} gone from exchange. Reporting exit...")
 
@@ -136,11 +136,10 @@ class ExchangeSync:
                         self.report_exit_func(symbol, side, pnl, exit_type=exit_type)
                     else:
                         log.info(f"Legacy synced position {pos_key} cleared.")
-                        if pos_key in self.ledger.open_positions:
-                            del self.ledger.open_positions[pos_key]
+                        self.ledger.remove_position(pos_key)
 
             # Reconcile TP1 trigger orders
-            for pos_key, pos_details in list(self.ledger.open_positions.items()):
+            for pos_key, pos_details in self.ledger.get_all_positions().items():
                 sym = pos_key.split("_")[0]
                 side = pos_details["side"]
                 qty = pos_details["qty"]
@@ -181,13 +180,13 @@ class ExchangeSync:
                 side = o['side'].lower()
                 pos_key = f"{sym}_{side}"
                 current_order_keys.add(pos_key)
-                if pos_key not in self.ledger.pending_entries:
-                    self.ledger.pending_entries.add(pos_key)
+                if not self.ledger.is_pending(pos_key):
+                    self.ledger.add_pending(pos_key)
                     log.info(f"Synced Pending Order: {pos_key} | OrderId: {o.get('orderId')}")
 
-            for pk in list(self.ledger.pending_entries):
+            for pk in self.ledger.get_pending_keys():
                 if pk not in current_order_keys and pk not in current_pos_keys:
-                    self.ledger.pending_entries.remove(pk)
+                    self.ledger.remove_pending(pk)
                     log.info(f"Cleared Stale Pending Entry: {pk}")
 
         except Exception as e:

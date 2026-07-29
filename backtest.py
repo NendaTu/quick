@@ -315,7 +315,7 @@ class StrategyWrapper:
         self.overrides = overrides or {}
         self.instance = self._load_strategy(path)
 
-    def _load_strategy(self, path):
+    def _load_strategy(self, path, model=None):
         # [TECH-001] Use the enhanced load_strategy from main.py
         from main import load_strategy
         # Extract relative path if inside strategies/
@@ -324,10 +324,6 @@ class StrategyWrapper:
              rel_path = path[11:]
         if rel_path.endswith(".py"):
              rel_path = rel_path[:-3]
-
-        model = None
-        if self.simulator and hasattr(self.simulator, "engine") and self.simulator.engine:
-            model = self.simulator.engine.model
 
         res = load_strategy(rel_path, simulator=self.simulator, model=model, overrides=self.overrides)
         if res is not None:
@@ -660,8 +656,8 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     for segment in chain.segments:
         for wrapper in segment:
             wrapper.simulator = sim
-            # Re-load instance with fresh state and simulator linked
-            wrapper.instance = wrapper._load_strategy(wrapper.path)
+            # Re-load instance with fresh state, simulator linked, and model explicitly injected (R0-4)
+            wrapper.instance = wrapper._load_strategy(wrapper.path, model=engine.model)
 
             # Re-apply overrides if any
             if wrapper.overrides:
@@ -1042,8 +1038,8 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     for segment in chain.segments:
         for wrapper in segment:
             wrapper.simulator = sim
-            # Re-load instance with fresh state and simulator linked
-            wrapper.instance = wrapper._load_strategy(wrapper.path)
+            # Re-load instance with fresh state, simulator linked, and model explicitly injected (R0-4)
+            wrapper.instance = wrapper._load_strategy(wrapper.path, model=engine.model)
 
             # Re-apply overrides if any
             if wrapper.overrides:

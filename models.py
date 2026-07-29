@@ -23,6 +23,7 @@ log = logging.getLogger("scalper.models")
 class LearningModel:
     def __init__(self, simulator):
         self.simulator = simulator
+        self.scoring_engine = ScoringEngine()
         self.weights = {
             "imbalance": 1.0,
             "rsi": 1.0,
@@ -118,9 +119,8 @@ class LearningModel:
         if not features:
             return None
 
-        se = ScoringEngine()
-        buy_res = se.evaluate(features, side="buy", config_context=cfg, dynamic_weights=self.weights)
-        sell_res = se.evaluate(features, side="sell", config_context=cfg, dynamic_weights=self.weights)
+        buy_res = self.scoring_engine.evaluate(features, side="buy", config_context=cfg, dynamic_weights=self.weights)
+        sell_res = self.scoring_engine.evaluate(features, side="sell", config_context=cfg, dynamic_weights=self.weights)
 
         if hasattr(self.simulator, "engine") and self.simulator.engine:
             self.simulator.engine._write_signals_log(symbol, "buy", "model", buy_res)

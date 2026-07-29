@@ -28,6 +28,26 @@ class PositionLedger:
         if pos_key in self.pending_entries:
             self.pending_entries.remove(pos_key)
 
+    def is_open(self, pos_key: str) -> bool:
+        """Checks if a position is open (R1-1)."""
+        return pos_key in self.open_positions
+
+    def is_pending(self, pos_key: str) -> bool:
+        """Checks if a position is pending (R1-1)."""
+        return pos_key in self.pending_entries
+
+    def get_open_keys(self) -> list:
+        """Returns a list of open position keys (R1-1)."""
+        return list(self.open_positions.keys())
+
+    def get_pending_keys(self) -> list:
+        """Returns a list of pending entry keys (R1-1)."""
+        return list(self.pending_entries)
+
+    def get_all_positions(self) -> Dict[str, dict]:
+        """Returns a copy of all open positions (R1-1)."""
+        return self.open_positions.copy()
+
     def clear(self):
         self.open_positions.clear()
         self.pending_entries.clear()

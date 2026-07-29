@@ -4,11 +4,15 @@ The `main.py` entry point initializes the trading bot for real-time operation in
 
 ## Core Components
 
-### 1. Engine (`engine.py`)
-The orchestrator of the system.
-- **Position Tracking**: Maintains the `open_positions` map.
-- **Trading Loop**: The main `asyncio` loop that updates features, evaluates signals, and triggers execution.
-- **Reporting**: Processes fills and exits reported by the exchange layer.
+### 1. Engine package (`engine/`)
+The modularized orchestrator of the system.
+- **core.py (Engine)**: Thin composition class that coordinates startup, initialization, and properties delegation.
+- **positions.py (PositionLedger)**: Bookkeeping ledger tracking open and pending positions with clean public interfaces.
+- **risk.py (RiskGate)**: Gatekeeper checking drawdown, ROI, position, and exposure limits.
+- **reporting.py (TradeReporter)**: Active stats tracking, profit ratio, and compounding curve bookkeeping.
+- **regimes.py (RegimeClassifier)**: Classifies assets into majors, high_beta, or stable.
+- **reconciliation.py (ExchangeSync)**: Performs high-stakes state reconciliation between exchange and local databases.
+- **loop.py (TradingLoop)**: Core asynchronous loop scheduling ticks, maintenance, and trade signal routing.
 
 ### 2. Simulator (`simulator.py`)
 A high-fidelity exchange simulation layer used in `paper` mode.

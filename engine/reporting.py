@@ -5,7 +5,7 @@
 """
 import time
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 log = logging.getLogger("scalper.engine.reporting")
 
@@ -34,6 +34,99 @@ class TradeReporter:
         if self.gross_loss > 0:
             return self.gross_profit / self.gross_loss
         return float('inf') if self.gross_profit > 0 else 1.0
+
+    def record_entry(self, symbol: str, side: str, qty: float, entry: float, margin: float, strategy_id: str):
+        """
+        Symmetrically registers a trade entry fact in TradeReporter (R1-1).
+        Currently acts as a placeholder / stats tracking point for entries.
+        """
+        pass
+
+    def record_exit(self, symbol: str, side: str, round_trip_pnl: float, exit_type: str = "unknown",
+                    is_be: bool = False, is_partial: bool = False, margin: float = 0.0, strategy_id: str = "model",
+                    use_virtual_balance_or_paper: bool = True) -> Optional[float]:
+        """
+        Registers a trade exit fact in TradeReporter and updates stats, completely decoupled
+        from database persistence, models, or active trading/cooldown logic (R1-1, R1-5).
+        Returns total_trade_pnl for the completed trade, or None if it is a partial exit.
+        """
+        if use_virtual_balance_or_paper:
+            self.equity += round_trip_pnl
+
+        self.cumulative_pnl += round_trip_pnl
+
+        if round_trip_pnl > 0:
+            self.gross_profit += round_trip_pnl
+        else:
+            self.gross_loss += abs(round_trip_pnl)
+
+        self.equity_history.append({
+            "ts": time.time(),
+            "equity": self.equity,
+            "pnl": round_trip_pnl,
+            "symbol": symbol
+        })
+
+        if symbol not in self.asset_stats:
+            self.asset_stats[symbol] = {
+                "buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0,
+                "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "buy_pnl": 0.0, "sell_pnl": 0.0,
+                "total_margin": 0.0
+            }
+
+        self.asset_stats[symbol]["total_margin"] += margin
+        self.asset_stats[symbol]["pnl"] += round_trip_pnl
+        if side == "buy":
+            self.asset_stats[symbol]["buy_pnl"] += round_trip_pnl
+        else:
+            self.asset_stats[symbol]["sell_pnl"] += round_trip_pnl
+
+        if strategy_id not in self.strategy_stats:
+            self.strategy_stats[strategy_id] = {
+                "buy_wins": 0, "buy_losses": 0, "sell_wins": 0, "sell_losses": 0,
+                "pnl": 0.0, "tp_wins": 0, "be_wins": 0, "total_trades": 0
+            }
+
+        self.strategy_stats[strategy_id]["pnl"] += round_trip_pnl
+        pos_key = f"{symbol}_{side}"
+        self.pos_pnl[pos_key] = self.pos_pnl.get(pos_key, 0.0) + round_trip_pnl
+
+        if is_partial:
+            return None
+
+        total_trade_pnl = self.pos_pnl.pop(pos_key, 0.0)
+        self.total_trades += 1
+        self.strategy_stats[strategy_id]["total_trades"] += 1
+
+        if total_trade_pnl > 0:
+            self.winning_trades += 1
+            if exit_type == "tp":
+                self.tp_wins += 1
+                self.asset_stats[symbol]["tp_wins"] += 1
+                self.strategy_stats[strategy_id]["tp_wins"] += 1
+            elif is_be:
+                self.be_wins += 1
+                self.asset_stats[symbol]["be_wins"] += 1
+                self.strategy_stats[strategy_id]["be_wins"] += 1
+
+            if side == "buy":
+                self.asset_stats[symbol]["buy_wins"] += 1
+                self.strategy_stats[strategy_id]["buy_wins"] += 1
+            else:
+                self.asset_stats[symbol]["sell_wins"] += 1
+                self.strategy_stats[strategy_id]["sell_wins"] += 1
+        else:
+            if exit_type in ["tp", "ttl"]:
+                log.warning(f"GROSS WIN / NET LOSS on {symbol} [{exit_type.upper()}]: PnL={total_trade_pnl:.4f} (fees consumed profit)")
+            self.losing_trades += 1
+            if side == "buy":
+                self.asset_stats[symbol]["buy_losses"] += 1
+                self.strategy_stats[strategy_id]["buy_losses"] += 1
+            else:
+                self.asset_stats[symbol]["sell_losses"] += 1
+                self.strategy_stats[strategy_id]["sell_losses"] += 1
+
+        return total_trade_pnl
 
     def print_final_stats(self, elapsed: float):
         hours, rem = divmod(elapsed, 3600)

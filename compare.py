@@ -301,8 +301,8 @@ def parse_args() -> List[Variant]:
             if s not in [v.strategy for v in variants]:
                 variants.append(Variant(id=f"Strat: {s}", overrides={}, strategy=s))
 
-    # Pre-parse overrides for global settings like ASSETS_COUNT
-    for arg in sys.argv[1:]:
+    # Pre-parse overrides for global settings like ASSETS_COUNT (P2-13: Scan remaining only)
+    for arg in remaining:
         if "=" in arg:
             k, v = [x.strip() for x in arg.split("=", 1)]
             if k == "ASSETS_COUNT":
@@ -328,8 +328,8 @@ def parse_args() -> List[Variant]:
                                     pass
                     variants.append(Variant(id=f.replace(".py", ""), overrides=overrides, config_file=f))
         else:
-            # Parse VAR=VAL args
-            for arg in sys.argv[1:]:
+            # Parse VAR=VAL args (P2-13: Scan remaining only)
+            for arg in remaining:
                 if "=" in arg:
                     k, v = [x.strip() for x in arg.split("=", 1)]
                     try:
