@@ -13,6 +13,8 @@ ground truth until you re-verify it against the code in front of you** — file 
 have moved again since this was written. What follows is a well-evidenced set of hypotheses,
 not a guarantee.
 
+To be included in your mandate is the contents of `.jules/agent/documentation_A.RULES.md`, which includes precise rules regarding ensuring foundational documentation is maintained in the codebase.
+
 ### 0.1 The headline finding — read this before doing anything else
 
 **Essentially none of Round 1's P0/P1/P2 backlog has actually landed on `development`,
