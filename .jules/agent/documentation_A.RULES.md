@@ -1,7 +1,3 @@
-> **How to use this:** Save this file as `documentation_A.RULES.md` in the root of any repository. Point coding agents at it — the simplest way is one line in that repo's `AGENTS.md` (now read natively by nearly every current coding agent, Jules and Claude Code included) telling them to also read and follow `documentation_A.RULES.md`. It's written to apply two ways: as a first-entry check for an agent new to the repo, and as an ongoing habit for every session after that — see "How this applies" below.
-
----
-
 # Documenting This Repository
 
 Every hand-authored file in this repository should carry a descriptive header, and the repository as a whole should have a machine-readable map (`docs/map.json`), so any future contributor — human or AI — can navigate it without guessing at paths or file purposes. This document is the standing policy for keeping that true.
