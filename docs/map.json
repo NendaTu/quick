@@ -1,5 +1,20 @@
 [
   {
+    "path": "AGENTS-old.md",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/AGENTS-old.md",
+    "description": "AGENTS.md \u2014 Remediation & Modularization Directives for `quick`"
+  },
+  {
+    "path": "AGENTS-old_2.md",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/AGENTS-old_2.md",
+    "description": "AGENTS.md \u2014 Remediation & Modularization Directives for `quick` (Round 2)"
+  },
+  {
+    "path": "AGENTS-old_3.md",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/AGENTS-old_3.md",
+    "description": "AGENTS.md \u2014 Round 3: Remediation & Modularization Directives for `quick`"
+  },
+  {
     "path": "backtest",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/backtest",
     "description": "Executable shell launcher for the python backtesting system."

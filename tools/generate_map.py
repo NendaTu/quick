@@ -69,7 +69,8 @@ def is_excluded(path):
 
     # Exclude documentation files (markdown, txt etc)
     if path.endswith('.md') or path.endswith('.txt'):
-        return True
+        if path not in ["AGENTS-old.md", "AGENTS-old_2.md", "AGENTS-old_3.md"]:
+            return True
 
     # Exclude lock files and manifest lists
     lock_files = {
@@ -109,6 +110,15 @@ def extract_summary(path):
         match = re.search(r'#\s*1\.\s*Summary:\s*(.*)', top_lines)
         if match:
             return match.group(1).strip()
+
+    # Check Markdown files
+    if path.endswith('.md'):
+        for line in content.split('\n'):
+            if line.strip().startswith('#'):
+                return line.strip().lstrip('#').strip()
+        for line in content.split('\n'):
+            if line.strip():
+                return line.strip()
 
     # Check Python files
     if path.endswith('.py'):
