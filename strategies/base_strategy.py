@@ -51,7 +51,6 @@ class JBaseStrategy(BaseStrategy):
         """[TECH-001] Estimates wait time for warmup."""
         if self.is_ready(symbol): return "READY"
 
-        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
         max_eta = 0
         status = []
 
@@ -59,7 +58,7 @@ class JBaseStrategy(BaseStrategy):
             h = self._get_ohlcv(symbol, tf)
             missing = count - len(h)
             if missing > 0:
-                eta = missing * tf_map.get(tf, 60)
+                eta = missing * config.TF_SECONDS.get(tf, 60)
                 max_eta = max(max_eta, eta)
                 status.append(f"{missing} {tf}")
 
@@ -130,7 +129,6 @@ class JBaseStrategy(BaseStrategy):
             return ""
 
         from ta.utils import convert_to_local
-        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
         # Define the logical order of milestones for the funnel
         milestone_order = [
@@ -154,8 +152,8 @@ class JBaseStrategy(BaseStrategy):
             def fmt_occ(occ):
                 dt = convert_to_local(occ["ts"])
                 time_str = dt.strftime("%m-%d %H:%M")
-                if occ["tf"] in tf_map:
-                    dt_close = convert_to_local(occ["ts"] + tf_map[occ["tf"]] - 1)
+                if occ["tf"] in config.TF_SECONDS:
+                    dt_close = convert_to_local(occ["ts"] + config.TF_SECONDS[occ["tf"]] - 1)
                     return f"{time_str}-{dt_close.strftime('%H:%M')} ({occ['tf']})"
                 return f"{time_str} ({occ['tf']})"
 

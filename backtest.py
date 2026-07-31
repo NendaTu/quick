@@ -105,20 +105,9 @@ async def discover_assets(client: BitGetClient) -> List[str]:
     """Discover top assets by volume, identical to main.py logic."""
     log.info(f"Discovering top {ASSETS_COUNT} assets by volume...")
     tickers = await client.get_tickers()
-    # Sort by usdtVolume descending
-    sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
-
-    discovered = []
-    for t in sorted_tickers:
-        sym = t["symbol"]
-        if sym.endswith("USDT") and sym not in ASSET_OMITTED:
-            # Exclude known stables
-            if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]:
-                continue
-            discovered.append(sym)
-            if len(discovered) >= ASSETS_COUNT:
-                break
-    return discovered
+    normalized = [(t["symbol"], float(t.get("usdtVolume", 0) or 0)) for t in tickers]
+    from tools.asset_discovery import discover_assets as run_discovery
+    return run_discovery(normalized, ASSET_OMITTED, ASSETS_COUNT)
 
 async def download_historical_data(client: BitGetClient, db: Database, assets: List[str], timeframes: List[str], silent: bool = False, chain=None):
     """

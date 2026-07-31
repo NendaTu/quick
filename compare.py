@@ -28,6 +28,7 @@ from dataclasses import dataclass
 sys.path.append(os.getcwd())
 
 from config import *
+from config import TF_SECONDS
 from engine.core import Engine
 from bitget_client import BitGetWSClient, BitGetClient, RateLimiter
 
@@ -67,15 +68,10 @@ class DataCoordinator:
         # P2-11: Use transient in-memory database to completely avoid multi-process file lock contention
         db = Database(db_path=":memory:")
 
-        discovered_assets = []
         limit = self.preloaded_data.get("ASSETS_COUNT", ASSETS_COUNT)
-        sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
-        for t in sorted_tickers:
-            sym = t["symbol"]
-            if sym.endswith("USDT") and sym not in ASSET_OMITTED:
-                if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
-                discovered_assets.append(sym)
-                if len(discovered_assets) >= limit: break
+        normalized = [(t["symbol"], float(t.get("usdtVolume", 0) or 0)) for t in tickers]
+        from tools.asset_discovery import discover_assets as run_discovery
+        discovered_assets = run_discovery(normalized, ASSET_OMITTED, limit)
 
         self.preloaded_data["discovered_assets"] = discovered_assets
         self.preloaded_data["INITIAL_EQUITY"] = INITIAL_EQUITY
@@ -99,8 +95,7 @@ class DataCoordinator:
                     is_recent = False
                     if db_candles:
                         last_ts = db_candles[-1][0]
-                        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
-                        if (time.time() - last_ts) < (tf_map.get(tf, 60) * 2):
+                        if (time.time() - last_ts) < (TF_SECONDS.get(tf, 60) * 2):
                             is_recent = True
 
                     if len(db_candles) >= required_limit and is_recent:

@@ -80,13 +80,9 @@ class TradingLoop:
                                 self.exchange.rev_symbol_map[sym] = s
                             break
             else:
-                self.engine.enabled_assets = []
-                for t in sorted_tickers:
-                    sym = t["symbol"]
-                    if sym.endswith("USDT") and sym not in self.config.ASSET_OMITTED:
-                        if sym.replace("USDT", "") in ["USDC", "DAI", "BUSD", "EUR", "GBP"]: continue
-                        self.engine.enabled_assets.append(sym)
-                        if len(self.engine.enabled_assets) >= self.config.ASSETS_COUNT: break
+                normalized = [(t["symbol"], float(t.get("usdtVolume", 0) or 0)) for t in tickers]
+                from tools.asset_discovery import discover_assets as run_discovery
+                self.engine.enabled_assets = run_discovery(normalized, self.config.ASSET_OMITTED, self.config.ASSETS_COUNT)
 
             log.info(f"Exchange Initialization: {len(self.engine.enabled_assets)} assets discovered.")
 
