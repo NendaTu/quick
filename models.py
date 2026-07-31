@@ -270,7 +270,8 @@ class LearningModel:
             stop_price,
             entry_maker=(getattr(cfg, 'ENTRY_ORDER_TYPE', 'limit') == "limit"),
             exit_maker=(getattr(cfg, 'SL_ORDER_TYPE', 'limit') == "limit"),
-            fee_aware=getattr(cfg, 'FEE_AWARE_SIZING', True)
+            fee_aware=getattr(cfg, 'FEE_AWARE_SIZING', True),
+            config=cfg
         )
 
         spec = self.simulator.contract_specs.get(symbol, {})

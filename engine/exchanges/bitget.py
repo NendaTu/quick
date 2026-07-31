@@ -121,10 +121,9 @@ class BitgetExchange(DataAcquisitionManager, BaseExchange):
             entry_price_est = price if price else self.last_price.get(symbol, 0)
             if entry_price_est and entry_price_est > 0:
                 entry_fee_rate = self.config.MAKER_FEE if order_type.lower() == "limit" else self.config.TAKER_FEE
-                # R0-2: On live/demo Bitget exchanges, take-profits and stop-losses always execute at market (taker).
-                # Therefore, we always assume taker fees for the exit leg to ensure the profitability gate represents
-                # physical exchange reality and avoids narrow fee traps.
-                exit_fee_rate = self.config.TAKER_FEE
+                # SL executes at market (taker) for safety, but TP can use a limit order to take advantage of maker fees.
+                # Align TP fee estimation with configured TP_ORDER_TYPE.
+                exit_fee_rate = self.config.MAKER_FEE if getattr(self.config, "TP_ORDER_TYPE", "limit") == "limit" else self.config.TAKER_FEE
 
                 entry_fee = qty * entry_price_est * entry_fee_rate
                 exit_fee = qty * tp_price * exit_fee_rate

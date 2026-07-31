@@ -475,6 +475,11 @@
     "description": "Summarizes trading stats and order logs from the most recent run."
   },
   {
+    "path": "tools/asset_discovery.py",
+    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/asset_discovery.py",
+    "description": "Centralized asset discovery and universe selection helper."
+  },
+  {
     "path": "tools/check_api.py",
     "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/check_api.py",
     "description": "Verifies exchange connectivity and API REST credentials."

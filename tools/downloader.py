@@ -109,21 +109,9 @@ async def discover_assets(client: BitGetClient) -> List[str]:
     """
     log.info(f"Discovering top {ASSETS_COUNT} assets by volume...")
     tickers = await client.get_tickers()
-    sorted_tickers = sorted(tickers, key=lambda x: float(x.get("usdtVolume", 0)), reverse=True)
-
-    non_asset_bases = ("USDC", "DAI", "BUSD", "EUR", "GBP")
-
-    discovered = []
-    for t in sorted_tickers:
-        sym = t["symbol"]
-        if not sym.endswith("USDT") or sym in ASSET_OMITTED:
-            continue
-        if sym.removesuffix("USDT") in non_asset_bases:
-            continue
-        discovered.append(sym)
-        if len(discovered) >= ASSETS_COUNT:
-            break
-    return discovered
+    normalized = [(t["symbol"], float(t.get("usdtVolume", 0) or 0)) for t in tickers]
+    from tools.asset_discovery import discover_assets as run_discovery
+    return run_discovery(normalized, ASSET_OMITTED, ASSETS_COUNT)
 
 
 async def download_asset_tf(

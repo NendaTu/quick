@@ -244,14 +244,11 @@ async def test_r0_2_exit_fee_rate_uses_taker():
         # Set self.last_price
         exchange.last_price["BTCUSDT"] = 100.0
 
-        # Now place a limit entry order with tight TP that would clear with maker fee but fails with taker fee.
-        # entry = 100.0, exit = 100.05, qty = 1.0, order_type = "limit"
-        # Since exit_fee_rate uses TAKER_FEE (0.0006), it will fail.
-        # If it used TP_ORDER_TYPE = "limit" -> MAKER_FEE (0.0002), it would pass.
-        # Let's verify that even with TP_ORDER_TYPE = "limit", it fails (gets rejected).
-        exchange.config.TP_ORDER_TYPE = "limit"
+        # Now place a limit entry order with tight TP.
+        # If TP_ORDER_TYPE is "market", it will use TAKER_FEE (0.0006) and fail.
+        exchange.config.TP_ORDER_TYPE = "market"
 
-        res = await exchange.place_order(
+        res_fail = await exchange.place_order(
             symbol="BTCUSDT",
             side="buy",
             order_type="limit",
@@ -261,8 +258,23 @@ async def test_r0_2_exit_fee_rate_uses_taker():
             sl_price=95.0
         )
 
-        assert res["code"] == "40001"
-        assert "net tp profit below minimum required threshold" in res["msg"]
+        assert res_fail["code"] == "40001"
+        assert "net tp profit below minimum required threshold" in res_fail["msg"]
+
+        # If TP_ORDER_TYPE is "limit", it will use MAKER_FEE (0.0002) and pass!
+        exchange.config.TP_ORDER_TYPE = "limit"
+
+        res_pass = await exchange.place_order(
+            symbol="BTCUSDT",
+            side="buy",
+            order_type="limit",
+            qty=1.0,
+            price=100.0,
+            tp_price=100.05,
+            sl_price=95.0
+        )
+
+        assert res_pass["code"] == "00000"
 
         await exchange.close()
 
@@ -334,3 +346,25 @@ def test_config_validation_on_overrides():
     # Invalid type override (RISK_PER_TRADE float to str) should raise ValidationError
     with pytest.raises(ValidationError):
         ConfigContext(RISK_PER_TRADE="not a number")
+
+
+def test_discover_assets_centralized():
+    from tools.asset_discovery import discover_assets
+
+    tickers = [
+        ("BTCUSDT", 1000000.0),
+        ("ETHUSDT", 500000.0),
+        ("USDCUSDT", 100000.0), # Stable
+        ("SOLUSDT", 300000.0),
+        ("XRPUSDT", 50000.0),
+        ("BUSDUSDT", 200000.0), # Stable
+    ]
+
+    omitted = ["BTCUSDT"]
+
+    # Selecting top 2 volatile assets (excluding stable and omitted)
+    # Volatile sorted: ETHUSDT (500k), SOLUSDT (300k), XRPUSDT (50k)
+    discovered = discover_assets(tickers, omitted, limit=2)
+
+    assert len(discovered) == 2
+    assert discovered == ["ETHUSDT", "SOLUSDT"]
