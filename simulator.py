@@ -223,7 +223,6 @@ class DataAcquisitionManager:
     async def fetch_symbol_data(self, sym):
         """Fetch OHLCV and confluence history for a single symbol."""
         await asyncio.sleep(0.1 * random.random())
-        tf_map = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
         dynamic_req = {}
         if self.engine and self.engine.strategies:
@@ -236,7 +235,7 @@ class DataAcquisitionManager:
             default_limit = 1000 if tf == "1m" else (500 if tf == self.config.ACTIVE_TIMEFRAME else 200)
             required_limit = max(default_limit, dynamic_req.get(tf, 0))
 
-            lookback_sec = required_limit * tf_map.get(tf, 60)
+            lookback_sec = required_limit * self.config.TF_SECONDS.get(tf, 60)
             start_ts = time.time() - lookback_sec
             end_ts = time.time()
 
@@ -387,11 +386,7 @@ class DataAcquisitionManager:
         return features
 
     def _update_candles(self, symbol, price, size, ts):
-        tf_map = {
-            "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
-            "1H": 3600, "4H": 14400, "1D": 86400
-        }
-        for tf_name, seconds in tf_map.items():
+        for tf_name, seconds in self.config.TF_SECONDS.items():
             if tf_name not in self.config.AVAILABLE_TIMEFRAMES: continue
 
             candle_start = (ts // seconds) * seconds
@@ -907,7 +902,7 @@ class Simulator(DataAcquisitionManager):
 
     def _execute_entry_direct(self, symbol, side, qty, fill_price, btc_conf="", drt=0.5, order_type="market", original_side=None, is_contrarian=False, features=None, strategy_id=None):
         now = time.time()
-        fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
+        fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"), config=self.config)
         self.equity -= fee
 
         max_lev = self.leverage_limits.get(symbol, 20)
@@ -958,7 +953,7 @@ class Simulator(DataAcquisitionManager):
         is_partial = qty < pos["qty"]
 
         pnl = calculate_pnl(qty, pos["entry_price"], fill_price, side)
-        fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"))
+        fee = calculate_fees(qty, fill_price, is_maker=(order_type == "limit"), config=self.config)
 
         proportional_entry_fee = pos["entry_fee"] * (qty / (pos["qty"] if not pos.get("initial_qty") else pos["initial_qty"]))
         round_trip_pnl = pnl - fee - proportional_entry_fee

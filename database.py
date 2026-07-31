@@ -11,6 +11,7 @@ import logging
 import threading
 import queue
 from typing import Dict
+from config import TF_SECONDS
 
 log = logging.getLogger("scalper.database")
 
@@ -338,11 +339,7 @@ class Database:
         """
         [REPAIR-20260707] Fast-check for gaps with Listing-Awareness.
         """
-        tf_seconds = {
-            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-            "1H": 3600, "4H": 14400, "1D": 86400
-        }
-        step = tf_seconds.get(timeframe, 60)
+        step = TF_SECONDS.get(timeframe, 60)
 
         # 1. Check Metadata for Listing Completeness
         is_exhausted = False
@@ -427,11 +424,7 @@ class Database:
         up the exhausted flag without an extra query -- pass it when the
         caller already has it.
         """
-        tf_seconds = {
-            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-            "1H": 3600, "4H": 14400, "1D": 86400
-        }
-        step = tf_seconds.get(timeframe, 60)
+        step = TF_SECONDS.get(timeframe, 60)
 
         # Have we already confirmed the true beginning of this symbol's history?
         if stats_cache and symbol in stats_cache and timeframe in stats_cache[symbol]:
