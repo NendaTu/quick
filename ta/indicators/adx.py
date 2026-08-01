@@ -1,101 +1,188 @@
 """
+> ta/indicators/adx.py
+
 1. Summary: Average Directional Index (ADX) trend strength calculator.
-2. Description: Computes ADX and directional indicators (+DI, -DI) over rolling periods to measure macro trend strength.
-3. Context: Imported by feature extraction modules to filter out weak-trending configurations.
+2. Description: Computes ADX, +DI and -DI over a rolling period using
+   Wilder's smoothing applied consistently end-to-end (TR/+DM/-DM seeded
+   then recursively smoothed, DX seeded then recursively smoothed into
+   ADX itself) to measure macro trend strength and its dominant direction.
+   Period can be fixed or resolved per-timeframe via TF_PERIODS, mirroring
+   ta.indicators.atr.
+3. Context: Imported by feature extraction modules to filter out
+   weak-trending configurations.
+
+Audited by Claude on 7/31/2026
 """
-from typing import List, Tuple, Dict, Optional
-from ta.indicators.atr import compute_atr
+
+from typing import List, Dict, NamedTuple, Optional
 
 # --- Configuration ---
 ENABLED = True
 PERIOD = 14
 
+# Timeframe -> period overrides, mirroring ta.indicators.atr.TF_PERIODS.
+# Left empty: I couldn't re-fetch atr.py this session to confirm its exact
+# keys/values (see chat), so nothing here yet. Any timeframe not present
+# just falls back to PERIOD, so behavior is unchanged from before until
+# this is populated with the real table.
+TF_PERIODS: Dict[str, int] = {}
+
 # Threshold above which we consider the market strongly trending.
 STRONG_TREND_THRESHOLD = 25.0
 
-def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
+
+class ADXResult(NamedTuple):
+    """ADX plus the directional components it's derived from."""
+    adx: float
+    plus_di: float
+    minus_di: float
+
+
+def _resolve_period(period: Optional[int], timeframe: Optional[str]) -> int:
+    """An explicit `period` always wins. Otherwise resolve from TF_PERIODS
+    by `timeframe`, falling back to the flat PERIOD constant."""
+    if period is not None:
+        return period
+    return TF_PERIODS.get(timeframe, PERIOD) if timeframe else PERIOD
+
+
+def get_signal(ohlcv: List[Dict], tf: str, params: Optional[list] = None, **kwargs) -> Optional[Dict]:
     """
-    Backtesting entry point for ADX Trend Strength filter.
+    Backtesting entry point for the ADX Trend Strength filter.
+
+    Non-directional filter: returns a signal once ADX >= threshold
+    (STRONG_TREND_THRESHOLD by default, or params[0] if supplied).
+    "side" is always "both" and stop_price/exit_price are 0, since this
+    indicator doesn't propose trade levels (matches the convention in
+    ta.indicators.atr.get_signal). metadata carries adx, plus_di and
+    minus_di so callers can see which direction is currently dominant.
+    Period is resolved from `tf` via TF_PERIODS when possible.
     """
-    if len(ohlcv) < PERIOD * 2 + 5:
+    period = _resolve_period(None, tf)
+    if len(ohlcv) < period * 2 + 1:
         return None
 
-    # Parse Parameters
     threshold = float(params[0]) if params and len(params) > 0 else STRONG_TREND_THRESHOLD
 
-    h = [c['h'] for c in ohlcv]
-    l = [c['l'] for c in ohlcv]
-    c = [c['c'] for c in ohlcv]
+    h = [bar['h'] for bar in ohlcv]
+    l = [bar['l'] for bar in ohlcv]
+    c = [bar['c'] for bar in ohlcv]
 
-    adx_val = compute_adx(h, l, c, PERIOD)
+    result = compute_adx_full(h, l, c, period=period)
 
-    if adx_val < threshold:
+    if result.adx < threshold:
         return None
 
     return {
         "side": "both",
-        "entry_price": ohlcv[-1]['c'],
-        "stop_price": 0,
-        "exit_price": 0,
-        "metadata": {"adx": adx_val}
+        "entry_price": c[-1],
+        "stop_price": 0,   # Not used for filter
+        "exit_price": 0,   # Not used for filter
+        "metadata": {
+            "adx": result.adx,
+            "plus_di": result.plus_di,
+            "minus_di": result.minus_di,
+        }
     }
 
-def compute_adx(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
+
+def compute_adx(highs: List[float], lows: List[float], closes: List[float],
+                 period: Optional[int] = None, timeframe: Optional[str] = None) -> float:
+    """Thin wrapper over compute_adx_full for callers that only need the ADX scalar."""
+    return compute_adx_full(highs, lows, closes, period, timeframe).adx
+
+
+def compute_adx_full(highs: List[float], lows: List[float], closes: List[float],
+                      period: Optional[int] = None, timeframe: Optional[str] = None) -> ADXResult:
     """
-    Calculates the ADX with proper smoothing.
+    Calculates ADX, +DI and -DI using Wilder's smoothing applied end-to-end.
+
+    TR / +DM / -DM are seeded with a simple average over the first
+    `period` bars, then recursively smoothed:
+        value = (prev * (period - 1) + new) / period
+    +DI/-DI/DX are derived from those at every step. ADX is seeded and
+    recursively smoothed the exact same way -- a plain SMA of only the
+    trailing DX window is NOT equivalent to this and will drift from
+    standard ADX.
+
+    `period` takes precedence if given; otherwise it's resolved from
+    `timeframe` via TF_PERIODS (falling back to PERIOD).
+
+    Runs as a single pass with O(1) extra memory (no per-bar lists).
+    Requires at least period*2 + 1 closes; returns an all-zero result
+    otherwise.
     """
-    if not ENABLED or len(closes) < period * 2:
-        return 0.0
+    period = _resolve_period(period, timeframe)
+    n = len(closes)
+    if not ENABLED or period < 1 or n < period * 2 + 1:
+        return ADXResult(0.0, 0.0, 0.0)
 
-    # 1. Calculate TR, DM+ and DM-
-    tr_series = []
-    up_moves = []
-    down_moves = []
-    for i in range(1, len(closes)):
-        tr = max(highs[i] - lows[i],
-                 abs(highs[i] - closes[i - 1]),
-                 abs(lows[i] - closes[i - 1]))
-        tr_series.append(tr)
-
-        up = highs[i] - highs[i-1]
-        down = lows[i-1] - lows[i]
-
+    # Phase 1: seed TR / +DM / -DM Wilder averages over the first `period` bars.
+    tr_sum = plus_dm_sum = minus_dm_sum = 0.0
+    for i in range(1, period + 1):
+        h, ph, lo, plo, pc = highs[i], highs[i - 1], lows[i], lows[i - 1], closes[i - 1]
+        tr_sum += max(h - lo, abs(h - pc), abs(lo - pc))
+        up = h - ph
+        down = plo - lo
         if up > down and up > 0:
-            up_moves.append(up)
-        else:
-            up_moves.append(0)
-
+            plus_dm_sum += up
         if down > up and down > 0:
-            down_moves.append(down)
+            minus_dm_sum += down
+
+    atr = tr_sum / period
+    plus_dm_s = plus_dm_sum / period
+    minus_dm_s = minus_dm_sum / period
+    pm1 = period - 1
+    plus_di = minus_di = 0.0
+
+    # Phase 2: continue smoothing through the next `period` bars while
+    # accumulating DX, to seed the ADX average itself.
+    dx_sum = 0.0
+    for i in range(period + 1, 2 * period + 1):
+        h, ph, lo, plo, pc = highs[i], highs[i - 1], lows[i], lows[i - 1], closes[i - 1]
+        tr = max(h - lo, abs(h - pc), abs(lo - pc))
+        up = h - ph
+        down = plo - lo
+        plus_dm = up if (up > down and up > 0) else 0.0
+        minus_dm = down if (down > up and down > 0) else 0.0
+
+        atr = (atr * pm1 + tr) / period
+        plus_dm_s = (plus_dm_s * pm1 + plus_dm) / period
+        minus_dm_s = (minus_dm_s * pm1 + minus_dm) / period
+
+        if atr != 0:
+            plus_di = 100 * (plus_dm_s / atr)
+            minus_di = 100 * (minus_dm_s / atr)
+            di_sum = plus_di + minus_di
+            dx = 100 * abs(plus_di - minus_di) / di_sum if di_sum != 0 else 0.0
         else:
-            down_moves.append(0)
+            plus_di = minus_di = dx = 0.0
+        dx_sum += dx
 
-    # 2. Smooth TR, DM+ and DM- (Wilder's)
-    atr = sum(tr_series[:period]) / period
-    plus_dm_s = sum(up_moves[:period]) / period
-    minus_dm_s = sum(down_moves[:period]) / period
+    adx = dx_sum / period
 
-    dx_series = []
+    # Phase 3: keep recursively smoothing ADX (and tracking +DI/-DI) the
+    # same way TR/+DM/-DM are smoothed, for any bars beyond the seed window.
+    for i in range(2 * period + 1, n):
+        h, ph, lo, plo, pc = highs[i], highs[i - 1], lows[i], lows[i - 1], closes[i - 1]
+        tr = max(h - lo, abs(h - pc), abs(lo - pc))
+        up = h - ph
+        down = plo - lo
+        plus_dm = up if (up > down and up > 0) else 0.0
+        minus_dm = down if (down > up and down > 0) else 0.0
 
-    # Calculate DX for the series
-    for i in range(period, len(tr_series)):
-        atr = (atr * (period - 1) + tr_series[i]) / period
-        plus_dm_s = (plus_dm_s * (period - 1) + up_moves[i]) / period
-        minus_dm_s = (minus_dm_s * (period - 1) + down_moves[i]) / period
+        atr = (atr * pm1 + tr) / period
+        plus_dm_s = (plus_dm_s * pm1 + plus_dm) / period
+        minus_dm_s = (minus_dm_s * pm1 + minus_dm) / period
 
-        if atr == 0:
-            dx_series.append(0)
-            continue
+        if atr != 0:
+            plus_di = 100 * (plus_dm_s / atr)
+            minus_di = 100 * (minus_dm_s / atr)
+            di_sum = plus_di + minus_di
+            dx = 100 * abs(plus_di - minus_di) / di_sum if di_sum != 0 else 0.0
+        else:
+            plus_di = minus_di = dx = 0.0
 
-        plus_di = 100 * (plus_dm_s / atr)
-        minus_di = 100 * (minus_dm_s / atr)
+        adx = (adx * pm1 + dx) / period
 
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if (plus_di + minus_di) != 0 else 0
-        dx_series.append(dx)
-
-    if not dx_series:
-        return 0.0
-
-    # 3. Calculate ADX (SMA of DX)
-    adx = sum(dx_series[-period:]) / period
-    return adx
+    return ADXResult(adx=adx, plus_di=plus_di, minus_di=minus_di)
