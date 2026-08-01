@@ -9,6 +9,8 @@
    copy-pasting its own -- and, previously, non-functional -- version.
 3. Context: Introduced alongside ta/helpers/overlap.py while de-duplicating
    ta/candles/engulfing.py and (pending) ta/candles/engulfing_total.py.
+
+Audited by Claude on 8/1/2026
 """
 
 from typing import Any, Optional
