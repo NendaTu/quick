@@ -1,4 +1,6 @@
 """
+> ta/strategy_interface.py
+
 1. Summary: Abstract specification interface for stateless technical
    analysis modules.
 2. Description: Defines the expected signature and return shape for
@@ -15,7 +17,10 @@
    surfaced this. ta/candles/engulfing_total.py (and possibly
    ta/candles/sentiment.py, unverified) still implement the old contract as
    of this revision -- pending a separate pass.
+
+Audited by Claude on 8/1/2026
 """
+
 from typing import Dict, List, Optional
 
 
