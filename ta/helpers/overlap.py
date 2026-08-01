@@ -10,6 +10,8 @@
    than duplicated per pattern.
 3. Context: Introduced alongside ta/helpers/params.py while de-duplicating
    ta/candles/engulfing.py and (pending) ta/candles/engulfing_total.py.
+
+Audited by Claude on 8/1/2026
 """
 
 
