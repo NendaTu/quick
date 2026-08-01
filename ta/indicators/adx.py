@@ -7,7 +7,8 @@
    then recursively smoothed, DX seeded then recursively smoothed into
    ADX itself) to measure macro trend strength and its dominant direction.
    Period can be fixed or resolved per-timeframe via TF_PERIODS, mirroring
-   ta.indicators.atr.
+   ta.indicators.atr. The trend-strength threshold is resolved through
+   ta.helpers.params.resolve(), shared with the rest of ta/.
 3. Context: Imported by feature extraction modules to filter out
    weak-trending configurations.
 
@@ -15,6 +16,7 @@ Audited by Claude on 8/1/2026
 """
 
 from typing import List, Dict, NamedTuple, Optional
+from ta.helpers.params import resolve
 
 # --- Configuration ---
 ENABLED = True
@@ -46,23 +48,61 @@ def _resolve_period(period: Optional[int], timeframe: Optional[str]) -> int:
     return TF_PERIODS.get(timeframe, PERIOD) if timeframe else PERIOD
 
 
+def _params_as_mapping(params, key):
+    """
+    Bridges this module's established params shape with resolve()'s
+    dict-like `.get()` expectation.
+
+    ta/helpers/params.py's own [HELPERS-001] note flags that params' real
+    shape (list vs dict) is unconfirmed anywhere in this codebase --
+    ta/strategy_interface.py documents it as a list, and no live caller of
+    any ta/*.get_signal() could be found (ta/features.py and
+    strategies/base_strategy.py were already checked per params.py's own
+    docstring; I additionally checked engine/core.py's trading loop, which
+    calls strategy.get_entry_signal() and ScoringEngine.evaluate()
+    directly, never a ta/ module's get_signal()). What IS confirmed is
+    this module's own tested contract: params[0] as the sole positional
+    threshold override. Passing a raw list straight into resolve() would
+    silently defeat that (lists have no .get, so resolve() reads it as
+    "nothing supplied" and falls through to config/local_default) -- so
+    this normalizes list/tuple -> dict to keep the existing, tested
+    override path working, while passing an already dict-like params
+    through untouched in case the real shape is (or becomes) dict-based.
+    """
+    if params is None:
+        return None
+    if hasattr(params, "get"):
+        return params
+    if isinstance(params, (list, tuple)) and len(params) > 0:
+        return {key: params[0]}
+    return None
+
+
 def get_signal(ohlcv: List[Dict], tf: str, params: Optional[list] = None, **kwargs) -> Optional[Dict]:
     """
     Backtesting entry point for the ADX Trend Strength filter.
 
-    Non-directional filter: returns a signal once ADX >= threshold
-    (STRONG_TREND_THRESHOLD by default, or params[0] if supplied).
-    "side" is always "both" and stop_price/exit_price are 0, since this
-    indicator doesn't propose trade levels (matches the convention in
-    ta.indicators.atr.get_signal). metadata carries adx, plus_di and
-    minus_di so callers can see which direction is currently dominant.
-    Period is resolved from `tf` via TF_PERIODS when possible.
+    Non-directional filter: returns a signal once ADX >= threshold.
+    Threshold resolution goes through ta.helpers.params.resolve():
+    params override > config attribute (none defined for ADX yet, see
+    chat) > STRONG_TREND_THRESHOLD. "side" is always "both" and
+    stop_price/exit_price are 0, since this indicator doesn't propose
+    trade levels (matches the convention in ta.indicators.atr.get_signal).
+    metadata carries adx, plus_di and minus_di so callers can see which
+    direction is currently dominant. Period is resolved from `tf` via
+    TF_PERIODS when possible.
     """
     period = _resolve_period(None, tf)
     if len(ohlcv) < period * 2 + 1:
         return None
 
-    threshold = float(params[0]) if params and len(params) > 0 else STRONG_TREND_THRESHOLD
+    threshold = float(resolve(
+        params=_params_as_mapping(params, "threshold"),
+        key="threshold",
+        local_default=STRONG_TREND_THRESHOLD,
+        config_attr=None,  # no ADX-specific attribute exists in config.py yet
+        config=None,
+    ))
 
     h = [bar['h'] for bar in ohlcv]
     l = [bar['l'] for bar in ohlcv]
