@@ -11,7 +11,7 @@
 3. Context: Imported by feature extraction modules to filter out
    weak-trending configurations.
 
-Audited by Claude on 7/31/2026
+Audited by Claude on 8/1/2026
 """
 
 from typing import List, Dict, NamedTuple, Optional
