@@ -13,7 +13,7 @@
    ta/strategy_interface.py. Overlap logic shared via ta/helpers/overlap.py;
    the strict_overlap toggle resolved via ta/helpers/params.py.
 
-Audited by Claude on 7/31/2026
+Audited by Claude on 8/1/2026
 """
 
 from typing import Dict, List, Optional
