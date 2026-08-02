@@ -1,10 +1,32 @@
 """
+> ta/indicators/atr.py
+
 1. Summary: Average True Range (ATR) volatility series calculator.
-2. Description: Measures market volatility using rolling ATR calculations to dynamically determine protective stop and profit targets.
-3. Context: Imported by strategies and features layers to scale risk and exits.
+2. Description: Measures and reports market volatility using rolling ATR
+   calculations. Strictly analysis/reporting -- this module does not decide
+   risk policy (position sizing, stop distance, or risk reduction) from the
+   volatility it measures; that belongs to config.py / tools/trading_utils.py
+   and the strategies that consume ATR values, not to this file. Four
+   constants that used to do exactly that -- SL_MULT, MIN_VOLATILITY,
+   VOL_ADJUST_THRESHOLD, REDUCED_RISK_FRACTION -- were removed here on
+   8/1/2026 as unused dead config; see atr-risk-constants-findings.md for
+   the per-constant evidence. Two are confirmed still-needed and NOT yet
+   wired up anywhere: config.py's USE_VOL_ADJUSTED_RISK toggle has no
+   effect without VOL_ADJUST_THRESHOLD/REDUCED_RISK_FRACTION behind it, and
+   ta/scoring.py's ScoringEngine reads config_context.MIN_VOLATILITY via
+   getattr() but nothing defines it in config.py, so it's silently using
+   its own fallback instead.
+3. Context: Imported by strategies and features layers. get_signal() is also
+   a stateless entry point usable directly, or as a non-directional filter
+   segment inside backtest.py's ConfluenceChain (which treats "side": "both"
+   as "matches regardless of the other segments' direction" -- see
+   ConfluenceChain.check()).
+
+Audited by Claude on 8/1/2026
 """
 from typing import List, Dict, Optional
-import config
+
+from ta.helpers.params import resolve
 
 # --- Configuration ---
 # Toggle to enable/disable ATR calculation.
@@ -12,7 +34,6 @@ ENABLED = True
 
 # Standard period for ATR calculation (default: 14).
 # Higher values result in a smoother, more stable volatility estimate.
-# [OP Roadmap] Adaptive periods per timeframe.
 PERIOD = 14
 TF_PERIODS = {
     '1m': 21,  # Smoother for noise
@@ -21,41 +42,48 @@ TF_PERIODS = {
     '1D': 7
 }
 
-# --- Strategy Multipliers ---
-# Standard multiplier for ATR-based stop losses.
-# Distance = ATR * SL_MULT.
-SL_MULT = 1.5
-
-# Minimum absolute ATR value required to trade.
-# Prevents the bot from entering "zombie" assets with zero volatility.
-MIN_VOLATILITY = 0.0001
-
-# --- Volatility Regime Thresholds ---
-# ATR % level above which we consider the market "Too Volatile" and reduce risk.
-VOL_ADJUST_THRESHOLD = 0.002 # 0.2% of price
-
-# The fraction of RISK_PER_TRADE used when volatility exceeds VOL_ADJUST_THRESHOLD.
-REDUCED_RISK_FRACTION = 0.5
-
 # Default Strategy Settings
 DEFAULT_THRESHOLD_PCT = 0.15 # 0.15%
 
+
 def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
     """
-    Backtesting entry point for ATR Volatility filter.
+    Backtesting entry point: reports current ATR volatility, gated by a
+    minimum ATR% threshold. Non-directional -- returns "side": "both" so
+    ConfluenceChain treats it as a filter rather than a direction to match.
+
+    params (list; see backtest.py's StrategyWrapper/parse_confluence_command
+    -- CLI-style args split on whitespace, so always strings here):
+        params[0]: threshold_pct override (min ATR%% of price required to report)
+        params[1]: period override (candles used in the ATR calculation)
+    Both optional. Resolution order for each is params override > local
+    default (there's no config.py equivalent for either yet, so the config
+    tier is skipped here) -- see ta/helpers/params.resolve(). period's local
+    default is timeframe-adaptive via TF_PERIODS when `tf` is known.
     """
-    if len(ohlcv) < PERIOD + 2:
+    period_raw = resolve(params, "period", TF_PERIODS.get(tf, PERIOD) if tf else PERIOD, list_index=1)
+    try:
+        period = int(float(period_raw))
+    except (TypeError, ValueError):
+        return None
+    if period <= 0:
         return None
 
-    # Parse Parameters
-    threshold_pct = float(params[0]) if params and len(params) > 0 else DEFAULT_THRESHOLD_PCT
+    if len(ohlcv) < period + 2:
+        return None
+
+    threshold_raw = resolve(params, "threshold_pct", DEFAULT_THRESHOLD_PCT, list_index=0)
+    try:
+        threshold_pct = float(threshold_raw)
+    except (TypeError, ValueError):
+        return None
 
     h = [c['h'] for c in ohlcv]
     l = [c['l'] for c in ohlcv]
-    c = [c['c'] for c in ohlcv]
+    cl = [c['c'] for c in ohlcv]
 
-    atr_val = compute_atr(h, l, c, PERIOD)
-    curr_price = c[-1]
+    atr_val = compute_atr(h, l, cl, period)
+    curr_price = cl[-1]
 
     actual_pct = (atr_val / curr_price) * 100 if curr_price > 0 else 0
 
@@ -67,7 +95,12 @@ def get_signal(ohlcv, tf, params=None, **kwargs) -> Optional[Dict]:
         "entry_price": curr_price,
         "stop_price": 0, # Not used for filter
         "exit_price": 0, # Not used for filter
-        "metadata": {"atr_pct": actual_pct}
+        "metadata": {
+            "atr": atr_val,
+            "atr_pct": actual_pct,
+            "period": period,
+            "threshold_pct": threshold_pct,
+        }
     }
 
 def compute_atr(highs: List[float], lows: List[float], closes: List[float], period: int = None, timeframe: str = None) -> float:
@@ -78,7 +111,7 @@ def compute_atr(highs: List[float], lows: List[float], closes: List[float], peri
     if period is None:
         period = TF_PERIODS.get(timeframe, PERIOD) if timeframe else PERIOD
 
-    if not ENABLED or len(closes) < period + 1:
+    if not ENABLED or period <= 0 or len(closes) < period + 1:
         return 0.0
 
     # 1. Calculate True Ranges
@@ -122,7 +155,7 @@ def detect_vol_regime(highs: List[float], lows: List[float], closes: List[float]
 
 def get_volatility_forecast(highs: List[float], lows: List[float], closes: List[float]) -> str:
     """
-    [OP-002] Dynamic Volatility Scaling: Compares ST-ATR vs LT-ATR.
+    Dynamic Volatility Scaling: Compares ST-ATR vs LT-ATR.
     Returns: 'Expanding', 'Compressing', or 'Neutral'
     """
     if len(closes) < 51:
