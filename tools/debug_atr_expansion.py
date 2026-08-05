@@ -16,8 +16,8 @@ db = sqlite3.connect("market_data.db")
 
 def check_for_expansions(symbol, tf, multiplier):
     cursor = db.cursor()
-    query = f"SELECT timestamp, open, high, low, close, volume FROM candles WHERE symbol='{symbol}' AND timeframe='{tf}' ORDER BY timestamp ASC"
-    cursor.execute(query)
+    query = "SELECT timestamp, open, high, low, close, volume FROM candles WHERE symbol=? AND timeframe=? ORDER BY timestamp ASC"
+    cursor.execute(query, (symbol, tf))
     rows = cursor.fetchall()
     ohlcv = []
     for r in rows:

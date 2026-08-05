@@ -124,6 +124,33 @@ class EnvironmentSettings(BaseSettings):
     # Typed env loading from .env
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
+    def validate_credentials(self) -> None:
+        """
+        Validates that required credentials are present for the selected MODE (live or demo).
+        Required Environment Variables:
+        - For 'live' mode: BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
+        - For 'demo' mode: BITGET_API_KEY_DEMO, BITGET_SECRET_KEY_DEMO, BITGET_PASSPHRASE_DEMO
+        """
+        mode = self.MODE.lower()
+        if mode == "live":
+            required = {
+                "BITGET_API_KEY": self.BITGET_API_KEY,
+                "BITGET_SECRET_KEY": self.BITGET_SECRET_KEY,
+                "BITGET_PASSPHRASE": self.BITGET_PASSPHRASE,
+            }
+        elif mode == "demo":
+            required = {
+                "BITGET_API_KEY_DEMO": self.BITGET_API_KEY_DEMO,
+                "BITGET_SECRET_KEY_DEMO": self.BITGET_SECRET_KEY_DEMO,
+                "BITGET_PASSPHRASE_DEMO": self.BITGET_PASSPHRASE_DEMO,
+            }
+        else:
+            return
+
+        missing = [k for k, v in required.items() if not v or v.strip() == ""]
+        if missing:
+            raise ValueError(f"Missing required credentials for '{mode}' mode: {', '.join(missing)}")
+
 class Settings(BaseModel):
     env: EnvironmentSettings = Field(default_factory=EnvironmentSettings)
     risk: AccountRiskSettings = Field(default_factory=AccountRiskSettings)

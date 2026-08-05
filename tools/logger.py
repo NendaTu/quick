@@ -8,8 +8,11 @@ import sys
 import os
 from datetime import datetime, timezone
 
-# VIRTUAL_TIME: Tracked globally during backtests and simulation to prefix console logs with virtual dates.
-VIRTUAL_TIME = None
+import contextvars
+from typing import Optional
+
+# VIRTUAL_TIME: Tracked safely via ContextVar during backtests and simulation to prefix console logs with virtual dates.
+VIRTUAL_TIME: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar("virtual_time", default=None)
 
 class VirtualTimeFormatter(logging.Formatter):
     """
@@ -17,10 +20,10 @@ class VirtualTimeFormatter(logging.Formatter):
     as [YYYY-MM-DD HH:MM:SS] next to the real-time system clock prefix.
     """
     def format(self, record):
-        global VIRTUAL_TIME
-        if VIRTUAL_TIME is not None:
+        vt = VIRTUAL_TIME.get()
+        if vt is not None:
             # Convert virtual timestamp to readable UTC date-time
-            dt_str = datetime.fromtimestamp(VIRTUAL_TIME, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            dt_str = datetime.fromtimestamp(vt, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             orig_asctime = self.formatTime(record, self.datefmt)
             prefix = f"{orig_asctime} [{dt_str}]"
             formatted_msg = super().format(record)
@@ -50,7 +53,7 @@ class Tee:
     def close(self):
         try:
             self.file.close()
-        except:
+        except OSError:
             pass
 
 def setup_console_tee(console_log_path=None):
