@@ -1,12 +1,4 @@
-.env
-*.db
-*.db-shm
-*.db-wal
-
-# Temporary Logs
-docs/temp/
-*.log
-*.txt
-!requirements.txt
-__pycache__/
-*.pyc
+```markdown
+.jules/docs/dev/audit_remediation_journal.md
+.jules/docs/dev/security_audit_remediation.md
+```
