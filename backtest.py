@@ -38,7 +38,6 @@ from tools.trading_utils import calculate_fees, calculate_pnl, calculate_net_pnl
 # --- Backtest Settings ---
 PROXIMITY_LIMIT = 5
 RESET_PROXIMITY_ON_REPEAT = True
-DIRECTION_MODE = "strict" # "strict" or "open"
 
 # --- Backtest Core Toggles ---
 USE_PORTFOLIO_MODE = True # If True, simulates concurrent capital-sharing portfolio mode. If False, runs isolated single-asset mode.
@@ -51,8 +50,12 @@ DEFAULT_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1H"]
 DEFAULT_START_DATE = datetime(2026, 3, 1, tzinfo=timezone.utc)
 DEFAULT_END_DATE = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
-START_DATE = DEFAULT_START_DATE
-END_DATE = DEFAULT_END_DATE
+# Backtest context state dictionary replacing previous global variables (P2-10)
+backtest_context = {
+    "DIRECTION_MODE": "strict",
+    "START_DATE": DEFAULT_START_DATE,
+    "END_DATE": DEFAULT_END_DATE,
+}
 
 # [TECH-001] Use centralized logging
 from tools.logger import setup_logging
@@ -134,7 +137,7 @@ async def download_historical_data(client: BitGetClient, db: Database, assets: L
                 if requires_warmup: break
             if requires_warmup: break
 
-    dl_start_ts = START_DATE.timestamp()
+    dl_start_ts = backtest_context["START_DATE"].timestamp()
     if requires_warmup:
         dl_start_ts -= (86400 * 14) # 14 days warm-up
         log.info(f"Warm-up buffer enabled (14 days). Starting acquisition from {datetime.fromtimestamp(dl_start_ts, tz=timezone.utc)}. Elapsed: {int(time.time() - session_start)}s")
@@ -395,7 +398,7 @@ class ConfluenceChain:
             if sig_dir == "both":
                 continue # Filter strategy, matches any direction
 
-            if not current_segment[i].ignore_direction and DIRECTION_MODE == "strict":
+            if not current_segment[i].ignore_direction and backtest_context["DIRECTION_MODE"] == "strict":
                 if direction is None:
                     direction = sig_dir
                 elif direction != sig_dir:
@@ -422,7 +425,7 @@ class ConfluenceChain:
                     # log.debug(f"Segment {self.current_segment_idx} Flipped: target={target_direction} (root={self.root_direction})")
 
             valid_transition = True
-            if DIRECTION_MODE == "strict":
+            if backtest_context["DIRECTION_MODE"] == "strict":
                 # Check if this segment's wrappers allow ignoring direction
                 should_match = any(not s.ignore_direction for s in current_segment)
                 if should_match and direction != target_direction:
@@ -457,7 +460,7 @@ class ConfluenceChain:
                 if all(r is not None for r in first_results):
                     # Check direction for repeat reset
                     first_dir = first_results[0]["side"]
-                    if DIRECTION_MODE == "open" or first_dir == self.root_direction:
+                    if backtest_context["DIRECTION_MODE"] == "open" or first_dir == self.root_direction:
                         self.proximity_timer = PROXIMITY_LIMIT
                         # Also reset to waiting for segment 1 (index 1)
                         self.current_segment_idx = 1
@@ -473,9 +476,8 @@ def parse_confluence_command(command: str):
     Parses a string like "A + B -> C -> D + E" or "A B -> C" into segments.
     Also handles "~" and "open".
     """
-    global DIRECTION_MODE
     if command.endswith(" open"):
-        DIRECTION_MODE = "open"
+        backtest_context["DIRECTION_MODE"] = "open"
         command = command[:-5].strip()
 
     # Split by "->" for sequential (to avoid shell redirection conflict with ">")
@@ -594,7 +596,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         engine.books[sym] = OrderBook(sym)
 
     # Load candles from DB within the specified range
-    candles = db.get_candles_in_range(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
+    candles = db.get_candles_in_range(asset, tf, backtest_context["START_DATE"].timestamp(), backtest_context["END_DATE"].timestamp())
     if not candles:
         return None
 
@@ -616,13 +618,13 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         sim.confluence_history[sym] = {t: [] for t in ["15m", "1H", "4H", "1D", "1W"]}
         asset_history[sym] = {}
         for t in relevant_tfs:
-            c_data = db.get_candles_in_range(sym, t, START_DATE.timestamp() - history_sec, END_DATE.timestamp())
+            c_data = db.get_candles_in_range(sym, t, backtest_context["START_DATE"].timestamp() - history_sec, backtest_context["END_DATE"].timestamp())
             data = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v} for ts, o, h, l, cl, v in c_data]
             asset_history[sym][t] = data
 
             # Pre-populate simulator with history UP TO START_DATE (fully closed candles only)
             for c in data:
-                if c['ts'] + TF_SECONDS[t] <= START_DATE.timestamp():
+                if c['ts'] + TF_SECONDS[t] <= backtest_context["START_DATE"].timestamp():
                     sim.ohlcv[sym][t].append(c)
                     if t in sim.confluence_history[sym]:
                         sim.confluence_history[sym][t].append(c['c'])
@@ -633,7 +635,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     full_history = asset_history[asset][tf]
     start_idx = 0
     for i, c in enumerate(full_history):
-        if c['ts'] >= START_DATE.timestamp():
+        if c['ts'] >= backtest_context["START_DATE"].timestamp():
             start_idx = i
             break
 
@@ -682,7 +684,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     # Advance pointers to where we pre-populated
     for sym in [asset, BTC_SYMBOL]:
         for t in relevant_tfs:
-            while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] + TF_SECONDS[t] <= START_DATE.timestamp():
+            while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] + TF_SECONDS[t] <= backtest_context["START_DATE"].timestamp():
                 pointers[sym][t] += 1
 
     # Remove artificial latency for backtests
@@ -697,7 +699,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
         for i in range(start_idx, len(full_history)):
             c = full_history[i]
             import tools.logger
-            tools.logger.VIRTUAL_TIME = c['ts']
+            tools.logger.VIRTUAL_TIME.set(c['ts'])
 
             # Periodic Heartbeat in Backtest Console Output based on real elapsed time
             now_real = time.time()
@@ -889,7 +891,7 @@ async def run_backtest(chain, db: Database, client: BitGetClient, asset: str, tf
     avg_roe = (ss["pnl"] / total_margin * 100) if total_margin > 0 else 0
 
     import tools.logger
-    tools.logger.VIRTUAL_TIME = None
+    tools.logger.VIRTUAL_TIME.set(None)
 
     return {
         "asset": asset,
@@ -929,7 +931,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     # Load candles for all assets from DB within the specified range
     asset_candles = {}
     for asset in assets:
-        candles = db.get_candles_in_range(asset, tf, START_DATE.timestamp(), END_DATE.timestamp())
+        candles = db.get_candles_in_range(asset, tf, backtest_context["START_DATE"].timestamp(), backtest_context["END_DATE"].timestamp())
         if candles:
             asset_candles[asset] = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v} for ts, o, h, l, cl, v in candles]
 
@@ -1009,13 +1011,13 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
         sim.confluence_history[sym] = {t: [] for t in ["15m", "1H", "4H", "1D", "1W"]}
         asset_history[sym] = {}
         for t in relevant_tfs:
-            c_data = db.get_candles_in_range(sym, t, START_DATE.timestamp() - history_sec, END_DATE.timestamp())
+            c_data = db.get_candles_in_range(sym, t, backtest_context["START_DATE"].timestamp() - history_sec, backtest_context["END_DATE"].timestamp())
             data = [{"ts": ts, "o": o, "h": h, "l": l, "c": cl, "v": v} for ts, o, h, l, cl, v in c_data]
             asset_history[sym][t] = data
 
             # Pre-populate simulator with history UP TO START_DATE
             for c in data:
-                if c['ts'] + TF_SECONDS[t] <= START_DATE.timestamp():
+                if c['ts'] + TF_SECONDS[t] <= backtest_context["START_DATE"].timestamp():
                     sim.ohlcv[sym][t].append(c)
                     if t in sim.confluence_history[sym]:
                         sim.confluence_history[sym][t].append(c['c'])
@@ -1064,7 +1066,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
     # Advance pointers to where we pre-populated
     for sym in assets + [BTC_SYMBOL]:
         for t in relevant_tfs:
-            while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] + TF_SECONDS[t] <= START_DATE.timestamp():
+            while pointers[sym][t] < len(asset_history[sym][t]) and asset_history[sym][t][pointers[sym][t]]['ts'] + TF_SECONDS[t] <= backtest_context["START_DATE"].timestamp():
                 pointers[sym][t] += 1
 
     progress = Progress(len(timeline), label="BT Portfolio")
@@ -1081,7 +1083,7 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
         # Master timeline loop
         for step_idx, current_ts in enumerate(timeline):
             import tools.logger
-            tools.logger.VIRTUAL_TIME = current_ts
+            tools.logger.VIRTUAL_TIME.set(current_ts)
 
             # Periodic Heartbeat in Backtest Console Output based on real elapsed time
             now_real = time.time()
@@ -1291,12 +1293,12 @@ async def run_backtest_portfolio(chain, db: Database, client: BitGetClient, asse
         })
 
     import tools.logger
-    tools.logger.VIRTUAL_TIME = None
+    tools.logger.VIRTUAL_TIME.set(None)
 
     return results
 
 def print_results(results):
-    date_range = f"{START_DATE.strftime('%Y-%m-%d')} to {END_DATE.strftime('%Y-%m-%d')}"
+    date_range = f"{backtest_context['START_DATE'].strftime('%Y-%m-%d')} to {backtest_context['END_DATE'].strftime('%Y-%m-%d')}"
     print("\n" + "="*165)
     print(f"BACKTEST RESULTS")
     print("-" * 165)
@@ -1419,11 +1421,9 @@ def get_required_timeframes(chain: ConfluenceChain) -> List[str]:
     return list(tfs)
 
 async def main():
-    global START_DATE, END_DATE
-
     # Ensure they are set to defaults at start of main
-    START_DATE = DEFAULT_START_DATE
-    END_DATE = DEFAULT_END_DATE
+    backtest_context["START_DATE"] = DEFAULT_START_DATE
+    backtest_context["END_DATE"] = DEFAULT_END_DATE
 
     if len(sys.argv) < 2:
         print("Usage: python backtest.py [strategy_query] [optional: START_DATE (YYYY-MM-DD)] [optional: END_DATE (YYYY-MM-DD)]")
@@ -1452,15 +1452,15 @@ async def main():
                 try:
                     import ast
                     overrides[k] = ast.literal_eval(v)
-                except:
+                except (ValueError, SyntaxError, TypeError):
                     overrides[k] = v
         else:
             query_parts.append(arg)
 
     if len(dates_found) >= 1:
-        START_DATE = datetime.strptime(dates_found[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        backtest_context["START_DATE"] = datetime.strptime(dates_found[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
     if len(dates_found) >= 2:
-        END_DATE = datetime.strptime(dates_found[1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        backtest_context["END_DATE"] = datetime.strptime(dates_found[1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     if not query_parts:
         print("Error: No strategy segments provided.")

@@ -90,7 +90,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                     anchors = ast.literal_eval(anchors_raw)
                 else:
                     anchors = anchors_raw
-            except:
+            except (ValueError, SyntaxError, TypeError):
                 anchors = []
 
         # Check for NEW expansion candle [CACHED]
@@ -174,7 +174,7 @@ class RangeSweepATRStrategy(JBaseStrategy):
                         anchor = ast.literal_eval(anchor_raw)
                     else:
                         anchor = anchor_raw
-                except:
+                except (ValueError, SyntaxError, TypeError):
                     anchor = None
 
         if not anchor: return None

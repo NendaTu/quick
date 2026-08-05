@@ -426,6 +426,13 @@ class BitGetWSClient:
 
     async def run(self):
         self._session = aiohttp.ClientSession()
+        try:
+            await self._run_loop()
+        finally:
+            if self._session and not self._session.closed:
+                await self._session.close()
+
+    async def _run_loop(self):
         while not self.stop_event.is_set():
             try:
                 async with self._session.ws_connect(self.url) as ws:
@@ -509,9 +516,6 @@ class BitGetWSClient:
                 if not self.stop_event.is_set():
                     log.error(f"WS Error: {e}")
                     await asyncio.sleep(5)
-
-        if not self._session.closed:
-            await self._session.close()
 
     async def _heartbeat(self, ws):
         try:

@@ -6,7 +6,6 @@
 import asyncio, time, logging, math, random
 from typing import Dict, List, Set, Tuple, Optional, Any
 import config
-from config import *
 from orderbook import SimulatedOrderBook, OrderBook
 import ta.indicators.rsi as rsi_ind
 import ta.indicators.atr as atr_ind

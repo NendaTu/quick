@@ -10,10 +10,14 @@ import time
 import logging
 import threading
 import queue
-from typing import Dict
+from typing import Dict, Any, Optional, Tuple, List
 from config import TF_SECONDS
 
 log = logging.getLogger("scalper.database")
+
+# --- Named Constants replacing Magic Numbers (P3-15) ---
+CANDLE_TOLERANCE_COUNT = 60
+CANDLE_GAP_TOLERANCE = 5
 
 class Database:
     def __init__(self, db_path=None):
@@ -34,20 +38,21 @@ class Database:
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
 
-        self._conn = None
+        self._local = threading.local()
         self._init_db()
         self.write_queue = queue.Queue()
         self.stop_event = threading.Event()
-        self.worker_thread = threading.Thread(target=self._write_worker, daemon=True)
+        self.worker_thread = threading.Thread(target=self._run_async_worker, daemon=True)
         self.worker_thread.start()
 
     @property
     def connection(self):
-        if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path, timeout=30)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-        return self._conn
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = conn
+        return self._local.conn
 
     def _init_db(self):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
@@ -159,7 +164,23 @@ class Database:
             self.session_id = cursor.lastrowid
             conn.commit()
 
-    def _write_worker(self):
+    def _run_async_worker(self):
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._write_worker_async())
+        finally:
+            loop.close()
+
+    def _get_from_queue(self):
+        try:
+            return self.write_queue.get(timeout=0.5)
+        except queue.Empty:
+            return None
+
+    async def _write_worker_async(self):
+        import asyncio
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.execute("PRAGMA busy_timeout=10000")
         while not self.stop_event.is_set():
@@ -167,15 +188,21 @@ class Database:
                 # Batch processing
                 items = []
                 try:
-                    # Wait for first item
-                    items.append(self.write_queue.get(timeout=0.5))
-                    # Try to grab more for batching
-                    for _ in range(1000):
-                        items.append(self.write_queue.get_nowait())
-                except (queue.Empty):
+                    # Wait for first item asynchronously using run_in_executor
+                    item = await asyncio.get_running_loop().run_in_executor(None, self._get_from_queue)
+                    if item is not None:
+                        items.append(item)
+                        # Try to grab more for batching (non-blocking)
+                        for _ in range(1000):
+                            try:
+                                items.append(self.write_queue.get_nowait())
+                            except queue.Empty:
+                                break
+                except Exception:
                     pass
 
                 if not items:
+                    await asyncio.sleep(0.1)
                     continue
 
                 cursor = conn.cursor()
@@ -185,7 +212,7 @@ class Database:
                             INSERT OR REPLACE INTO asset_metadata (symbol, timeframe, earliest_ts, is_exhausted)
                             VALUES (?, ?, ?, ?)
                         """, data)
-                    if type == "tick":
+                    elif type == "tick":
                         cursor.execute(
                             "INSERT INTO ticks (symbol, timestamp, price, side, size) VALUES (?, ?, ?, ?, ?)",
                             data
@@ -216,6 +243,8 @@ class Database:
                         cursor.execute("SELECT id FROM sessions ORDER BY start_time DESC LIMIT ?", (keep_sessions,))
                         recent_ids = [row[0] for row in cursor.fetchall()]
                         if recent_ids:
+                            if not all(isinstance(rid, int) for rid in recent_ids):
+                                raise ValueError("All session IDs must be integers for dynamic SQL safety")
                             placeholders = ",".join("?" * len(recent_ids))
                             cursor.execute(f"DELETE FROM logs WHERE session_id NOT IN ({placeholders})", recent_ids)
                             cursor.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", recent_ids)
@@ -230,59 +259,59 @@ class Database:
                     self.write_queue.task_done()
             except Exception as e:
                 log.error(f"DB Write Error: {e}")
-                time.sleep(1)
+                await asyncio.sleep(1.0)
         conn.close()
 
-    def save_tick(self, symbol, timestamp, price, side, size):
+    def save_tick(self, symbol: str, timestamp: float, price: float, side: str, size: float) -> None:
         self.write_queue.put(("tick", (symbol, timestamp, price, side, size)))
 
-    def save_candle(self, symbol, timeframe, timestamp, open, high, low, close, volume):
+    def save_candle(self, symbol: str, timeframe: str, timestamp: float, open: float, high: float, low: float, close: float, volume: float) -> None:
         self.write_queue.put(("candle", (symbol, timeframe, timestamp, open, high, low, close, volume)))
 
-    def save_log(self, level, logger_name, message):
+    def save_log(self, level: str, logger_name: str, message: str) -> None:
         self.write_queue.put(("log", (self.session_id, time.time(), level, logger_name, message)))
 
-    def save_signal(self, symbol, side, price, data_dict):
+    def save_signal(self, symbol: str, side: str, price: float, data_dict: dict) -> None:
         import json
         self.write_queue.put(("signal", (self.session_id, time.time(), symbol, side, price, json.dumps(data_dict))))
 
-    def save_weight(self, indicator, weight):
+    def save_weight(self, indicator: str, weight: float) -> None:
         conn = self.connection
         conn.execute("INSERT OR REPLACE INTO model_weights (indicator, weight) VALUES (?, ?)", (indicator, weight))
         conn.commit()
 
-    def get_weights(self):
+    def get_weights(self) -> Dict[str, float]:
         cursor = self.connection.execute("SELECT indicator, weight FROM model_weights")
         return dict(cursor.fetchall())
 
-    def save_strategy_state(self, strategy_id, key, value):
+    def save_strategy_state(self, strategy_id: str, key: str, value: Any) -> None:
         conn = self.connection
         conn.execute("INSERT OR REPLACE INTO strategy_state (strategy_id, key, value) VALUES (?, ?, ?)", (strategy_id, key, str(value)))
         conn.commit()
 
-    def get_strategy_state(self, strategy_id, key):
+    def get_strategy_state(self, strategy_id: str, key: str) -> Optional[str]:
         cursor = self.connection.execute("SELECT value FROM strategy_state WHERE strategy_id = ? AND key = ?", (strategy_id, key))
         row = cursor.fetchone()
         return row[0] if row else None
 
-    def save_trade(self, strategy_id, symbol, side, entry_ts, entry_price, qty, exit_ts=None, exit_price=None, pnl=None, exit_type=None):
+    def save_trade(self, strategy_id: str, symbol: str, side: str, entry_ts: float, entry_price: float, qty: float, exit_ts: Optional[float] = None, exit_price: Optional[float] = None, pnl: Optional[float] = None, exit_type: Optional[str] = None) -> None:
         self.write_queue.put(("trade", (self.session_id, strategy_id, symbol, side, entry_ts, entry_price, qty, exit_ts, exit_price, pnl, exit_type)))
 
-    def save_discovered_assets(self, assets_list):
+    def save_discovered_assets(self, assets_list: List[str]) -> None:
         assets_str = ",".join(assets_list)
         conn = self.connection
         conn.execute("DELETE FROM discovered_assets")
         conn.execute("INSERT INTO discovered_assets (timestamp, assets) VALUES (?, ?)", (time.time(), assets_str))
         conn.commit()
 
-    def get_discovered_assets(self):
+    def get_discovered_assets(self) -> Tuple[float, List[str]]:
         cursor = self.connection.execute("SELECT timestamp, assets FROM discovered_assets LIMIT 1")
         row = cursor.fetchone()
         if row:
             return row[0], row[1].split(",")
-        return 0, []
+        return 0.0, []
 
-    def get_recent_ticks(self, symbol, limit=1000):
+    def get_recent_ticks(self, symbol: str, limit: int = 1000) -> List[tuple]:
         cursor = self.connection.execute(
             "SELECT timestamp, price, side, size FROM ticks WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?",
             (symbol, limit)
@@ -355,15 +384,15 @@ class Database:
             # deliberate decision rather than changing it silently.
 
             # End must be covered (60 candles' worth of tolerance, see note above)
-            if s['max'] < end_ts - step * 60: return True
+            if s['max'] < end_ts - step * CANDLE_TOLERANCE_COUNT: return True
 
             # If not exhausted, start must be covered (60 candles' worth of tolerance, see note above)
-            if not is_exhausted and s['min'] > start_ts + step * 60: return True
+            if not is_exhausted and s['min'] > start_ts + step * CANDLE_TOLERANCE_COUNT: return True
 
             # Check internal continuity based on what WE HAVE
             # We allow 5 candles tolerance for minor exchange maintenance
             expected_total = int((s['max'] - s['min']) / step) + 1
-            if s['count'] < expected_total - 5:
+            if s['count'] < expected_total - CANDLE_GAP_TOLERANCE:
                 return True # Internal gaps found in cache
 
             # If start is covered (or exhausted) and end is covered and count matches, it's complete
@@ -390,12 +419,12 @@ class Database:
         count, first, last = res
 
         # Coverage check
-        if last < end_ts - step * 60: return True
-        if not is_exhausted and first > start_ts + step * 60: return True
+        if last < end_ts - step * CANDLE_TOLERANCE_COUNT: return True
+        if not is_exhausted and first > start_ts + step * CANDLE_TOLERANCE_COUNT: return True
 
         # Continuity Check
         expected_in_range = int((last - first) / step) + 1
-        if count < expected_in_range - 5:
+        if count < expected_in_range - CANDLE_GAP_TOLERANCE:
             return True
 
         return False
@@ -509,5 +538,6 @@ class Database:
     def stop(self):
         self.stop_event.set()
         self.worker_thread.join()
-        if self._conn:
-            self._conn.close()
+        if hasattr(self._local, "conn") and self._local.conn:
+            self._local.conn.close()
+            self._local.conn = None

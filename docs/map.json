@@ -1,577 +1,582 @@
 [
   {
     "path": "AGENTS-old.md",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/AGENTS-old.md",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/AGENTS-old.md",
     "description": "AGENTS.md \u2014 Remediation & Modularization Directives for `quick`"
   },
   {
     "path": "AGENTS-old_2.md",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/AGENTS-old_2.md",
-    "description": "AGENTS.md \u2014 Round 2: Remediation & Modularization Directives for `quick`"
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/AGENTS-old_2.md",
+    "description": "AGENTS.md \u2014 Remediation & Modularization Directives for `quick` (Round 2)"
   },
   {
     "path": "AGENTS-old_3.md",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/AGENTS-old_3.md",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/AGENTS-old_3.md",
     "description": "AGENTS.md \u2014 Round 3: Remediation & Modularization Directives for `quick`"
   },
   {
     "path": "backtest",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/backtest",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/backtest",
     "description": "Executable shell launcher for the python backtesting system."
   },
   {
     "path": "backtest.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/backtest.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/backtest.py",
     "description": "Backtesting execution coordinator with multi-variant and timeline support."
   },
   {
     "path": "bitget_client.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/bitget_client.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/bitget_client.py",
     "description": "REST and WebSocket API client wrappers for the Bitget exchange interface."
   },
   {
     "path": "compare",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/compare",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/compare",
     "description": "Executable shell launcher for the multi-variant strategy comparison system."
   },
   {
     "path": "compare.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/compare.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/compare.py",
     "description": "Multi-variant orchestrator and live stream coordinator for real-time A/B testing of configurations."
   },
   {
     "path": "config/__init__.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/config/__init__.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/config/__init__.py",
     "description": "Global application configuration package entrypoint."
   },
   {
     "path": "config/settings.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/config/settings.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/config/settings.py",
     "description": "Typed, validated settings model for application parameters."
   },
   {
     "path": "database.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/database.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/database.py",
     "description": "Persistent SQLite database storage interface for logs, candles, and positions."
   },
   {
     "path": "engine/__init__.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/__init__.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/__init__.py",
     "description": "Package initialization file for the trading engine orchestration layer."
   },
   {
     "path": "engine/base.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/base.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/base.py",
     "description": "Abstract Base Classes defining execution standards for exchange drivers and trading strategies."
   },
   {
     "path": "engine/core.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/core.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/core.py",
     "description": "Unified trading engine core and modular composition manager."
   },
   {
     "path": "engine/entry.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/entry.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/entry.py",
     "description": "Unified Signal Router executing orders across paper and live exchange interfaces."
   },
   {
     "path": "engine/exchanges/__init__.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/__init__.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/__init__.py",
     "description": "Exchange interface driver module exporter."
   },
   {
     "path": "engine/exchanges/bingx.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/bingx.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/bingx.py",
     "description": "Placeholder exchange driver class for the BingX exchange."
   },
   {
     "path": "engine/exchanges/bitget.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/bitget.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/bitget.py",
     "description": "Production-ready Bitget V2 API exchange integration driver."
   },
   {
     "path": "engine/exchanges/bitunix.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/bitunix.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/bitunix.py",
     "description": "Placeholder exchange driver class for the BitUnix exchange."
   },
   {
     "path": "engine/exchanges/blofin.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/blofin.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/blofin.py",
     "description": "Placeholder exchange driver class for the Blofin exchange."
   },
   {
     "path": "engine/exchanges/coinex.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/coinex.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/coinex.py",
     "description": "Placeholder exchange driver class for the CoinEx exchange."
   },
   {
     "path": "engine/exchanges/dydx.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/dydx.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/dydx.py",
     "description": "Placeholder exchange driver class for the dYdX exchange."
   },
   {
     "path": "engine/exchanges/hyperliquid.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/hyperliquid.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/hyperliquid.py",
     "description": "Placeholder exchange driver class for the Hyperliquid exchange."
   },
   {
     "path": "engine/exchanges/kucoin.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/kucoin.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/kucoin.py",
     "description": "Placeholder exchange driver class for the KuCoin exchange."
   },
   {
     "path": "engine/exchanges/margex.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/margex.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/margex.py",
     "description": "Placeholder exchange driver class for the Margex exchange."
   },
   {
     "path": "engine/exchanges/mexc.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/exchanges/mexc.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/exchanges/mexc.py",
     "description": "Placeholder exchange driver class for the MEXC exchange."
   },
   {
     "path": "engine/loop.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/loop.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/loop.py",
     "description": "Specialized orchestration engine managing active asynchronously running trading routines."
   },
   {
     "path": "engine/positions.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/positions.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/positions.py",
     "description": "Single-concern bookkeeping ledger for open and pending positions."
   },
   {
     "path": "engine/reconciliation.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/reconciliation.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/reconciliation.py",
     "description": "Production-grade exchange state reconciliation subsystem."
   },
   {
     "path": "engine/regimes.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/regimes.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/regimes.py",
     "description": "Specialized classifier categorizing assets by volatility regime."
   },
   {
     "path": "engine/reporting.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/reporting.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/reporting.py",
     "description": "Specialized stats tracking and performance reporting subsystem."
   },
   {
     "path": "engine/risk.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/risk.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/risk.py",
     "description": "Specialized risk management and trading eligibility gatekeeper."
   },
   {
     "path": "engine/signal.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/signal.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/signal.py",
     "description": "Typed Signal and OrderRequest definitions for execution payload standardization."
   },
   {
     "path": "engine/simulation.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/engine/simulation.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/engine/simulation.py",
     "description": "Wrapper class integrating the mock trading simulator into the unified exchange interface."
   },
   {
     "path": "main",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/main",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/main",
     "description": "Executable shell launcher for the live/demo trading bot execution engine."
   },
   {
     "path": "main.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/main.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/main.py",
     "description": "Main entry point for starting the live or demo trading robot."
   },
   {
     "path": "models.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/models.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/models.py",
     "description": "Reinforcement learning trading models and feature-based prediction engines."
   },
   {
     "path": "orderbook.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/orderbook.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/orderbook.py",
     "description": "Memory-efficient order book mirror and simulated order book generator."
   },
   {
     "path": "simulator.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/simulator.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/simulator.py",
     "description": "High-fidelity paper trading simulation engine with multi-timeframe order matching."
   },
   {
     "path": "strategies/__init__.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/strategies/__init__.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/strategies/__init__.py",
     "description": "Package initializer for the custom trading strategies layer."
   },
   {
     "path": "strategies/base_strategy.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/strategies/base_strategy.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/strategies/base_strategy.py",
     "description": "Abstract framework class for authoring backtestable multi-timeframe strategies."
   },
   {
     "path": "strategies/built/levelFinder.1.agt.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/strategies/built/levelFinder.1.agt.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/strategies/built/levelFinder.1.agt.py",
     "description": "Multi-timeframe order block level finder and trade executor."
   },
   {
     "path": "strategies/scalper.1.jules.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/strategies/scalper.1.jules.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/strategies/scalper.1.jules.py",
     "description": "Jules high-frequency compounding scalper strategy."
   },
   {
     "path": "strategies/sweeps/killzone/killzone_sweep.1.mustafa.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/strategies/sweeps/killzone/killzone_sweep.1.mustafa.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/strategies/sweeps/killzone/killzone_sweep.1.mustafa.py",
     "description": "Killzone session liquidity sweep reversal strategy."
   },
   {
     "path": "strategies/sweeps/killzone/killzone_sweep_overnight.1.mustafa.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/strategies/sweeps/killzone/killzone_sweep_overnight.1.mustafa.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/strategies/sweeps/killzone/killzone_sweep_overnight.1.mustafa.py",
     "description": "Overnight session liquidity sweep reversal strategy."
   },
   {
     "path": "strategies/sweeps/range/range_sweep_ATR.1.mustafa.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/strategies/sweeps/range/range_sweep_ATR.1.mustafa.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/strategies/sweeps/range/range_sweep_ATR.1.mustafa.py",
     "description": "Volatility-adjusted range sweep strategy."
   },
   {
     "path": "ta/__init__.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/__init__.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/__init__.py",
     "description": "Initializer file for technical analysis package."
   },
   {
     "path": "ta/candles/engulfing.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/candles/engulfing.py",
-    "description": "Stateless pattern recognizer for body-only engulfing candles."
-  },
-  {
-    "path": "ta/candles/engulfing_total.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/candles/engulfing_total.py",
-    "description": "Stateless pattern recognizer for total candle engulfing."
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/candles/engulfing.py",
+    "description": "Stateless pattern recognizer for engulfing candles, covering"
   },
   {
     "path": "ta/candles/sentiment.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/candles/sentiment.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/candles/sentiment.py",
     "description": "Stateless pattern recognizer analyzing body location inside candle range."
   },
   {
     "path": "ta/features.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/features.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/features.py",
     "description": "Stateless feature extraction module."
   },
   {
+    "path": "ta/helpers/overlap.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/helpers/overlap.py",
+    "description": "Single-concern range-containment check shared by candle"
+  },
+  {
+    "path": "ta/helpers/params.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/helpers/params.py",
+    "description": "Single-concern layered parameter resolution for ta/ modules."
+  },
+  {
     "path": "ta/indicators/adx.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/adx.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/adx.py",
     "description": "Average Directional Index (ADX) trend strength calculator."
   },
   {
     "path": "ta/indicators/atr.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/atr.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/atr.py",
     "description": "Average True Range (ATR) volatility series calculator."
   },
   {
     "path": "ta/indicators/book_delta.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/book_delta.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/book_delta.py",
     "description": "Order book quantity volume imbalance delta calculator."
   },
   {
     "path": "ta/indicators/cvd.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/cvd.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/cvd.py",
     "description": "Cumulative Volume Delta (CVD) rolling series calculator."
   },
   {
     "path": "ta/indicators/ema.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/ema.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/ema.py",
     "description": "Exponential Moving Average (EMA) mathematical indicator."
   },
   {
     "path": "ta/indicators/flow.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/flow.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/flow.py",
     "description": "Order Flow and aggressive trade pressure analyzer."
   },
   {
     "path": "ta/indicators/macd.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/macd.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/macd.py",
     "description": "Moving Average Convergence Divergence (MACD) oscillator."
   },
   {
     "path": "ta/indicators/rsi.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/rsi.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/rsi.py",
     "description": "Relative Strength Index (RSI) momentum oscillator."
   },
   {
     "path": "ta/indicators/supertrend.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/supertrend.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/supertrend.py",
     "description": "Average True Range (ATR) based trailing Supertrend calculator."
   },
   {
     "path": "ta/indicators/vd.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/indicators/vd.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/indicators/vd.py",
     "description": "Volume Delta single-period buyer/seller velocity calculator."
   },
   {
     "path": "ta/levels.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/levels.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/levels.py",
     "description": "Technical support and resistance horizontal price level locator."
   },
   {
     "path": "ta/patterns/__init__.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/__init__.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/__init__.py",
     "description": "Package initializer for Smart Money Concepts (SMC) technical patterns."
   },
   {
     "path": "ta/patterns/breaker.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/breaker.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/breaker.py",
     "description": "Failed Order Block (Breaker Block) stateless pattern recognizer."
   },
   {
     "path": "ta/patterns/drt.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/drt.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/drt.py",
     "description": "Directional Trend (DRT) linear regression slope calculator."
   },
   {
     "path": "ta/patterns/fvg.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/fvg.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/fvg.py",
     "description": "Fair Value Gap (FVG) stateless recognition module."
   },
   {
     "path": "ta/patterns/idm.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/idm.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/idm.py",
     "description": "Smart Money Concept Inducement (IDM) stateless recognizer."
   },
   {
     "path": "ta/patterns/liquidity.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/liquidity.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/liquidity.py",
     "description": "Buy-Side (BSL) and Sell-Side (SSL) liquidity pool mapper."
   },
   {
     "path": "ta/patterns/momentum.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/momentum.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/momentum.py",
     "description": "Short-term volume surges and delivery speed shifts detector."
   },
   {
     "path": "ta/patterns/ob.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/ob.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/ob.py",
     "description": "Stateless Order Block (OB) identification module."
   },
   {
     "path": "ta/patterns/phases.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/phases.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/phases.py",
     "description": "Market consolidation and expansion phases recognizer."
   },
   {
     "path": "ta/patterns/poi.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/poi.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/poi.py",
     "description": "High-probability Point of Interest (POI) confluence engine."
   },
   {
     "path": "ta/patterns/sessions.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/sessions.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/sessions.py",
     "description": "Trading session boundaries and horizontal extreme tracker."
   },
   {
     "path": "ta/patterns/spread.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/spread.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/spread.py",
     "description": "Statistical Arbitrage (Spread Divergence) detector."
   },
   {
     "path": "ta/patterns/sr.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/sr.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/sr.py",
     "description": "Horizontal Support and Resistance locator."
   },
   {
     "path": "ta/patterns/structure.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/structure.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/structure.py",
     "description": "Market Structure breaks (BOS, MSS, CHOCH) tracker."
   },
   {
     "path": "ta/patterns/sweep.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/sweep.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/sweep.py",
     "description": "Liquidity sweep and wick stop-hunt detector."
   },
   {
     "path": "ta/patterns/sweep_reversal.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/sweep_reversal.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/sweep_reversal.py",
     "description": "Session Sweep Reversal signal calculator."
   },
   {
     "path": "ta/patterns/swings.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/swings.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/swings.py",
     "description": "Local Swing High and Swing Low peak extreme detector."
   },
   {
     "path": "ta/patterns/trend.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/trend.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/trend.py",
     "description": "Trend direction and market bias recognition system."
   },
   {
     "path": "ta/patterns/volume_profile.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/patterns/volume_profile.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/patterns/volume_profile.py",
     "description": "Intraday volume profiling and POC finder."
   },
   {
     "path": "ta/scoring.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/scoring.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/scoring.py",
     "description": "Unified Scoring Engine evaluating and weighting technical metrics."
   },
   {
     "path": "ta/strategy_interface.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/strategy_interface.py",
-    "description": "Abstract specification interface for simple technical strategies."
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/strategy_interface.py",
+    "description": "Abstract specification interface for stateless technical"
   },
   {
     "path": "ta/utils.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/ta/utils.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/ta/utils.py",
     "description": "General math, rolling window, and localized timezone converters."
   },
   {
     "path": "tests/test_exchange_sync.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_exchange_sync.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_exchange_sync.py",
     "description": "Dedicated unit tests for the ExchangeSync state reconciliation subsystem."
   },
   {
     "path": "tests/test_levels.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_levels.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_levels.py",
     "description": "Regression tests for horizontal support/resistance level clustering."
   },
   {
     "path": "tests/test_ob_breaker.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_ob_breaker.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_ob_breaker.py",
     "description": "Tests stateless pattern-discovery for order blocks and breaker blocks."
   },
   {
     "path": "tests/test_order_pnl_reconciliation.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_order_pnl_reconciliation.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_order_pnl_reconciliation.py",
     "description": "Reconciles math behind gross wins, transaction fees, and net profits."
   },
   {
     "path": "tests/test_remediation.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_remediation.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_remediation.py",
     "description": "Unit and regression tests validating the P0 correctness fixes."
   },
   {
     "path": "tests/test_scoring.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_scoring.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_scoring.py",
     "description": "Validates that ScoringEngine score distributions align with weights and thresholds."
   },
   {
     "path": "tests/test_smoke_run.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_smoke_run.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_smoke_run.py",
     "description": "Codified paper-mode smoke test for the ScalperStrategy."
   },
   {
     "path": "tests/test_symbols.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_symbols.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_symbols.py",
     "description": "Verifies Bitget API asset discovery and caching features."
   },
   {
     "path": "tests/test_vd_cvd.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tests/test_vd_cvd.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tests/test_vd_cvd.py",
     "description": "Checks Volume Delta and Cumulative Volume Delta numerical boundaries."
   },
   {
     "path": "tools/add_headers_auto.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/add_headers_auto.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/add_headers_auto.py",
     "description": "Automated 3-part header comment applier."
   },
   {
     "path": "tools/analyze_btc_session.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/analyze_btc_session.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/analyze_btc_session.py",
     "description": "Analyzes Bitcoin price correlation with session-specific trading volumes."
   },
   {
     "path": "tools/analyze_data.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/analyze_data.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/analyze_data.py",
     "description": "Visualizes and logs metrics of historical candles."
   },
   {
     "path": "tools/analyze_data_v2.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/analyze_data_v2.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/analyze_data_v2.py",
     "description": "Secondary data visualizer for technical indicator telemetry."
   },
   {
     "path": "tools/analyze_latest_session.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/analyze_latest_session.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/analyze_latest_session.py",
     "description": "Summarizes trading stats and order logs from the most recent run."
   },
   {
     "path": "tools/asset_discovery.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/asset_discovery.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/asset_discovery.py",
     "description": "Centralized asset discovery and universe selection helper."
   },
   {
     "path": "tools/check_api.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/check_api.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/check_api.py",
     "description": "Verifies exchange connectivity and API REST credentials."
   },
   {
     "path": "tools/comprehensive_analysis.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/comprehensive_analysis.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/comprehensive_analysis.py",
     "description": "Consolidated trade history log metrics analyzer."
   },
   {
     "path": "tools/debug_atr_expansion.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/debug_atr_expansion.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/debug_atr_expansion.py",
     "description": "Tests and debugs ATR-based volatility expansion capping."
   },
   {
     "path": "tools/downloader.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/downloader.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/downloader.py",
     "description": "Historical OHLCV data downloader from Bitget REST endpoints."
   },
   {
     "path": "tools/extract_docs.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/extract_docs.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/extract_docs.py",
     "description": "Internal utility script to pull and print existing docstrings from Python modules."
   },
   {
     "path": "tools/generate_map.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/generate_map.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/generate_map.py",
     "description": "Repository map JSON generator."
   },
   {
     "path": "tools/list_targets.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/list_targets.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/list_targets.py",
     "description": "Internal utility script to count and list all files in scope for metadata headers."
   },
   {
     "path": "tools/logger.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/logger.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/logger.py",
     "description": "Implements dual console/file logging pipelines with timezone and virtual timestamp prefixes."
   },
   {
     "path": "tools/optimize_btc_thresholds.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/optimize_btc_thresholds.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/optimize_btc_thresholds.py",
     "description": "Runs parameter grid-searches to identify optimal Bitcoin momentum threshold parameters."
   },
   {
     "path": "tools/publisher.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/publisher.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/publisher.py",
     "description": "Console Publisher for uniform application outputs."
   },
   {
     "path": "tools/trading_utils.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/trading_utils.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/trading_utils.py",
     "description": "Houses centralized calculations for order rounding, price precision, and net profit subtraction."
   },
   {
     "path": "tools/verify_headers.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/verify_headers.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/verify_headers.py",
     "description": "Validator verifying all target files contain correct 3-part headers."
   },
   {
     "path": "tools/verify_pnl_calculations.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/verify_pnl_calculations.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/verify_pnl_calculations.py",
     "description": "Double-checks compounding equity calculations after fee deductions."
   },
   {
     "path": "tools/verify_pnl_calculations_v2.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/verify_pnl_calculations_v2.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/verify_pnl_calculations_v2.py",
     "description": "Secondary tester validating backtest OCO fill arithmetic."
   },
   {
     "path": "tools/verify_pnl_calculations_v3.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/verify_pnl_calculations_v3.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/verify_pnl_calculations_v3.py",
     "description": "Tertiary validator ensuring simulator PnL calculations match live ledger results."
   },
   {
     "path": "tools/verify_rrr.py",
-    "raw_url": "https://raw.githubusercontent.com/NendaTu/quick/refs/heads/development/tools/verify_rrr.py",
+    "raw_url": "https://raw.githubusercontent.com/andrewgoodcode/quick-fork/refs/heads/development/tools/verify_rrr.py",
     "description": "Confirms risk-to-reward ratio targets and break-even stop moves function under slippage."
   }
 ]

@@ -104,7 +104,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                     day_ranges = ast.literal_eval(day_ranges_raw)
                 else:
                     day_ranges = day_ranges_raw
-            except:
+            except (ValueError, SyntaxError, TypeError):
                 day_ranges = []
 
         if day_range and not any(r['ts'] == day_range['ts'] for r in day_ranges):
@@ -124,7 +124,7 @@ class KillzoneSweepOvernightStrategy(JBaseStrategy):
                         day_range = ast.literal_eval(day_range_raw)
                     else:
                         day_range = day_range_raw
-                except:
+                except (ValueError, SyntaxError, TypeError):
                     pass
 
         # [REPAIR-20260708] Cooldown reset to allow multiple trades per session
