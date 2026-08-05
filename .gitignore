@@ -1,0 +1,1 @@
+Nothing needs to be added to .gitignore since only a text file (`test.txt`) was added, which doesn't match any of the patterns that should be ignored.
