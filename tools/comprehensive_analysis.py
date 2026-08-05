@@ -17,7 +17,7 @@ def parse_signal(msg):
 
         # Numeric values
         for key in ['drt', 'rsi', 'macd', 'ema', 'vol', 'equity', 'confidence']:
-            match = re.search(f'{key}=([\d.-]+)', msg)
+            match = re.search(rf'{key}=([\d.-]+)', msg)
             if match:
                 data[key] = float(match.group(1))
 

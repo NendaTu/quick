@@ -42,6 +42,12 @@ def load_strategy(strategy_path: str, simulator=None, model=None, overrides=None
 
     potential_dir = os.path.join("strategies", strategy_path)
 
+    # Path traversal validation to prevent loading files outside of allowed strategies directory (P3-16)
+    abs_potential_dir = os.path.abspath(potential_dir)
+    abs_strategies_dir = os.path.abspath("strategies")
+    if not abs_potential_dir.startswith(abs_strategies_dir):
+        raise ValueError(f"Strategy path traversal attempt blocked: {strategy_path}")
+
     # 1. Directory-based Discovery (Recursive Families)
     if os.path.isdir(potential_dir):
         strategies = []
@@ -117,8 +123,12 @@ async def main():
             try:
                 import ast
                 overrides[k] = ast.literal_eval(v)
-            except:
+            except (ValueError, SyntaxError, TypeError):
                 overrides[k] = v
+
+    from config import _settings
+    _settings.env.MODE = args.mode
+    _settings.env.validate_credentials()
 
     engine = Engine(mode=args.mode, config_overrides=overrides)
 

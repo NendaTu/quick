@@ -1,1 +1,22 @@
-Nothing needs to be added to .gitignore since only a text file (`test.txt`) was added, which doesn't match any of the patterns that should be ignored.
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.db-wal
+*.db-shm
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Logs and transient documents
+docs/temp/
+*.log

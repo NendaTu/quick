@@ -27,8 +27,7 @@ from dataclasses import dataclass
 # Ensure project root is in path
 sys.path.append(os.getcwd())
 
-from config import *
-from config import TF_SECONDS
+from config import BTC_SYMBOL, AVAILABLE_TIMEFRAMES, TF_SECONDS, INITIAL_EQUITY, ASSETS_COUNT, ASSET_OMITTED, ACTIVE_TIMEFRAME
 from engine.core import Engine
 from bitget_client import BitGetWSClient, BitGetClient, RateLimiter
 
@@ -141,11 +140,12 @@ class DataCoordinator:
         if "data" not in msg and msg.get("action") != "snapshot":
             return
 
+        import queue
         for q in self.queues:
             # Non-blocking put to avoid coordinator stalling
             try:
                 q.put_nowait(msg)
-            except:
+            except queue.Full:
                 pass
 
     async def run(self):
@@ -304,7 +304,7 @@ def parse_args() -> List[Variant]:
                 # Apply globally to Baseline
                 try:
                     variants[0].overrides[k] = ast.literal_eval(v)
-                except:
+                except (ValueError, SyntaxError):
                     pass
 
     if len(sys.argv) > 1:
@@ -319,7 +319,7 @@ def parse_args() -> List[Variant]:
                                 try:
                                     k, v = line.split("=", 1)
                                     overrides[k.strip()] = ast.literal_eval(v.split("#")[0].strip())
-                                except:
+                                except (ValueError, SyntaxError):
                                     pass
                     variants.append(Variant(id=f.replace(".py", ""), overrides=overrides, config_file=f))
         else:
@@ -460,12 +460,13 @@ async def main():
         while not stop_event.is_set():
             # Check for stats updates
             updated = False
+            import queue
             try:
                 while True:
                     s = stats_queue.get_nowait()
                     latest_stats[s["id"]] = s
                     updated = True
-            except:
+            except queue.Empty:
                 pass
 
             if updated:
@@ -487,10 +488,11 @@ async def main():
             coordinator.ws_client.stop()
 
         # 2. Signal variants to stop
+        import queue
         for q in queues:
             try:
                 q.put_nowait(None)
-            except:
+            except queue.Full:
                 pass
 
         # 3. Terminate processes
@@ -505,11 +507,12 @@ async def main():
                 p.kill()
 
         # 5. Final stats grab
+        import queue
         try:
             while True:
                 s = stats_queue.get_nowait()
                 latest_stats[s["id"]] = s
-        except:
+        except queue.Empty:
             pass
 
         print("\nFINAL COMPARISON RESULTS")

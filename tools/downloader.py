@@ -375,8 +375,6 @@ async def main():
                 f"re-running the script will pick them back up automatically via gap-detection."
             )
 
-        # TODO: Implement optional tick download here in future iteration
-
     except Exception:
         log.critical("Downloader stopped due to an unexpected error:", exc_info=True)
         raise

@@ -115,7 +115,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                     ov_ranges = ast.literal_eval(ov_ranges_raw)
                 else:
                     ov_ranges = ov_ranges_raw
-            except:
+            except (ValueError, SyntaxError, TypeError):
                 ov_ranges = []
 
         if ov_range and not any(r['ts'] == ov_range['ts'] for r in ov_ranges):
@@ -135,7 +135,7 @@ class KillzoneSweepStrategy(JBaseStrategy):
                         ov_range = ast.literal_eval(ov_range_raw)
                     else:
                         ov_range = ov_range_raw
-                except:
+                except (ValueError, SyntaxError, TypeError):
                     pass
 
         # [REPAIR-20260708] Cooldown reset to allow multiple trades per session

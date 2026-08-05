@@ -26,8 +26,8 @@ class JBaseStrategy(BaseStrategy):
         self._last_milestone_ts = {} # Prevent double-counting in the same bar
 
     def log_strategy_info(self):
-        print(f"Strategy: {self.name} v{self.version} by {self.author}")
-        print(f"Description: {self.__doc__}")
+        self.logger.info(f"Strategy: {self.name} v{self.version} by {self.author}")
+        self.logger.info(f"Description: {self.__doc__}")
 
     def is_ready(self, symbol: str) -> bool:
         """
@@ -97,7 +97,7 @@ class JBaseStrategy(BaseStrategy):
                     try:
                         import ast
                         return ast.literal_eval(val)
-                    except:
+                    except (ValueError, SyntaxError, TypeError):
                         return val
             return val
 
@@ -108,7 +108,7 @@ class JBaseStrategy(BaseStrategy):
                 try:
                     import ast
                     return ast.literal_eval(val)
-                except:
+                except (ValueError, SyntaxError, TypeError):
                     return val
         return val
 
